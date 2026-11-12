@@ -19,15 +19,16 @@ enum {
     SS_B_GETENV,            /* int (u32 name, u32 out, u32 capacity)             length, or -1 if not set */
     SS_B_EXIT,              /* void (int code) */
     SS_B_VIDEO_INIT,        /* int (u32 title) */
-    SS_B_PRESENT,           /* u32 (u32 pixels)                                  returns the held buttons */
+    SS_B_PRESENT,           /* u32 (u32 pixels, int width)                       returns the held buttons */
     SS_B_AUDIO,             /* void (u32 samples, int frames) */
     SS_B_STACK_ALLOC,       /* u32 (u32 size)                                    low memory for a coroutine stack */
     SS_B_STACK_FREE,        /* void (u32 base, u32 size) */
     SS_B_STACK_BOUNDS,      /* void (u32 low, u32 high)                          tell the system which stack runs now */
     SS_B_POW, SS_B_SIN, SS_B_COS, SS_B_FMOD,    /* double (double[, double]) */
+    SS_B_VIEW_WIDTH,        /* int (void)                                        picture width that fills the window */
     SS_B_COUNT
 };
-#define SS_BRIDGE_VERSION 1u
+#define SS_BRIDGE_VERSION 2u
 
 extern const uint32_t *ss_bridge;
 #define SS_HOST(index, type) ((type)(uintptr_t)ss_bridge[index])

@@ -115,7 +115,8 @@ static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 static void b_exit(int code) { exit(code); }
 static uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
-static uint32_t b_present(uint32_t pixels) { return ss_plat_present(PTR(pixels)); }
+static uint32_t b_present(uint32_t pixels, int width) { return ss_plat_present(PTR(pixels), width); }
+static int b_view_width(void) { return ss_plat_view_width(); }
 static void b_audio(uint32_t samples, int frames) { ss_plat_audio(PTR(samples), frames); }
 static double b_pow(double a, double b) { return pow(a, b); }
 static double b_sin(double a) { return sin(a); }
@@ -290,7 +291,7 @@ int main(int argc, char **argv)
     ENTRY(SS_B_CLOSE, b_close); ENTRY(SS_B_REMOVE, b_remove); ENTRY(SS_B_RENAME, b_rename); ENTRY(SS_B_GETENV, b_getenv);
     ENTRY(SS_B_EXIT, b_exit); ENTRY(SS_B_VIDEO_INIT, b_video_init); ENTRY(SS_B_PRESENT, b_present); ENTRY(SS_B_AUDIO, b_audio);
     ENTRY(SS_B_STACK_ALLOC, b_stack_alloc); ENTRY(SS_B_STACK_FREE, b_stack_free); ENTRY(SS_B_STACK_BOUNDS, b_stack_bounds);
-    ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
+    ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
     if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32) {
         fprintf(stderr, "the host must be linked as a non-PIE program (its code has to live below 4 GiB)\n");
         return 4;

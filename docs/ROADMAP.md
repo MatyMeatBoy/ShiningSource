@@ -179,11 +179,28 @@ Open:
 - [ ] The host commits about 220 MB of address space for the arena; most of it
       is never touched. Reduce after the layout settles.
 
-## M6. The port's own features
+## M6. The port's own features (in progress)
 
-- Wide view in field scenes; HUD layer that follows and scales with the window.
-- Launcher (ROM check, settings, controller mapping, languages).
-- Achievements.
+- [x] Wide view (2026-11-12). The renderer takes a picture width from 240 to 480
+      (`struct ss_view`); the window chooses it so the picture fills the width at
+      a whole-number scale (`ss_plat_view_width`), 284 columns on a 16:9 display.
+      Field scenes are recognised by the engine's own state
+      (`runtime/core/field_view.c`): each background that has a full tile map is
+      drawn from that map, so the side columns are real scenery, and the view
+      stops at the map's edges. Menus, title and cut-scenes keep the console's
+      composition, centred. `SS_VIEW=N` forces a width (240 turns it off).
+      **Checked** on the first field scene, whose map is exactly 240 pixels
+      wide (the map is centred, nothing is stretched) and on the title screen.
+      **Not checked yet** on a map wider than the screen: the scripted test does
+      not leave the first area.
+- [x] HUD at the edges: the top 16 lines (backgrounds and sprites) are split in
+      the middle and each half goes to its edge of the visible picture.
+- [ ] HUD scale option (draw the HUD layer larger on big windows).
+- [ ] Sprites near the side columns: the game does not create or draw actors
+      beyond its own 240 columns, so they appear late at the sides.
+- [ ] Per-scanline register effects in wide scenes.
+- [ ] Launcher (ROM check, settings, controller mapping, languages).
+- [ ] Achievements.
 
 ## M7. Online
 

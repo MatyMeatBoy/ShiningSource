@@ -13,6 +13,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define REG16(offset) (*(volatile uint16_t *)(uintptr_t)(SS_IO + (offset)))
 #define REG_DISPSTAT REG16(0x004)
@@ -30,7 +31,7 @@ static uint32_t *const handler_table = (uint32_t *)(uintptr_t)0x030012A0u;
 
 static unsigned long frame_count, frame_limit, dump_at;
 static const char *input_script;
-static int windowed;
+static int windowed, forced_width;
 
 unsigned long ss_frame_number(void)
 {
@@ -122,7 +123,9 @@ static void scripted_input(void)
 
 static void dump_video(void)
 {
-    static uint32_t shot[SS_SCREEN_W * SS_SCREEN_H];
+    static uint32_t shot[SS_MAX_VIEW_W * SS_SCREEN_H];
+    struct ss_view view;
+    int width = forced_width ? forced_width : SS_SCREEN_W;
     FILE *file = fopen("ss_video_dump.bin", "wb");
     if (file) {
         fwrite((void *)(uintptr_t)SS_IO, 1, 0x400, file);
@@ -139,8 +142,12 @@ static void dump_video(void)
     }
     file = fopen("ss_frame.raw", "wb");
     if (file) {
-        ss_ppu_render(shot, SS_SCREEN_W);
-        fwrite(shot, 4, SS_SCREEN_W * SS_SCREEN_H, file);
+        if (!ss_field_view(&view, width)) {
+            memset(&view, 0, sizeof view);
+            view.width = width;
+        }
+        ss_ppu_render(shot, width, &view);
+        fwrite(shot, 4, (size_t)width * SS_SCREEN_H, file);
         fclose(file);
     }
 }
@@ -153,6 +160,10 @@ void VBlankIntrWait(void)
         text = getenv("SS_DUMP");
         dump_at = text ? strtoul(text, NULL, 10) : 0;
         input_script = getenv("SS_INPUT");
+        text = getenv("SS_VIEW");             /* SS_VIEW=284 forces the picture width; SS_VIEW=240 turns wide view off */
+        forced_width = text ? (int)strtoul(text, NULL, 10) : 0;
+        if (forced_width && forced_width < SS_SCREEN_W) forced_width = SS_SCREEN_W;
+        if (forced_width > SS_MAX_VIEW_W) forced_width = SS_MAX_VIEW_W;
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
         if (windowed && ss_plat_video_init("ShiningSource") != 0)
@@ -177,9 +188,15 @@ void VBlankIntrWait(void)
         }
     }
     if (windowed) {
-        static uint32_t pixels[SS_SCREEN_W * SS_SCREEN_H];
-        ss_ppu_render(pixels, SS_SCREEN_W);
-        REG_KEYINPUT = (uint16_t)(~ss_plat_present(pixels) & 0x03FF);    /* the register is active low */
+        static uint32_t pixels[SS_MAX_VIEW_W * SS_SCREEN_H];
+        struct ss_view view;
+        int width = forced_width ? forced_width : ss_plat_view_width();
+        if (!ss_field_view(&view, width)) {     /* menus and cut-scenes keep the console's composition, centred */
+            memset(&view, 0, sizeof view);
+            view.width = width;
+        }
+        ss_ppu_render(pixels, width, &view);
+        REG_KEYINPUT = (uint16_t)(~ss_plat_present(pixels, width) & 0x03FF);    /* the register is active low */
     }
     if (input_script)
         scripted_input();

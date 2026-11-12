@@ -85,9 +85,14 @@ int ss_plat_video_init(const char *title)
     return SS_HOST(SS_B_VIDEO_INIT, int (*)(uint32_t))((uint32_t)(uintptr_t)title);
 }
 
-uint16_t ss_plat_present(const uint32_t *pixels)
+int ss_plat_view_width(void)
 {
-    return (uint16_t)SS_HOST(SS_B_PRESENT, uint32_t (*)(uint32_t))((uint32_t)(uintptr_t)pixels);
+    return SS_HOST(SS_B_VIEW_WIDTH, int (*)(void))();
+}
+
+uint16_t ss_plat_present(const uint32_t *pixels, int width)
+{
+    return (uint16_t)SS_HOST(SS_B_PRESENT, uint32_t (*)(uint32_t, int))((uint32_t)(uintptr_t)pixels, width);
 }
 
 void ss_plat_audio(const int16_t *samples, int frames)

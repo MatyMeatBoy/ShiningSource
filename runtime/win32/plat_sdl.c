@@ -39,8 +39,7 @@ int ss_plat_video_init(const char *title)
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
     }
-    SDL_SetRenderLogicalPresentation(renderer, SS_SCREEN_W, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_SCREEN_W, SS_SCREEN_H);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
@@ -55,9 +54,26 @@ void ss_plat_audio(const int16_t *samples, int frames)
         SDL_PutAudioStreamData(audio, samples, frames * 4);
 }
 
-/* Show one 240x160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
-uint16_t ss_plat_present(const uint32_t *pixels)
+/* The picture keeps a whole-number scale (the largest that fits the height of the window) and takes as many
+ * columns as the width then allows, so a 16:9 window shows 284 columns and an ultrawide one up to 480. */
+int ss_plat_view_width(void)
 {
+    int w = 0, h = 0, scale, width;
+    if (!window || !SDL_GetWindowSizeInPixels(window, &w, &h) || h < SS_SCREEN_H)
+        return SS_SCREEN_W;
+    scale = h / SS_SCREEN_H;
+    width = (w / scale) & ~1;
+    if (width < SS_SCREEN_W) width = SS_SCREEN_W;
+    if (width > SS_MAX_VIEW_W) width = SS_MAX_VIEW_W;
+    return width;
+}
+
+/* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
+uint16_t ss_plat_present(const uint32_t *pixels, int width)
+{
+    static int shown_width;
+    SDL_FRect source = { 0, 0, (float)width, SS_SCREEN_H };
+    SDL_Rect update = { 0, 0, width, SS_SCREEN_H };
     const bool *state;
     uint16_t held = 0;
     uint64_t now;
@@ -101,10 +117,14 @@ uint16_t ss_plat_present(const uint32_t *pixels)
     if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
     if ((held & 0xC0) == 0xC0) held &= ~0xC0;
 
-    SDL_UpdateTexture(texture, NULL, pixels, SS_SCREEN_W * 4);
+    if (width != shown_width) {
+        SDL_SetRenderLogicalPresentation(renderer, width, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        shown_width = width;
+    }
+    SDL_UpdateTexture(texture, &update, pixels, width * 4);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
-    SDL_RenderTexture(renderer, texture, NULL, NULL);
+    SDL_RenderTexture(renderer, texture, &source, NULL);
     SDL_RenderPresent(renderer);
 
     /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */

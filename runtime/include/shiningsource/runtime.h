@@ -19,15 +19,36 @@ int ss_memory_init(const char *rom_path, const char **error);
 #define SS_SCREEN_W 240
 #define SS_SCREEN_H 160
 
-/* Draw the current frame from the video registers and memory into 32-bit ARGB pixels. */
-void ss_ppu_render(uint32_t *pixels, int pitch_pixels);
+#define SS_MAX_VIEW_W 480
+
+/* How a picture wider than the console's 240 pixels is composed (see core/ppu.c). */
+struct ss_bg_source {
+    const uint16_t *map;        /* full tile map of this background (screen entries), or NULL */
+    int width, height;          /* in tiles */
+    int scroll_x, scroll_y;     /* world pixel shown at native (0, 0) */
+};
+struct ss_view {
+    int width;                  /* 240..SS_MAX_VIEW_W */
+    int world;                  /* the scene has source maps: sprites move with the view */
+    int shift;                  /* view column where native x = 0 lands */
+    int hud_rows;               /* top lines whose halves go to the edges of the visible picture */
+    int hud_left, hud_right;    /* those edges, as view columns */
+    struct ss_bg_source bg[4];
+};
+
+/* Draw the current frame into 32-bit ARGB pixels, `view->width` wide (240 when view is NULL). */
+void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *view);
+/* Shining Soul engine: describe the field scene's maps for a picture `width` wide. 0 if not a field scene. */
+int ss_field_view(struct ss_view *view, int width);
 
 /* ---- services every platform provides to the core ---- */
 
 /* Window and sound device. */
 int ss_plat_video_init(const char *title);
-/* Show one 240x160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order). */
-uint16_t ss_plat_present(const uint32_t *pixels);
+/* Width the picture should have to fill the window at a whole-number scale (240..SS_MAX_VIEW_W). */
+int ss_plat_view_width(void);
+/* Show one `width` x 160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order). */
+uint16_t ss_plat_present(const uint32_t *pixels, int width);
 /* Play one game frame of 48 kHz stereo samples. */
 void ss_plat_audio(const int16_t *samples, int frames);
 /* Coroutines for the game's task scheduler. ss_co_switch(NULL) returns to the thread that called ss_co_init. */
