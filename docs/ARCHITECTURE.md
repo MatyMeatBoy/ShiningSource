@@ -112,6 +112,15 @@ The model is the one in GBANoCable, already running for ReKHCoM:
   version**; it never shares the ReKHCoM namespace. Direct UDP and LAN use the
   same client code.
 
+Requirement: up to four players in different parts of the world, without
+dropped sessions. Fixed delay alone is not enough for that (a 300 ms round trip
+would be felt on every button press), so the plan has two layers: the
+GBANoCable slot model as the correct base, and, on top, prediction of remote
+packets with rollback of the game state. Rollback needs small snapshots, which
+this port can take because it knows the game's memory layout (300 KiB of RAM)
+instead of saving a whole emulated machine. Reconnection uses a per-seat token
+and a snapshot from the host.
+
 Online ships on Windows, Linux and Android first.
 
 ## 8. Launcher, achievements, saves

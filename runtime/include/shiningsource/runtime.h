@@ -16,6 +16,9 @@
 /* Map every region and load the ROM file. Returns 0 on success; on failure `error` says which step failed. */
 int ss_memory_init(const char *rom_path, const char **error);
 
+/* Replace ROM words that hold game function addresses by the native functions. Returns how many. */
+unsigned ss_patch_code_pointers(void);
+
 /* Called by a generated stub the first time a function nobody implements yet is reached. */
 void ss_stub(const char *name, int *seen);
 

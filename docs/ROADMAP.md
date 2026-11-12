@@ -31,21 +31,34 @@ running it with a ROM prints the stubs it reaches.
 - First run reaches the scheduler (`sub_0800023C`) after `RegisterRamReset`,
   `CpuSet` and the sound initialisation.
 
-## M2. It boots to the first frame, headless (next)
+## M2. It runs headless (done, 2026-11-12)
 
-Check: the game runs N frames without a window and writes frame hashes.
+Check: `SS_FRAMES=600 build/dev32/ss2/ss2_dev32.exe ROM` prints 600 frame
+hashes; `SS_DUMP=400` plus `tools/render_dump.py` shows the language selection
+screen.
 
-- Memory map: done in M1 (`runtime/src/memory.c`).
-- Code-pointer table: ROM words that hold function addresses, rewritten to
-  native functions at load.
-- BIOS in C. Scheduler as native coroutines (read `asm/sched.s` in the decomp:
-  14 routines).
-- Interrupt delivery at the frame boundary; IWRAM code copies redirected.
-- A frame hash over I/O registers, palette, VRAM and OAM, compared with the same
-  hashes taken from an emulator running the cartridge: this is the port's
-  equivalent of `make compare`.
+- Scheduler as native coroutines (`runtime/src/sched.c`), from the 14 routines
+  of `asm/sched.s`.
+- BIOS calls in C (`runtime/src/bios.c`).
+- Frame boundary and interrupt dispatch from the game's own handler table
+  (`runtime/src/frame.c`).
+- Code pointers in the ROM data rewritten to native functions at load
+  (`runtime/src/codeptr.c`; ranges in `games/ss2/port/code_pointer_ranges.json`).
+- Flash save in a file (`runtime/src/flash.c`); the SDK flash driver is one more
+  module the runtime replaces.
+- Crash report with addresses (`runtime/src/dev32_main.c`).
 
-## M3. Picture
+Open from this milestone:
+
+- [ ] Compare the frame hashes with an emulator running the cartridge (the
+      port's `make compare`). Needs a script for an emulator that can dump the
+      same four memory areas.
+- [ ] `ObjAffineSet` uses the C library's sine; replace by the BIOS table so
+      every platform computes the same values (required for online).
+- [ ] `IntrMain`, `sub_080004B8`, `sub_080004F8`: start-up leftovers and the
+      link-cable interrupt routines, stubbed until M7.
+
+## M3. Picture and input (next)
 
 Check: title screen and first field scene match reference screenshots.
 
@@ -76,6 +89,11 @@ Check: the same game image runs under the 64-bit host on Windows and Linux.
 
 ## M7. Online
 
+- Acceptance test (owner's requirement, 2026-11-12): four players on different
+  continents play a full session without a disconnect. That means the design
+  must survive 250 ms+ round trips, jitter and short outages: the game waits
+  instead of cutting, a player who drops can rejoin, and no single slow player
+  may stall the others indefinitely.
 - Transport under `MultiSio`, fixed delay, never-cut rules, state hash.
 - Relay process for this game on the VPS; lobby in the launcher.
 - Crossplay Windows / Linux / Android.

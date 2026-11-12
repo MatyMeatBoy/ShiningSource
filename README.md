@@ -13,26 +13,30 @@ the decompilation is a git submodule and the game data is read from your ROM.
 
 ## Where it stands
 
-Milestones 0 and 1 are done: the game's C compiles and links for a PC target,
-and the executable runs the cartridge's own `AgbMain` until it needs the first
-piece of hardware that is not written yet.
+Milestones 0 to 2 are done. The game's C compiles and links for a PC target, and
+the native executable **runs the game**: start-up, the task scheduler, interrupts
+and saving are the port's own code, and the cartridge's logic draws its first
+screen into video memory.
 
 ```
 $ python3 tools/build.py compile
-ss2 / dev32: 44 of 44 game modules compile, 0 error(s); 15 module(s) replaced by the runtime
+ss2 / dev32: 43 of 43 game modules compile, 0 error(s); 16 module(s) replaced by the runtime
 $ python3 tools/link.py
-build/dev32/ss2/ss2_dev32.exe: 725 absolute symbols (memory and ROM), 47 functions still stubbed
-$ build/dev32/ss2/ss2_dev32.exe your_rom.gba
-memory mapped, ROM loaded; entering the game's AgbMain
-[stub   1] RegisterRamReset
-[stub   2] CpuSet
-[stub   3] m4aSoundInit
-[stub   4] m4aSoundVSyncOff
-[stub   5] sub_0800023C
+build/dev32/ss2/ss2_dev32.exe: 716 absolute symbols (memory and ROM), 26 functions still stubbed
+$ SS_FRAMES=600 build/dev32/ss2/ss2_dev32.exe your_rom.gba
+frame     1  hash 71847111  stubs reached 6
+...
+frame   600  hash 60D9F1AE  stubs reached 6
 ```
 
-`sub_0800023C` is the game's task scheduler: the next thing to write. There is
-no picture or sound yet. The order of work and what each milestone proves is in
+There is no window, input or sound yet: the run is headless. The video memory
+of a frame can be dumped (`SS_DUMP=400`) and drawn with a reference script
+(`tools/render_dump.py`); at frame 400 it is the game's language selection
+screen, produced entirely by native code. The picture is not stored here
+because it is game artwork.
+
+Still stubbed: the sound engine (22 entry points), the link-cable interrupt
+routines and two start-up leftovers. The order of work is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What this port will be
@@ -85,9 +89,10 @@ ShiningSource es el port nativo de Shining Soul II (y, cuando exista su decomp,
 de Shining Soul 1) hecho desde la decompilación: el juego original compilado
 para PC, Linux, Android y consolas, con pantalla ancha real, HUD que se ajusta
 a la ventana y online de 2 a 4 jugadores con crossplay. No incluye ROM ni datos
-del juego. Hitos 0 y 1 cumplidos: el código del juego compila y enlaza para PC, y
-el ejecutable ya corre el arranque del cartucho hasta pedir el scheduler de
-tareas, que es lo siguiente por escribir. Aún no hay imagen ni sonido. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
+del juego. Hitos 0 a 2 cumplidos: el código del juego compila, enlaza y **corre
+nativo** sin ventana (scheduler, BIOS, interrupciones y guardado propios); en el
+fotograma 400 la memoria de vídeo contiene la pantalla de selección de idioma.
+Faltan ventana, entrada y sonido. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 

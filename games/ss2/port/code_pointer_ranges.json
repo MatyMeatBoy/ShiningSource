@@ -1,0 +1,4 @@
+{
+ "why": "ROM ranges scanned for words that hold function addresses. Sound samples and tracks, the text of the five languages and the two resource archives are left out: their bytes are not pointers (see SS2Decomp tools/config/data_types.txt).",
+ "ranges": [["0x0B9704", "0x0BD36C"], ["0x366A60", "0x3670F0"], ["0x42A38C", "0x518938"]]
+}

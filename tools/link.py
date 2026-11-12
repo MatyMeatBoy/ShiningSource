@@ -80,9 +80,11 @@ def main():
 
     strip = lambda name: name[1:] if name.startswith("_") else name
     defined = {strip(l.split()[-1]) for l in nm(["--defined-only", *map(str, objects + runtime_objects)]).splitlines() if len(l.split()) == 3}
-    wanted = {strip(l.split()[-1]) for l in nm(["--undefined-only", *map(str, objects)]).splitlines() if len(l.split()) == 2}
-    wanted -= defined
+    undefined = lambda files: {strip(l.split()[-1]) for l in nm(["--undefined-only", *map(str, files)]).splitlines() if len(l.split()) == 2}
     named, functions = named_addresses(args.game), function_names(args.game)
+    # the runtime also reads game memory by name; its other undefined symbols are the host's C library
+    wanted = undefined(objects) | {n for n in undefined(runtime_objects) if ADDRESS.match(n) or n in named or n in functions}
+    wanted -= defined
     host = {"memcpy", "memset", "memmove", "abs", "__divsi3", "__modsi3", "__udivsi3", "__umodsi3", "__divdi3", "__moddi3",
             "__udivdi3", "__umoddi3", "__muldi3", "__ashldi3", "__ashrdi3", "__lshrdi3"}
     absolute, stubs, unknown = {}, [], []
@@ -108,8 +110,27 @@ def main():
     body += ["int %s(void) { static int seen; ss_stub(\"%s\", &seen); return 0; }" % (n, n) for n in stubs]
     (out / "stubs.c").write_text("\n".join(body) + "\n", encoding="utf-8")
     (out / "stubs.txt").write_text("\n".join(stubs) + "\n", encoding="utf-8")
+    # table of game functions for pointers stored in the ROM data (runtime/src/codeptr.c)
+    entries = []
+    for line in (build.GAMES[args.game] / "tools/config/functions.cfg").read_text(encoding="utf-8").splitlines():
+        fields = line.split("#")[0].split()
+        if len(fields) < 2:
+            continue
+        address = int(fields[1], 16) & ~1
+        name = fields[2] if len(fields) > 2 else "sub_%08X" % address
+        if name in defined or name in stubs:
+            entries.append((address | (fields[0] == "thumb"), name))
+    entries.sort()
+    ranges = json.loads((ROOT / "games" / args.game / "port/code_pointer_ranges.json").read_text(encoding="utf-8"))["ranges"]
+    table = ['#include <stdint.h>', 'struct ss_code_entry { uint32_t gba; void (*native)(void); };']
+    table += ["void %s(void);" % n for n in sorted({n for _, n in entries})]
+    table += ["const struct ss_code_entry ss_code_table[] = {"] + ["    { 0x%08Xu, %s }," % e for e in entries] + ["};"]
+    table += ["const unsigned ss_code_count = %d;" % len(entries),
+              "const uint32_t ss_code_ranges[][2] = { %s };" % ", ".join("{ %s, %s }" % (a, b) for a, b in ranges),
+              "const unsigned ss_code_range_count = %d;" % len(ranges)]
+    (out / "codetable.c").write_text("\n".join(table) + "\n", encoding="utf-8")
     extra = []
-    for source in ("absolute.s", "stubs.c"):
+    for source in ("absolute.s", "stubs.c", "codetable.c"):
         target = out / "rt" / (source.split(".")[0] + ".o")
         run = subprocess.run([cc, "--target=i686-w64-mingw32", "-O1", "-I", str(ROOT / "runtime/include"), "-c", str(out / source),
                               "-o", str(target)], capture_output=True, text=True)

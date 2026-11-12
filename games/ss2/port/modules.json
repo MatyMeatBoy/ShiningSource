@@ -1,5 +1,6 @@
 {
  "runtime": {
+  "agb_flash": "Cartridge flash driver: it copies routines to RAM and talks to the chip. The runtime stores the save in a file.",
   "libgcc2": "Compiler support library of the original toolchain; the host compiler brings its own.",
   "m4a": "Sound library entry points and BIOS sound calls; provided by the runtime's native m4a engine together with the mixer.",
   "m4a_1": "Sound library entry points and BIOS sound calls; provided by the runtime's native m4a engine together with the mixer.",
