@@ -1,0 +1,18 @@
+[Unit]
+Description=ShiningSource online relay (UDP 47900)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/ss_relay 47900
+Restart=always
+RestartSec=1
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

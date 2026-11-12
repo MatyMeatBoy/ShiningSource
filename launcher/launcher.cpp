@@ -8,11 +8,13 @@
  *   ss2_win64.exe            the game host (64-bit); ss2_game.elf is the game image it loads
  *   shiningsource.ini        settings, next to the launcher
  *
- * Settings reach the game as environment variables (SS_VIEW, SS_FULLSCREEN, SS_VOLUME), which is also how the
+ * Settings reach the game as environment variables (SS_VIEW, SS_FULLSCREEN, SS_VOLUME, SS_NET...), which is also how the
  * automated tests drive it, so there is one mechanism to keep working.
  */
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <commdlg.h>
 
@@ -158,6 +160,45 @@ static void choose_rom(const Game &game)
     check_rom(game);
 }
 
+/* ---- online: how far is the server ---- */
+
+#define DEFAULT_SERVER "45.8.207.150:47900"
+
+static int ping_ms = -2;        /* -2 not measured, -1 no answer */
+
+/* Round trip to the relay: the best of five echoes (relay/ss_relay.c, packet type 5). */
+static void measure_ping(const std::string &server)
+{
+    WSADATA data;
+    std::string host = server.substr(0, server.find(':'));
+    std::string port = server.find(':') == std::string::npos ? "47900" : server.substr(server.find(':') + 1);
+    addrinfo hints = {}, *found = nullptr;
+    ping_ms = -1;
+    WSAStartup(MAKEWORD(2, 2), &data);
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &found) || !found)
+        return;
+    SOCKET sock = socket(found->ai_family, found->ai_socktype, found->ai_protocol);
+    DWORD wait = 400;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&wait, sizeof wait);
+    for (int i = 0; i < 5; i++) {
+        unsigned char packet[60] = { 'S', 'S', 'N', '1', 5 }, answer[64];
+        LARGE_INTEGER frequency, before, after;
+        QueryPerformanceFrequency(&frequency);
+        QueryPerformanceCounter(&before);
+        sendto(sock, (const char *)packet, sizeof packet, 0, found->ai_addr, (int)found->ai_addrlen);
+        if (recv(sock, (char *)answer, sizeof answer, 0) == 60) {
+            QueryPerformanceCounter(&after);
+            int ms = (int)((after.QuadPart - before.QuadPart) * 1000 / frequency.QuadPart);
+            if (ping_ms < 0 || ms < ping_ms)
+                ping_ms = ms;
+        }
+    }
+    closesocket(sock);
+    freeaddrinfo(found);
+}
+
 /* ---- start the game ---- */
 
 static std::string launch_error;
@@ -173,6 +214,10 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_VIEW", view == "auto" ? nullptr : view.c_str());
     SetEnvironmentVariableA("SS_FULLSCREEN", setting("fullscreen", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
+    bool online = setting("online", "0") == "1";
+    SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
+    SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_NET_DELAY", online ? setting("delay", "6").c_str() : nullptr);
     startup.cb = sizeof startup;
     launch_error.clear();
     if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process)) {
@@ -238,9 +283,9 @@ static void interface_frame(bool &running)
     }
     ImGui::Spacing();
     ImGui::TextColored(dim, "%s", text("PAGES", "SECCIONES"));
-    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "About" };
-    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "Acerca de" };
-    for (int i = 0; i < 5; i++)
+    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "About" };
+    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Acerca de" };
+    for (int i = 0; i < 6; i++)
         if (ImGui::Selectable(language ? pages_es[i] : pages_en[i], page == i))
             page = i;
     ImGui::EndChild();
@@ -317,6 +362,49 @@ static void interface_frame(bool &running)
             ImGui::TextUnformatted(text("Controller: d-pad or left stick, A and B as on the console, shoulders = L and R, Start, Back = Select.",
                                         "Mando: cruceta o stick izquierdo, A y B como en la consola, gatillos = L y R, Start, Back = Select."));
         SDL_free(pads);
+    } else if (page == 4) {
+        bool online = setting("online", "0") == "1";
+        int delay = atoi(setting("delay", "6").c_str());
+        char room[32], server[96];
+        snprintf(room, sizeof room, "%s", setting("room", "shining").c_str());
+        snprintf(server, sizeof server, "%s", setting("server", DEFAULT_SERVER).c_str());
+        ImGui::TextColored(gold, "%s", text("Online play (2 to 4 players)", "Juego en l\xC3\xADnea (2 a 4 jugadores)"));
+        if (ImGui::Checkbox(text("Play online", "Jugar en l\xC3\xADnea"), &online)) {
+            settings["online"] = online ? "1" : "0";
+            save_settings();
+        }
+        ImGui::BeginDisabled(!online);
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::InputText(text("Room", "Sala"), room, sizeof room)) {
+            settings["room"] = room;
+            save_settings();
+        }
+        ImGui::TextWrapped("%s", text("Everyone types the same room name. The first to enter is the host (player 1). In the game choose MULTIPLAYER MODE: the cable is the network.",
+                                      "Todos escriben el mismo nombre de sala. El primero en entrar es el anfitri\xC3\xB3n (jugador 1). En el juego elige MULTIPLAYER MODE: el cable es la red."));
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::SliderInt(text("Delay (host decides)", "Retardo (lo decide el anfitri\xC3\xB3n)"), &delay, 2, 30, text("%d frames", "%d cuadros"))) {
+            settings["delay"] = std::to_string(delay);
+            save_settings();
+        }
+        ImGui::TextWrapped("%s", text("Same country: 3 or 4. Same continent: 6. Between continents: 10 to 14. Too low and the game slows down, it never disconnects; too high and the other players react later.",
+                                      "Mismo pa\xC3\xADs: 3 o 4. Mismo continente: 6. Entre continentes: 10 a 14. Si es muy bajo el juego va m\xC3\xA1s lento, nunca se desconecta; si es muy alto los dem\xC3\xA1s reaccionan m\xC3\xA1s tarde."));
+        ImGui::SetNextItemWidth(260);
+        if (ImGui::InputText(text("Server", "Servidor"), server, sizeof server)) {
+            settings["server"] = server;
+            save_settings();
+            ping_ms = -2;
+        }
+        if (ImGui::Button(text("Measure my connection", "Medir mi conexi\xC3\xB3n")))
+            measure_ping(server);
+        ImGui::SameLine();
+        if (ping_ms == -1)
+            ImGui::TextColored(red, "%s", text("The server does not answer.", "El servidor no responde."));
+        else if (ping_ms >= 0) {
+            int suggested = (ping_ms + 40 + 16) / 17;
+            ImGui::TextColored(green, text("%d ms. If the others measure about the same, delay %d.", "%d ms. Si los dem\xC3\xA1s miden parecido, retardo %d."),
+                               ping_ms, suggested < 2 ? 2 : suggested > 30 ? 30 : suggested);
+        }
+        ImGui::EndDisabled();
     } else {
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",

@@ -53,6 +53,8 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width);
 void ss_plat_audio(const int16_t *samples, int frames);
 /* Handle window events without showing a frame (used while a frame waits for the network). */
 void ss_plat_pump(void);
+/* One line about what the program is doing, shown in the window title (NULL or "" clears it). */
+void ss_plat_status(const char *text);
 /* Network: one UDP socket to the relay. open returns 0 on success; recv returns 0 when nothing is waiting;
  * wait sleeps until a packet arrives or the time passes; farewell is a packet sent when the program exits. */
 int ss_plat_net_open(const char *host, int port);

@@ -37,7 +37,13 @@ plugged in (d-pad or left stick, A/B as on the console, shoulders, Start, Back).
 window with scripted input and writes the picture of one frame, which is how the
 port is tested. No screenshots are stored here: they are game artwork.
 
-Still stubbed: the three link-cable routines (online is a later milestone).
+**Online** works on one machine: the game's MULTIPLAYER MODE runs over the
+network for 2 to 4 players, through a small relay (`relay/`). Tested with four
+players, 10% packet loss and 120-160 ms of lag; not yet between real machines.
+In the launcher: page Online, same room name for everyone, then MULTIPLAYER
+MODE in the game. Without the launcher: `SS_NET=host:port SS_NET_ROOM=name`.
+
+Still stubbed: the three link-cable interrupt routines, which online replaces.
 The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What this port will be

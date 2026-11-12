@@ -33,9 +33,10 @@ enum {
     SS_B_NET_WAIT,          /* void (int milliseconds) */
     SS_B_NET_FAREWELL,      /* void (u32 data, int size) */
     SS_B_TICKS,             /* u32 (void)                                        milliseconds */
+    SS_B_STATUS,            /* void (u32 text) */
     SS_B_COUNT
 };
-#define SS_BRIDGE_VERSION 3u
+#define SS_BRIDGE_VERSION 4u
 
 extern const uint32_t *ss_bridge;
 #define SS_HOST(index, type) ((type)(uintptr_t)ss_bridge[index])

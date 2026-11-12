@@ -88,6 +88,16 @@ static void handle_event(const SDL_Event *event)
         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
 }
 
+void ss_plat_status(const char *text)
+{
+    char title[160];
+    if (!window)
+        return;
+    if (text && *text)
+        SDL_snprintf(title, sizeof title, "ShiningSource - %s", text);
+    SDL_SetWindowTitle(window, text && *text ? title : "ShiningSource");
+}
+
 void ss_plat_pump(void)
 {
     SDL_Event event;

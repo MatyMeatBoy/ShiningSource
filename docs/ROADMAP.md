@@ -205,7 +205,7 @@ Open:
       SHA-1 verification, picture width, full screen, volume, controller list,
       English and Spanish. Settings live in `shiningsource.ini` and reach the
       game as environment variables.
-- [ ] Launcher: controller remapping, save-file management, online lobby (M7),
+- [ ] Launcher: controller remapping, save-file management,
       Linux and Android versions of the launcher.
 - [ ] Achievements. rcheevos needs a client (login, HTTP, the game's memory
       exposed in RetroAchievements' GBA layout) and a decision the owner has to
@@ -213,16 +213,35 @@ Open:
       unlocks, so ReKHCoM shows the official set as a catalogue and keeps its own
       port achievements. The same policy is assumed here until said otherwise.
 
-## M7. Online
+## M7. Online (working on one machine, 2026-11-12)
 
 - Acceptance test (owner's requirement, 2026-11-12): four players on different
   continents play a full session without a disconnect. That means the design
   must survive 250 ms+ round trips, jitter and short outages: the game waits
   instead of cutting, a player who drops can rejoin, and no single slow player
   may stall the others indefinitely.
-- Transport under `MultiSio`, fixed delay, never-cut rules, state hash.
-- Relay process for this game on the VPS; lobby in the launcher.
-- Crossplay Windows / Linux / Android.
+- [x] Transport under `MultiSio` (`runtime/core/netlink.c`): one timeline owned
+      by the host, fixed delay, every player given the same blocks at the same
+      label, a missing block stalls instead of being skipped, unacknowledged
+      blocks repeated in every packet.
+- [x] Relay (`relay/ss_relay.c`): rooms, seats, tokens, silence timeout, ping
+      echo, bad-network simulation; systemd unit and instructions in `relay/`.
+- [x] Tests: `tools/net_test.sh PLAYERS FRAMES DELAY INPUT ...` (2-4 headless
+      players, compares what each was given), `tools/net_drop_test.sh` (leave,
+      return, killed player). Passing: 4 players, 13,000 frames into multiplayer
+      mode, 10% loss, 120-160 ms lag, on dev32 and on the 64-bit build; the
+      single-player reference (32,000 frames, hash 5711719E) is unchanged.
+- [x] Launcher page: room name, delay, server, connection measurement.
+- [x] Window title shows the room, the seat and who is being waited for.
+- [ ] Relay running on the VPS (needs the owner's access; `relay/README.md`).
+- [ ] Real sessions: two machines, then four players on different continents.
+- [ ] A scripted multiplayer run that goes into a dungeon (so far the scripts
+      reach the opening scenes, with the game's `GO`/`OK` barriers passing).
+- [ ] Delay chosen automatically from the players' measured latency before the
+      session starts (today the host sets it in the launcher).
+- [ ] Linux and Android builds tested on their systems (same code).
+- Shelved: prediction with rollback. The game reads its own block locally, so
+  delay does not slow the player's own controls (docs/ARCHITECTURE.md, 7).
 
 ## M8. Everything else ReKHCoM ships
 

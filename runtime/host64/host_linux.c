@@ -123,6 +123,7 @@ static double b_sin(double a) { return sin(a); }
 static double b_cos(double a) { return cos(a); }
 static double b_fmod(double a, double b) { return fmod(a, b); }
 static void b_pump(void) { ss_plat_pump(); }
+static void b_status(uint32_t text) { ss_plat_status(text ? PTR(text) : NULL); }
 static int b_net_open(uint32_t host, int port) { return ss_plat_net_open(PTR(host), port); }
 static int b_net_send(uint32_t data, int size) { return ss_plat_net_send(PTR(data), size); }
 static int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR(data), capacity); }
@@ -300,7 +301,7 @@ int main(int argc, char **argv)
     ENTRY(SS_B_STACK_ALLOC, b_stack_alloc); ENTRY(SS_B_STACK_FREE, b_stack_free); ENTRY(SS_B_STACK_BOUNDS, b_stack_bounds);
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
     ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
-    ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks);
+    ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status);
     if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32) {
         fprintf(stderr, "the host must be linked as a non-PIE program (its code has to live below 4 GiB)\n");
         return 4;

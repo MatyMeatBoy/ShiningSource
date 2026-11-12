@@ -103,30 +103,55 @@ ReKHCoM as the starting point. Game speed never depends on the monitor.
 
 ## 7. Online and crossplay
 
-The model is the one in GBANoCable, already running for ReKHCoM:
+The model is the one in GBANoCable, already running for ReKHCoM: the cable is
+replaced **under the game's own link driver**, and nothing above it changes.
 
-- The cable is replaced **under the game's packet queue**. The game's own
-  multiplayer driver (`MultiSio`: 32-byte packets carrying 24-byte blocks,
-  2-4 players) keeps working; only its transport changes.
-- One packet per player per frame, played with a fixed delay chosen once by the
-  host from the measured round-trip time. Online, the cable never times out:
-  the game waits.
-- All platforms run the same integer-only game code, so a session between
-  Windows, Linux and Android is deterministic by construction. A state hash
-  every N frames detects divergence.
-- Rooms are served by a relay process on the same VPS as ReKHCoM. Following the
-  relay's own rule, Shining Soul II gets **its own process, port and protocol
-  version**; it never shares the ReKHCoM namespace. Direct UDP and LAN use the
-  same client code.
+**Where.** The game uses the SDK's `MultiSio` library. Once per frame its link
+task calls `MultiSioMain(send, receive)`: one 24-byte block out, the block of
+each connected console in, and a status word (who answered, who is connected,
+who is the parent). `runtime/core/netlink.c` replaces that function and the
+library's init and stop (linked with `--wrap`), and writes the player number
+where the game reads it (`REG_SIOCNT`). The game's lobby, its `OK`/`GO`
+barriers and its packets run exactly as over a cable. With `SS_NET` unset the
+original functions run and nothing touches the network.
 
-Requirement: up to four players in different parts of the world, without
-dropped sessions. Fixed delay alone is not enough for that (a 300 ms round trip
-would be felt on every button press), so the plan has two layers: the
-GBANoCable slot model as the correct base, and, on top, prediction of remote
-packets with rollback of the game state. Rollback needs small snapshots, which
-this port can take because it knows the game's memory layout (300 KiB of RAM)
-instead of saving a whole emulated machine. Reconnection uses a per-seat token
-and a snapshot from the host.
+**One timeline.** Every block carries a label. The host (seat 1) owns the
+timeline; the others adopt it when they first hear the host. At timeline frame
+`F` every player is given the blocks labelled `F - delay` of all players,
+itself included. So all players see the same data at the same label, whatever
+their route or latency; the per-frame log (`SS_NET_LOG`) of two players can be
+compared line by line (`tools/net_compare.py`).
+
+**Never cut.** A block that has not arrived is waited for: the frame stalls and
+the window title says who is being waited for. Whoever runs ahead waits, so the
+players settle at offsets the delay can cover. If the delay is too short for
+the real latency the game runs slower; it does not disconnect. A player is
+given up only when it says it left (leaving the mode, closing the window) or
+after `SS_NET_TIMEOUT` of silence (15 s); the others go on, and it can come
+back to its seat.
+
+**Loss costs nothing.** Each packet repeats every block the others have not
+acknowledged, up to 40. Duplicates, reordering and a relay restart are all the
+same case: the missing label arrives in the next packet.
+
+**Delay is not input lag.** The game reads its own block from its send buffer
+and only the others' from the receive slots, so the delay postpones what you
+see of the other players, not your own controls. That is why the earlier plan
+of prediction with rollback is shelved: fixed delay already gives local
+response, and rollback would only return if play-testing between continents
+shows a need.
+
+**Relay.** `relay/ss_relay.c` is its own process and UDP port (47900), next to
+ReKHCoM's on the same server and sharing nothing with it. Rooms by name, four
+seats, a token per player. It can simulate loss, lag and jitter for tests.
+
+**Crossplay.** All platforms compile the same integer-only game code and the
+same `netlink.c`; the socket is the only platform part
+(`runtime/plat/net_udp.c`, reached through the bridge on 64-bit builds).
+
+Tested on one machine: 2, 3 and 4 players, dev32 and 64-bit, with 10% loss and
+120-160 ms of lag; a player leaving, returning and being killed. Not tested
+yet: real players on the internet, and long sessions inside the dungeons.
 
 Online ships on Windows, Linux and Android first.
 

@@ -38,7 +38,7 @@ def main():
         objects.append(str(target))
     exe = out / "ShiningSource.exe"
     done = subprocess.run([cxx, "--target=x86_64-w64-mingw32", *objects, "-o", str(exe), "-static-libstdc++", "-static-libgcc",
-                           "-L", str(sdl / "lib"), "-lSDL3", "-lopengl32", "-lcomdlg32", "-mwindows",
+                           "-L", str(sdl / "lib"), "-lSDL3", "-lopengl32", "-lcomdlg32", "-lws2_32", "-mwindows",
                            "-Wl,-Bstatic", "-lc++", "-lunwind", "-Wl,-Bdynamic"], capture_output=True, text=True)
     if done.returncode:
         print(done.stderr[-3000:])

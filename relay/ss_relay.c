@@ -3,7 +3,7 @@
  *   ss_relay [port]            default 47900
  *
  * The relay knows nothing about the game. A player says HELLO with a room name and gets a seat (1 to 4, the
- * first one is the host); after that every packet it sends is passed to the other seats of its room, stamped
+ * first one is the host; a fifth is not answered); after that every packet it sends is passed to the other seats of its room, stamped
  * with its seat. A seat is freed when its player says it left or stays silent for 30 seconds; a player that
  * comes back with the same token gets its seat back if it is still free.
  *
@@ -37,7 +37,7 @@ typedef socklen_t socklen_t_;
 #endif
 
 enum { SEATS = 4, ROOMS = 512, HEADER = 60, MAX_PACKET = 1200, SILENCE = 30 };
-enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END };
+enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING };
 #define MAGIC 0x314E5353u
 
 struct seat {
@@ -203,6 +203,10 @@ int main(int argc, char **argv)
         }
         if (size < HEADER || size > MAX_PACKET || rd32(packet) != MAGIC)
             continue;
+        if (packet[4] == T_PING) {                  /* echo: lets a player measure its way to the relay */
+            sendto(sock, (const char *)packet, HEADER, 0, (struct sockaddr *)&from, sizeof from);
+            continue;
+        }
         room = find_room(rd32(packet + 8), packet[4] == T_HELLO);
         if (!room)
             continue;

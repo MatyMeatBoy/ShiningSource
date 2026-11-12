@@ -55,7 +55,7 @@ static uint32_t room, token, epoch, farewell_epoch, frame_label, own_first, conn
 static struct stream streams[SEATS];
 static void start_session(void);
 static uint8_t own[RING][BLOCK];
-static char room_name[32] = "default";
+static char room_name[32] = "default", status_line[96];
 static FILE *log_file;
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
@@ -158,6 +158,26 @@ static void send_data(void)
     header(packet, T_DATA, count, from);
     ss_plat_net_send(packet, HEADER + count * BLOCK);
     last_send = ss_plat_ticks_ms();
+}
+
+static void status(int waiting_for)
+{
+    char line[96] = { 0 };
+    int i, players = synced ? 1 : 0;
+    for (i = 0; i < SEATS; i++)
+        players += i != seat && streams[i].known;
+    if (seat < 0)
+        snprintf(line, sizeof line, "online: looking for the server");
+    else if (waiting_for >= 0)
+        snprintf(line, sizeof line, "online: waiting for player %d", waiting_for + 1);
+    else if (!synced)
+        snprintf(line, sizeof line, "online '%s': player %d, waiting for the host", room_name, seat + 1);
+    else
+        snprintf(line, sizeof line, "online '%s': player %d of %d%s", room_name, seat + 1, players, seat == 0 ? " (host)" : "");
+    if (memcmp(line, status_line, sizeof line)) {
+        memcpy(status_line, line, sizeof line);
+        ss_plat_status(line);
+    }
 }
 
 static void drop(int who, const char *why)
@@ -332,6 +352,7 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
             start_session();
     }
     IO16(0x128) = (uint16_t)(0x6003 | (seat > 0 ? seat << 4 | 4 : 0) | (seat >= 0 ? 8 : 0));
+    status(-1);
     if (!synced)
         return 0;               /* a console with no parent on the cable hears nothing, itself included */
 
@@ -362,6 +383,7 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
         if (!told && now - waited_since > 500) {
             told = 1;
             fprintf(stderr, "net: waiting for player %d\n", missing + 1);
+            status(missing);
         }
         for (i = 0; i < SEATS; i++)
             if (streams[i].known && now - streams[i].heard > (uint32_t)timeout_ms)
