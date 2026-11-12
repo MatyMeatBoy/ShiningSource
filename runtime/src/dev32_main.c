@@ -2,7 +2,9 @@
 #include "shiningsource/runtime.h"
 
 #include <stdio.h>
+#include <string.h>
 #include <windows.h>
+#include <commdlg.h>
 
 void AgbMain(void);
 
@@ -50,17 +52,55 @@ static LONG CALLBACK report_crash(EXCEPTION_POINTERS *info)
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+/* Started without a ROM argument (a double click): use the ROM remembered from last time, or ask for one. */
+static const char *find_rom(void)
+{
+    static char path[MAX_PATH], remembered[MAX_PATH];
+    OPENFILENAMEA dialog;
+    FILE *file;
+    char *slash;
+
+    GetModuleFileNameA(NULL, remembered, sizeof remembered);
+    slash = strrchr(remembered, '\\');
+    strcpy(slash ? slash + 1 : remembered, "rom_path.txt");
+    file = fopen(remembered, "r");
+    if (file) {
+        if (fgets(path, sizeof path, file))
+            path[strcspn(path, "\r\n")] = 0;
+        fclose(file);
+        if (path[0] && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
+            return path;
+    }
+    path[0] = 0;
+    memset(&dialog, 0, sizeof dialog);
+    dialog.lStructSize = sizeof dialog;
+    dialog.lpstrFilter = "Game Boy Advance ROM (*.gba)\0*.gba\0All files\0*.*\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = sizeof path;
+    dialog.lpstrTitle = "ShiningSource: choose your Shining Soul II ROM";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameA(&dialog))
+        return NULL;
+    file = fopen(remembered, "w");
+    if (file) {
+        fprintf(file, "%s\n", path);
+        fclose(file);
+    }
+    return path;
+}
+
 int main(int argc, char **argv)
 {
-    const char *error = "";
+    const char *error = "", *rom = argc >= 2 ? argv[1] : find_rom();
+    char message[600];
 
     AddVectoredExceptionHandler(1, report_crash);
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s ROM.gba\n", argv[0]);
+    if (!rom)
         return 2;
-    }
-    if (ss_memory_init(argv[1], &error) != 0) {
+    if (ss_memory_init(rom, &error) != 0) {
         fprintf(stderr, "memory setup failed: %s\n", error);
+        snprintf(message, sizeof message, "Could not start with this ROM:\n%s\n\n%s", rom, error);
+        MessageBoxA(NULL, message, "ShiningSource", MB_ICONERROR);
         return 1;
     }
     fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());

@@ -79,6 +79,8 @@ int ss_video_init(const char *title)
     SDL_SetRenderLogicalPresentation(renderer, SS_SCREEN_W, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_SCREEN_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    SDL_ShowWindow(window);
+    SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
     next_frame_ns = SDL_GetTicksNS();
     return 0;
 }

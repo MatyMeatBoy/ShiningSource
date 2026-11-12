@@ -28,6 +28,7 @@ ss2 / dev32: 43 of 43 game modules compile, 0 error(s); 16 module(s) replaced by
 $ python3 tools/link.py
 build/dev32/ss2/ss2_dev32.exe: 718 absolute symbols (memory and ROM), 3 functions still stubbed
 $ build/dev32/ss2/ss2_dev32.exe your_rom.gba          # opens a window
+$ build/dev32/ss2/ss2_dev32.exe                       # or double-click: asks for the ROM once and remembers it
 ```
 
 Keys: arrows, `X` = A, `Z` = B, `C` = L, `V` = R, `Enter` = Start, right

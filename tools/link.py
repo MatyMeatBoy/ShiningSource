@@ -148,7 +148,7 @@ def main():
     run = subprocess.run([cc, "--target=i686-w64-mingw32", "-g", "@" + str(response), "-o", str(exe),
                           "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x400000",
                           # SDL is loaded on first use, after the runtime has reserved the GBA address ranges
-                          "-L", str(sdl / "lib"), "-lSDL3", "-Wl,--delayload=SDL3.dll",
+                          "-L", str(sdl / "lib"), "-lSDL3", "-Wl,--delayload=SDL3.dll", "-lcomdlg32",
                           # runtime/src/debug_alloc.c reports failed allocations of the game's heap
                           "-Wl,--wrap=sub_08001494", "-Wl,--wrap=sub_08001538"],
                          capture_output=True, text=True)

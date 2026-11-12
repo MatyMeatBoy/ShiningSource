@@ -4,3 +4,7 @@ build/
 *.exe
 *.o
 __pycache__/
+rom_path.txt
+shiningsource.sav
+*.wav
+*.raw
