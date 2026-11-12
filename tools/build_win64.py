@@ -134,7 +134,9 @@ def main():
          str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), "-o", str(host),
          "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32", "-lws2_32",
          # host code must be callable through 32-bit addresses
-         "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x800000"], "host")
+         "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x800000",
+         # the arena is read-only until a range is handed out, so Windows does not charge memory for all of it
+         "-Xlinker", "-Xlink=-section:.arena,R"], "host")
     shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")
     print("%s and %s: %d absolute symbols, %d functions still stubbed" % (host.relative_to(ROOT), image.name, len(absolute), len(stubs)))
     return 0

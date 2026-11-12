@@ -12,6 +12,7 @@
 
 #include <math.h>
 #include <stddef.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +29,19 @@ static uint32_t image_low, image_high;
 /* Asking the system for fixed low addresses at run time is not reliable: something may already be mapped
  * there. So the host is linked at a low base and carries one large zero-filled block. The image of a program
  * is mapped before anything else in a new process, which guarantees the block. The GBA regions, the game image
- * and its stacks are all addresses inside it. */
-char ss_arena[0x0E000000];
+ * and its stacks are all addresses inside it.
+ *
+ * The block is a read-only section: Windows charges memory for the writable pages of a program up front, and
+ * 224 MiB of them would be committed although the game touches about a quarter. Each range is made writable
+ * when it is handed out (low_alloc), and only then counts. */
+/* "bw": no bytes in the file; the linker then marks the section read-only (tools/build_win64.py) */
+__asm__(".section .arena,\"bw\"\n"
+        ".globl ss_arena\n"
+        ".p2align 16\n"
+        "ss_arena:\n"
+        ".space 0x0E000000\n"
+        ".text\n");
+extern char ss_arena[0x0E000000];
 enum { ARENA_FROM = 0x02000000, ARENA_TO = 0x0F400000 };
 
 static void *low_alloc(uint32_t address, uint32_t size, DWORD protection)
@@ -37,7 +49,7 @@ static void *low_alloc(uint32_t address, uint32_t size, DWORD protection)
     DWORD old;
     if (address < ARENA_FROM || address + size > ARENA_TO)
         return NULL;
-    if (protection != PAGE_READWRITE && !VirtualProtect(PTR(address), size, protection, &old))
+    if (!VirtualProtect(PTR(address), size, protection, &old))
         return NULL;
     return PTR(address);
 }
@@ -54,6 +66,8 @@ static SYSV uint32_t b_stack_alloc(uint32_t size)
         return 0;
     for (i = 0; i < STACK_SLOTS; i++) {
         if (!stack_used[i]) {
+            if (!low_alloc(stack_arena + (uint32_t)i * STACK_SLOT, STACK_SLOT, PAGE_READWRITE))
+                return 0;
             stack_used[i] = 1;
             return stack_arena + (uint32_t)i * STACK_SLOT;
         }
@@ -134,7 +148,30 @@ static SYSV int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 static SYSV void b_exit(int code) { exit(code); }
 static SYSV uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static SYSV int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
-static SYSV uint32_t b_present(uint32_t pixels, int width) { return ss_plat_present(PTR(pixels), width); }
+static void sign_of_life(void);
+static volatile LONG alive;
+/* Tests of the reports themselves: SS_TEST_FAULT=crash or hang, three seconds into the session. */
+static void test_fault(void)
+{
+    static int frames, kind = -1;
+    if (kind < 0) {
+        const char *text = getenv("SS_TEST_FAULT");
+        kind = !text ? 0 : !strcmp(text, "crash") ? 1 : !strcmp(text, "hang") ? 2 : 0;
+    }
+    if (!kind || ++frames < 180)
+        return;
+    if (kind == 1)
+        *(volatile int *)(uintptr_t)8 = 0;
+    for (;;)
+        Sleep(100);
+}
+
+static SYSV uint32_t b_present(uint32_t pixels, int width)
+{
+    sign_of_life();
+    test_fault();
+    return ss_plat_present(PTR(pixels), width);
+}
 static SYSV int b_view_width(void) { return ss_plat_view_width(); }
 static SYSV void b_audio(uint32_t samples, int frames) { ss_plat_audio(PTR(samples), frames); }
 static SYSV double b_pow(double a, double b) { return pow(a, b); }
@@ -146,7 +183,7 @@ static SYSV void b_status(uint32_t text) { ss_plat_status(text ? PTR(text) : NUL
 static SYSV int b_net_open(uint32_t host, int port) { return ss_plat_net_open(PTR(host), port); }
 static SYSV int b_net_send(uint32_t data, int size) { return ss_plat_net_send(PTR(data), size); }
 static SYSV int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR(data), capacity); }
-static SYSV void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
+static SYSV void b_net_wait(int milliseconds) { InterlockedIncrement(&alive); ss_plat_net_wait(milliseconds); }
 static SYSV void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static SYSV uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
 
@@ -186,6 +223,107 @@ static int divide_by_zero(CONTEXT *c)
     return ss_divide_by_zero64(&cpu);
 }
 
+/* ---- reports that survive the session ----
+ * A crash or a hang is written to the console and appended to shiningsource_crash.log next to the program
+ * (the launcher starts the game without a console anyone reads). The file is bounded: at 256 KiB it becomes
+ * shiningsource_crash.old.log and a new one starts. Nothing personal is written: addresses, registers, counters. */
+static char report_path[MAX_PATH];
+
+static void report(const char *format, ...)
+{
+    char line[512];
+    va_list arguments;
+    FILE *file;
+    va_start(arguments, format);
+    vsnprintf(line, sizeof line, format, arguments);
+    va_end(arguments);
+    fputs(line, stderr);
+    fflush(stderr);
+    if (report_path[0] && (file = fopen(report_path, "a")) != NULL) {
+        fputs(line, file);
+        fclose(file);
+    }
+}
+
+static void report_start(const char *what)
+{
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    SYSTEMTIME now;
+    if (!report_path[0]) {
+        char *slash;
+        GetModuleFileNameA(NULL, report_path, sizeof report_path - 32);
+        slash = strrchr(report_path, '\\');
+        strcpy(slash ? slash + 1 : report_path, "shiningsource_crash.log");
+    }
+    if (GetFileAttributesExA(report_path, GetFileExInfoStandard, &data) && data.nFileSizeLow > 256 * 1024) {
+        char old[MAX_PATH];
+        snprintf(old, sizeof old, "%.*s.old.log", (int)strlen(report_path) - 4, report_path);
+        MoveFileExA(report_path, old, MOVEFILE_REPLACE_EXISTING);
+    }
+    GetSystemTime(&now);
+    report("---- %s, %04d-%02d-%02d %02d:%02d:%02d UTC, host built " __DATE__ " " __TIME__ " ----\n", what,
+           now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+}
+
+static void report_context(const CONTEXT *c)
+{
+    const uint64_t *stack = (const uint64_t *)c->Rsp;
+    int i, shown = 0;
+    report("rax %016llX rbx %016llX rcx %016llX rdx %016llX\nrsi %016llX rdi %016llX rbp %016llX rsp %016llX\n",
+           c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rbp, c->Rsp);
+    report("stack words that point into the game image:");
+    for (i = 0; i < 600 && shown < 12 && !IsBadReadPtr(stack + i, 8); i++) {
+        if (stack[i] >= image_low && stack[i] < image_high) {
+            report(" %08llX", (unsigned long long)stack[i]);
+            shown++;
+        }
+    }
+    report("\n%lu stray accesses had been tolerated\n", tolerated);
+}
+
+/* ---- hangs ----
+ * Every frame shown and every wait on the network counts as a sign of life. Once the game has shown a frame,
+ * ten seconds without one means it is stuck: the watchdog writes where the game's thread is, once per hang,
+ * and lets it go on (it may only be very slow). The window stays in the user's hands either way. */
+static HANDLE game_thread;
+
+static DWORD WINAPI watchdog(LPVOID unused)
+{
+    LONG seen = alive;
+    int quiet = 0, told = 0;
+    (void)unused;
+    for (;;) {
+        Sleep(1000);
+        if (alive != seen) {
+            seen = alive;
+            quiet = told = 0;
+            continue;
+        }
+        if (++quiet >= 10 && !told) {
+            CONTEXT context;
+            told = 1;
+            context.ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER;
+            if (SuspendThread(game_thread) != (DWORD)-1) {
+                if (GetThreadContext(game_thread, &context)) {
+                    report_start("hang");
+                    report("no frame for %d seconds; the game's thread is at rip %016llX (%s)\n", quiet, (unsigned long long)context.Rip,
+                           context.Rip >= image_low && context.Rip < image_high ? "game image" : "host or system");
+                    report_context(&context);
+                }
+                ResumeThread(game_thread);
+            }
+        }
+    }
+}
+
+static void sign_of_life(void)
+{
+    if (!game_thread && DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &game_thread, 0, FALSE,
+                                        DUPLICATE_SAME_ACCESS))
+        CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
+    InterlockedIncrement(&alive);
+}
+
 static LONG CALLBACK on_fault(EXCEPTION_POINTERS *info)
 {
     const EXCEPTION_RECORD *record = info->ExceptionRecord;
@@ -204,23 +342,14 @@ static LONG CALLBACK on_fault(EXCEPTION_POINTERS *info)
     if (reporting)
         ExitProcess(4);
     reporting = 1;
-    fprintf(stderr, "crash: exception %08lX at rip %016llX (%s)", record->ExceptionCode, (unsigned long long)c->Rip,
-            in_image ? "game image" : "host");
+    report_start("crash");
+    report("exception %08lX at rip %016llX (%s)", record->ExceptionCode, (unsigned long long)c->Rip,
+           in_image ? "game image" : "host");
     if (record->NumberParameters >= 2)
-        fprintf(stderr, ", %s address %016llX", record->ExceptionInformation[0] ? "writing" : "reading",
-                (unsigned long long)record->ExceptionInformation[1]);
-    fprintf(stderr, "\nstack words that point into the game image:");
-    {
-        const uint64_t *stack = (const uint64_t *)c->Rsp;
-        int i, shown = 0;
-        for (i = 0; i < 600 && shown < 12 && !IsBadReadPtr(stack + i, 8); i++) {
-            if (stack[i] >= image_low && stack[i] < image_high) {
-                fprintf(stderr, " %08llX", (unsigned long long)stack[i]);
-                shown++;
-            }
-        }
-    }
-    fprintf(stderr, "\n%lu stray accesses had been tolerated\n", tolerated);
+        report(", %s address %016llX", record->ExceptionInformation[0] ? "writing" : "reading",
+               (unsigned long long)record->ExceptionInformation[1]);
+    report("\n");
+    report_context(c);
     fflush(stderr);
     ExitProcess(3);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -389,6 +518,8 @@ int main(int argc, char **argv)
         return fail(4, "The host was not linked below 4 GiB.");
 
     stack = main_stack;
+    if (!low_alloc(main_stack, 0x400000, PAGE_READWRITE))
+        return fail(3, "The game's main stack could not be set up.");
     fprintf(stderr, "host64: GBA memory mapped, ROM and image loaded (image %08X-%08X, entry %08X)\n",
             (unsigned)image_low, (unsigned)image_high, (unsigned)entry);
     b_stack_bounds(stack, stack + 0x400000);

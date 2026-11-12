@@ -24,28 +24,61 @@ void ss_flash_set_path(const char *path)
     save_path = path;
 }
 
-static void load(void)
+/* Read a whole save file; 1 only if all of it was there. */
+static int read_save(const char *path)
 {
-    FILE *file = fopen(save_path, "rb");
-    memset(memory, 0xFF, SIZE);
-    if (file) {
-        fread(memory, 1, SIZE, file);
-        fclose(file);
-    }
+    FILE *file = fopen(path, "rb");
+    size_t got;
+    if (!file)
+        return 0;
+    got = fread(memory, 1, SIZE, file);
+    fclose(file);
+    return got == SIZE;
 }
 
+/* The save, or the previous one (<name>.bak) if the save is missing or cut short: a session that ended in the
+ * middle of a write loses at most that write. A cartridge with nothing saved reads as all ones. */
+static void load(void)
+{
+    char backup[600];
+    snprintf(backup, sizeof backup, "%s.bak", save_path);
+    if (read_save(save_path))
+        return;
+    if (read_save(backup)) {
+        fprintf(stderr, "save: %s was missing or incomplete, the previous save was loaded\n", save_path);
+        return;
+    }
+    memset(memory, 0xFF, SIZE);
+}
+
+/* Write the whole memory to a new file and only then put it in place of the save. The save it replaces stays as
+ * <name>.bak. If the new file could not be written completely (a full disk), the existing save is not touched. */
 static void store(void)
 {
-    char temporary[600];
+    static int told;
+    char temporary[600], backup[600];
     FILE *file;
+    int complete;
     snprintf(temporary, sizeof temporary, "%s.tmp", save_path);
+    snprintf(backup, sizeof backup, "%s.bak", save_path);
     file = fopen(temporary, "wb");
-    if (!file)
+    complete = file && fwrite(memory, 1, SIZE, file) == SIZE;
+    if (file && fclose(file) != 0)
+        complete = 0;
+    if (!complete) {
+        if (file)
+            remove(temporary);
+        if (!told)
+            fprintf(stderr, "save: the save file could not be written (%s); the previous save is kept\n", save_path);
+        told = 1;
         return;
-    fwrite(memory, 1, SIZE, file);
-    fclose(file);
-    remove(save_path);          /* replace only after the new file is complete */
-    rename(temporary, save_path);
+    }
+    remove(backup);
+    rename(save_path, backup);  /* fails harmlessly when there is no save yet */
+    if (rename(temporary, save_path) != 0 && !told) {
+        fprintf(stderr, "save: the new save could not be put in place (%s)\n", save_path);
+        told = 1;
+    }
 }
 
 static uint16_t program_sector(uint16_t sector, const uint8_t *source)
