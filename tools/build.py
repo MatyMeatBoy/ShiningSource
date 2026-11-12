@@ -49,6 +49,9 @@ PREPARE_STEPS = [
 ]
 CFLAGS = ["--target=i686-w64-mingw32", "-std=gnu89", "-O1", "-g", "-fno-strict-aliasing", "-fwrapv", "-fsigned-char",
           "-fno-builtin", "-ferror-limit=0", "-w",
+          # The cartridge reads a few locals before writing them; on the console the value is whatever the
+          # register held. Zero on every platform keeps all builds identical, which online play requires.
+          "-ftrivial-auto-var-init=zero",
           # agbcc accepts these; they are findings to clean in the decomp over time, not blockers
           "-Wno-error=int-conversion", "-Wno-error=return-mismatch", "-Wno-error=incompatible-pointer-types",
           "-Wno-error=implicit-function-declaration", "-Wno-error=implicit-int", "-Wno-error=return-type",
@@ -98,20 +101,23 @@ def forward_structs(protos):
     return "\n".join(tags) + ("\n" if tags else "")
 
 
-def prepare(game):
-    src, out = GAMES[game], ROOT / "build/gen" / game
+def prepare(game, prefix=True, abi_flags=None):
+    """prefix: the target prepends an underscore to C symbols (32-bit Windows); ELF targets do not."""
+    src, out = GAMES[game], ROOT / ("build/gen" if prefix else "build/gen-elf") / game
     if not (src / "src").is_dir():
         sys.exit("decomp submodule missing: git submodule update --init")
     hoist = hoists(game)
     patch_file = ROOT / "games" / game / "port/patches.json"
     patches = json.loads(patch_file.read_text(encoding="utf-8")) if patch_file.exists() else {}
+    pending = {}
     for sub in ("src", "include"):
         for path in sorted((src / sub).rglob("*")):
             if path.suffix not in (".c", ".h", ".inc"):
                 continue
             text = path.read_bytes().decode("utf-8", errors="replace")
-            for _, step in PREPARE_STEPS:
-                text = step(text)
+            for label, step in PREPARE_STEPS:
+                if prefix or not label.startswith("assembler names"):
+                    text = step(text)
             for patch in patches.get(path.name, []):
                 if text.count(patch["find"]) != 1:
                     sys.exit("%s: patch no longer applies exactly once: %s" % (path.name, patch["why"]))
@@ -130,10 +136,25 @@ def prepare(game):
                 at = max((m.end() for m in re.finditer(r'^#include[^\n]*\n', text, re.M)), default=0)
                 text = (text[:at] + "/* hoisted by tools/build.py: used before declared */\n" + forward_structs(protos)
                         + "\n".join(protos) + "\n" + text[at:])
-            target = out / path.relative_to(src)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            if not target.exists() or target.read_bytes().decode("utf-8", errors="replace") != text:
+            pending[out / path.relative_to(src)] = text
+    if abi_flags is not None:
+        # 64-bit conventions: adapters where a declaration and the definition pass structs differently
+        import abi_thunks
+        replaced = port_config(game)["runtime"]
+        for target, text in pending.items():        # headers must exist for the size probes
+            if target.suffix != ".c":
+                target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(text.encode("utf-8"))
+        modules = {t: s for t, s in pending.items() if t.suffix == ".c" and t.parent.name == "src" and t.stem not in replaced}
+        (out / "src").mkdir(parents=True, exist_ok=True)
+        fixed, adapters, report = abi_thunks.apply(modules, clang(), abi_flags, out / "include")
+        pending.update(fixed)
+        pending[out / "src/abi_thunks.c"] = adapters
+        (out / "abi_thunks.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
+    for target, text in pending.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.exists() or target.read_bytes().decode("utf-8", errors="replace") != text:
+            target.write_bytes(text.encode("utf-8"))
     return out
 
 

@@ -32,10 +32,16 @@ static unsigned long frame_count, frame_limit, dump_at;
 static const char *input_script;
 static int windowed;
 
+unsigned long ss_frame_number(void)
+{
+    return frame_count;
+}
+
 uint32_t ss_frame_hash(void)
 {
     static const struct { uint32_t base, size; } parts[] = {
-        { SS_IO, 0x60 }, { SS_PALETTE, 0x400 }, { SS_VRAM, 0x18000 }, { SS_OAM, 0x400 },
+        /* video registers only: the DMA registers further up hold native addresses, which differ per build */
+        { SS_IO, 0x56 }, { SS_PALETTE, 0x400 }, { SS_VRAM, 0x18000 }, { SS_OAM, 0x400 },
     };
     uint32_t hash = 2166136261u;
     unsigned i, j;
@@ -125,6 +131,12 @@ static void dump_video(void)
         fwrite((void *)(uintptr_t)SS_OAM, 1, 0x400, file);
         fclose(file);
     }
+    file = fopen("ss_ram_dump.bin", "wb");          /* work RAM, to find where two builds first differ */
+    if (file) {
+        fwrite((void *)(uintptr_t)SS_IWRAM, 1, 0x8000, file);
+        fwrite((void *)(uintptr_t)SS_EWRAM, 1, 0x40000, file);
+        fclose(file);
+    }
     file = fopen("ss_frame.raw", "wb");
     if (file) {
         ss_ppu_render(shot, SS_SCREEN_W);
@@ -154,7 +166,10 @@ void VBlankIntrWait(void)
     if (dump_at && frame_count == dump_at)
         dump_video();
     if (frame_limit) {
-        if (frame_count <= 5 || frame_count % 60 == 0 || frame_count == frame_limit)
+        static int every = -1;
+        if (every < 0)
+            every = getenv("SS_HASH_ALL") != NULL;     /* one line per frame, to find where two builds diverge */
+        if (every || frame_count <= 5 || frame_count % 60 == 0 || frame_count == frame_limit)
             fprintf(stderr, "frame %5lu  hash %08X  stubs reached %d\n", frame_count, (unsigned)ss_frame_hash(), ss_stub_count());
         if (frame_count >= frame_limit) {
             ss_audio_report();

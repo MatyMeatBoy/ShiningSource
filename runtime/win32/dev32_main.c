@@ -2,11 +2,14 @@
 #include "shiningsource/runtime.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <windows.h>
 #include <commdlg.h>
 
 void AgbMain(void);
+
+static unsigned long watch_from;
 
 /* A crash must say where. Addresses inside the executable are printed for tools/where.py to name. */
 static LONG CALLBACK report_crash(EXCEPTION_POINTERS *info)
@@ -15,6 +18,21 @@ static LONG CALLBACK report_crash(EXCEPTION_POINTERS *info)
     const uint32_t *stack = (const uint32_t *)(uintptr_t)info->ContextRecord->Esp;
     int i, shown = 0;
 
+    /* SS_WATCH: a write to the watched address; say who wrote it, from the frame given in SS_WATCH_FROM on */
+    if (record->ExceptionCode == EXCEPTION_SINGLE_STEP && (info->ContextRecord->Dr6 & 1)) {
+        if (ss_frame_number() >= watch_from) {
+            fprintf(stderr, "watch: frame %lu, written by code before eip %08lX; callers:", ss_frame_number(), info->ContextRecord->Eip);
+            for (i = 0; i < 200 && shown < 6; i++) {
+                if (stack[i] >= 0x01800000u && stack[i] < 0x02000000u) {
+                    fprintf(stderr, " %08lX", (unsigned long)stack[i]);
+                    shown++;
+                }
+            }
+            fprintf(stderr, "\n");
+        }
+        info->ContextRecord->Dr6 = 0;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
     if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION && record->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION
         && record->ExceptionCode != EXCEPTION_INT_DIVIDE_BY_ZERO && record->ExceptionCode != EXCEPTION_STACK_OVERFLOW
         && record->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
@@ -95,6 +113,15 @@ int main(int argc, char **argv)
     char message[600];
 
     AddVectoredExceptionHandler(1, report_crash);
+    if (getenv("SS_WATCH")) {           /* debugging aid: hardware write watchpoint on a 4-byte address */
+        CONTEXT context;
+        context.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+        GetThreadContext(GetCurrentThread(), &context);
+        context.Dr0 = strtoul(getenv("SS_WATCH"), NULL, 16);
+        context.Dr7 = 0x000D0001;       /* enable breakpoint 0, on write, 4 bytes */
+        SetThreadContext(GetCurrentThread(), &context);
+        watch_from = getenv("SS_WATCH_FROM") ? strtoul(getenv("SS_WATCH_FROM"), NULL, 10) : 0;
+    }
     if (!rom)
         return 2;
     if (ss_memory_init(rom, &error) != 0) {

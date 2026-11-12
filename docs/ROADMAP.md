@@ -126,13 +126,45 @@ Open:
 - [ ] The game reads only the player's status word today; check whether any
       code reads other fields of `MusicPlayerInfo` or the track structures.
 
-## M5. host64
+## M5. 64-bit (working on Windows, 2026-11-12)
 
-Check: the same game image runs under the 64-bit host on Windows and Linux.
+Check: `python3 tools/build_win64.py`, then `build/win64/ss2/ss2_win64.exe ROM`.
+The 64-bit build must print the same frame hashes as dev32 for the same
+scripted input (`SS_HASH_ALL=1`, compare the two outputs with `diff`).
 
-- Game compiled with 32-bit pointers for x86-64 and arm64; flat image; host maps
-  the GBA space and serves the call table.
-- Android arm64 build with the launcher as first screen.
+- The game image (`ss2_game.elf`): the same generated sources compiled for
+  x86-64 with 32-bit pointers, with the runtime core and a small C library
+  (`runtime/guest/`), linked flat at `0x0A000000`.
+- The host (`runtime/host64/`, `ss2_win64.exe`): a 64-bit program linked at a
+  low base that carries the whole low address space the game needs (GBA
+  regions, the image, its stacks) inside its own image, loads ROM and image, and
+  serves a table of services (`runtime/guest/bridge.h`): files, log, video,
+  input, sound, coroutine stacks, math. Every service uses the System V
+  convention; the image is the same for every operating system.
+- Coroutines are the image's own (`runtime/guest/co_x64.S`).
+- Struct arguments: adapters are generated where a declaration and the
+  definition pass a small struct differently (`tools/abi_thunks.py`; 12
+  functions, including typedef and unprototyped forms).
+- Locals read before being written are zero on every build
+  (`-ftrivial-auto-var-init=zero`).
+
+Result: identical to dev32 for the first **27,082 frames** of the scripted
+play-through (new game, then nine minutes of random movement and attacks).
+
+Open:
+
+- [ ] Frame 27,083: an enemy's position differs. The remaining suspects are
+      calls that pass fewer arguments than the function takes and rely on what
+      an ARM register still held (`tools/check_calls.py`: about 30 functions,
+      100 call sites, some of them false positives of the checker). On dev32
+      the missing argument is whatever is on the stack, on 64-bit whatever is
+      in a register, so both are wrong in different ways. Each one has to be
+      resolved from the ROM and written out in the decompilation (the ROM must
+      still match), as was done for `sub_08057328` and `sub_0807A378`. This is
+      also a requirement for online: every platform must compute the same game.
+- [ ] Linux and Android hosts (the image is already operating-system neutral).
+- [ ] The host commits about 220 MB of address space for the arena; most of it
+      is never touched. Reduce after the layout settles.
 
 ## M6. The port's own features
 

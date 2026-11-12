@@ -35,6 +35,13 @@ ReKHCoM solved the same problem and ShiningSource adopts its three modes:
 | **reloc** | Switch, Vita, anything that cannot map low addresses | GBA regions are arrays and pointer words are relocated at load. Slower to bring up; done last. |
 | **wasm32** | web | 32-bit by nature; GBA addresses live in linear memory. |
 
+How the low addresses are obtained (learned on 2026-11-12): asking the system
+for fixed addresses at run time fails often, because Windows may already have
+mapped something there. Both the dev32 program and the 64-bit host are
+therefore linked at a low base and carry the address space the game needs as
+one zero-filled block of their own image; a program's image is mapped before
+anything else, so the block is guaranteed.
+
 Cost: the game cannot address more than 4 GiB (it needs 300 KiB of RAM), and
 the host/guest boundary needs a typed call table. Benefit: zero changes to game
 logic for 64-bit.

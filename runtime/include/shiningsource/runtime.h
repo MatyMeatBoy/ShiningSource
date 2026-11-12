@@ -50,6 +50,9 @@ int ss_stray_access(void *context, uint32_t address, int is_write);
 int ss_divide_by_zero(void *context);
 unsigned long ss_stray_count(void);
 
+/* Frames completed so far. */
+unsigned long ss_frame_number(void);
+
 /* Called by a generated stub the first time a function nobody implements yet is reached. */
 void ss_stub(const char *name, int *seen);
 

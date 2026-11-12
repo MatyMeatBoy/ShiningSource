@@ -1,0 +1,501 @@
+/* 64-bit host for Windows.
+ *
+ * The game is a separate image: 64-bit instructions, 32-bit pointers, linked at a fixed low address. This
+ * program maps the GBA address space at its hardware addresses, loads the ROM and the image, and gives the
+ * image a table of services (bridge.h). The image runs on stacks in low memory, because it stores addresses of
+ * its locals in 32 bits.
+ *
+ * Exit codes before the game starts: 2 arguments or files, 3 a needed low address range is taken, 4 image.
+ */
+#include "../guest/bridge.h"
+#include "shiningsource/runtime.h"
+
+#include <math.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <windows.h>
+#include <commdlg.h>
+
+#define SYSV __attribute__((sysv_abi))
+#define PTR(a) ((void *)(uintptr_t)(uint32_t)(a))
+
+static uint32_t image_low, image_high;
+
+/* ---- low memory ---- */
+
+/* Asking the system for fixed low addresses at run time is not reliable: something may already be mapped
+ * there. So the host is linked at a low base and carries one large zero-filled block. The image of a program
+ * is mapped before anything else in a new process, which guarantees the block. The GBA regions, the game image
+ * and its stacks are all addresses inside it. */
+char ss_arena[0x0E000000];
+enum { ARENA_FROM = 0x02000000, ARENA_TO = 0x0F400000 };
+
+static void *low_alloc(uint32_t address, uint32_t size, DWORD protection)
+{
+    DWORD old;
+    if (address < ARENA_FROM || address + size > ARENA_TO)
+        return NULL;
+    if (protection != PAGE_READWRITE && !VirtualProtect(PTR(address), size, protection, &old))
+        return NULL;
+    return PTR(address);
+}
+
+/* Stacks for the image: a reserved low range handed out in fixed slots. */
+enum { STACK_SLOT = 0x80000, STACK_SLOTS = 128 };
+static const uint32_t stack_arena = 0x0B000000u, main_stack = 0x0F000000u;
+static uint8_t stack_used[STACK_SLOTS];
+
+static SYSV uint32_t b_stack_alloc(uint32_t size)
+{
+    int i;
+    if (size > STACK_SLOT - 0x2000)
+        return 0;
+    for (i = 0; i < STACK_SLOTS; i++) {
+        if (!stack_used[i]) {
+            stack_used[i] = 1;
+            return stack_arena + (uint32_t)i * STACK_SLOT;
+        }
+    }
+    return 0;
+}
+
+static SYSV void b_stack_free(uint32_t base, uint32_t size)
+{
+    (void)size;
+    stack_used[(base - stack_arena) / STACK_SLOT] = 0;
+}
+
+static SYSV void b_stack_bounds(uint32_t low, uint32_t high)
+{
+    NT_TIB *tib = (NT_TIB *)NtCurrentTeb();
+    tib->StackBase = PTR(high);
+    tib->StackLimit = PTR(low);
+}
+
+/* ---- files, environment, log ---- */
+
+static FILE *files[32];
+
+static SYSV int b_write(int handle, uint32_t data, uint32_t size)
+{
+    FILE *file = handle == 1 ? stdout : handle == 2 ? stderr : (handle >= 3 && handle < 32) ? files[handle] : NULL;
+    int put = file ? (int)fwrite(PTR(data), 1, size, file) : -1;
+    if (handle <= 2 && file)
+        fflush(file);
+    return put;
+}
+
+static SYSV int b_open(uint32_t path, uint32_t mode)
+{
+    int i;
+    for (i = 3; i < 32; i++) {
+        if (!files[i]) {
+            files[i] = fopen(PTR(path), PTR(mode));
+            return files[i] ? i : 0;
+        }
+    }
+    return 0;
+}
+
+static SYSV int b_read(int handle, uint32_t data, uint32_t size)
+{
+    return (handle >= 3 && handle < 32 && files[handle]) ? (int)fread(PTR(data), 1, size, files[handle]) : -1;
+}
+
+static SYSV int b_close(int handle)
+{
+    int result = -1;
+    if (handle >= 3 && handle < 32 && files[handle]) {
+        result = fclose(files[handle]);
+        files[handle] = NULL;
+    }
+    return result;
+}
+
+static SYSV int b_remove(uint32_t path) { return remove(PTR(path)); }
+static SYSV int b_rename(uint32_t from, uint32_t to) { return rename(PTR(from), PTR(to)); }
+
+static SYSV int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
+{
+    const char *value = getenv(PTR(name));
+    size_t length;
+    if (!value)
+        return -1;
+    length = strlen(value);
+    if (length >= capacity)
+        length = capacity - 1;
+    memcpy(PTR(out), value, length);
+    ((char *)PTR(out))[length] = 0;
+    return (int)length;
+}
+
+static SYSV void b_exit(int code) { exit(code); }
+static SYSV uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
+static SYSV int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
+static SYSV uint32_t b_present(uint32_t pixels) { return ss_plat_present(PTR(pixels)); }
+static SYSV void b_audio(uint32_t samples, int frames) { ss_plat_audio(PTR(samples), frames); }
+static SYSV double b_pow(double a, double b) { return pow(a, b); }
+static SYSV double b_sin(double a) { return sin(a); }
+static SYSV double b_cos(double a) { return cos(a); }
+static SYSV double b_fmod(double a, double b) { return fmod(a, b); }
+
+static uint32_t bridge[SS_B_COUNT];
+#define ENTRY(index, function) bridge[index] = (uint32_t)(uintptr_t)(function)
+
+/* ---- accesses the console would have ignored (see win32/stray.c for the reasoning) ---- */
+
+static DWORD64 *reg64(CONTEXT *c, int index)
+{
+    static const size_t offsets[16] = {
+        offsetof(CONTEXT, Rax), offsetof(CONTEXT, Rcx), offsetof(CONTEXT, Rdx), offsetof(CONTEXT, Rbx),
+        offsetof(CONTEXT, Rsp), offsetof(CONTEXT, Rbp), offsetof(CONTEXT, Rsi), offsetof(CONTEXT, Rdi),
+        offsetof(CONTEXT, R8), offsetof(CONTEXT, R9), offsetof(CONTEXT, R10), offsetof(CONTEXT, R11),
+        offsetof(CONTEXT, R12), offsetof(CONTEXT, R13), offsetof(CONTEXT, R14), offsetof(CONTEXT, R15),
+    };
+    return (DWORD64 *)((char *)c + offsets[index & 15]);
+}
+
+static int modrm_length(const uint8_t *p)
+{
+    int mod = p[0] >> 6, rm = p[0] & 7, length = 1;
+    if (mod == 3) return 0;
+    if (rm == 4) {
+        length++;
+        if (mod == 0 && (p[1] & 7) == 5) length += 4;
+    } else if (mod == 0 && rm == 5) {
+        length += 4;
+    }
+    if (mod == 1) length += 1;
+    if (mod == 2) length += 4;
+    return length;
+}
+
+static void value_flags(CONTEXT *c, uint64_t value, int bits, int carry)
+{
+    uint64_t sign = 1ull << (bits - 1);
+    c->EFlags &= ~(0x0001u | 0x0040u | 0x0080u | 0x0800u);
+    if (carry) c->EFlags |= 0x0001u;
+    if (value == 0) c->EFlags |= 0x0040u;
+    if (value & sign) c->EFlags |= 0x0080u;
+}
+
+static unsigned long tolerated;
+
+static int stray_access(CONTEXT *c, uint64_t address, int is_write)
+{
+    const uint8_t *p = (const uint8_t *)c->Rip;
+    int operand16 = 0, rex = 0, length, reg, bits;
+    uint64_t mask, value;
+
+    if (address >= SS_EWRAM && address < SS_ROM + 0x1000000)
+        return 0;
+    while (*p == 0x66 || *p == 0x67 || *p == 0xF2 || *p == 0xF3 || *p == 0x2E || *p == 0x3E || *p == 0x26 || *p == 0x36 || *p == 0x64 || *p == 0x65) {
+        if (*p == 0x66) operand16 = 1;
+        p++;
+    }
+    if ((*p & 0xF0) == 0x40)
+        rex = *p++;
+    bits = (rex & 8) ? 64 : operand16 ? 16 : 32;
+    mask = bits == 64 ? ~0ull : (1ull << bits) - 1;
+    if (p[0] == 0x0F) {
+        length = modrm_length(p + 2);
+        reg = ((p[2] >> 3) & 7) | ((rex & 4) << 1);
+        if (!length) return 0;
+        switch (p[1]) {
+        case 0xB6: case 0xB7: case 0xBE: case 0xBF: *reg64(c, reg) = 0; break;
+        case 0x11: case 0x29: case 0x7F: case 0xD6: case 0x13: case 0x17: if (!is_write) return 0; break;
+        default: return 0;
+        }
+        p += 2 + length;
+    } else {
+        length = modrm_length(p + 1);
+        reg = ((p[1] >> 3) & 7) | ((rex & 4) << 1);
+        if (!length) return 0;
+        value = *reg64(c, reg) & ((p[0] & 1) ? mask : 0xFF);
+        switch (p[0]) {
+        case 0x88: case 0x89: p += 1 + length; break;
+        case 0xC6: p += 1 + length + 1; break;
+        case 0xC7: p += 1 + length + (operand16 ? 2 : 4); break;
+        case 0x8A: *reg64(c, reg) &= ~0xFFull; p += 1 + length; break;
+        case 0x8B:
+            if (operand16) *reg64(c, reg) &= ~0xFFFFull;
+            else *reg64(c, reg) = 0;                        /* a 32-bit load clears the upper half too */
+            p += 1 + length;
+            break;
+        case 0x63: *reg64(c, reg) = 0; p += 1 + length; break;      /* movsxd r64, m32 */
+        case 0x00: case 0x01: case 0x08: case 0x09: case 0x20: case 0x21: case 0x28: case 0x29: case 0x30: case 0x31:
+            p += 1 + length;
+            break;
+        case 0x80: case 0x83: case 0x81: {
+            int wide = p[0] == 0x81 ? (operand16 ? 2 : 4) : 1, opbits = p[0] == 0x80 ? 8 : bits;
+            if (((p[1] >> 3) & 7) == 7) {
+                const uint8_t *imm = p + 1 + length;
+                uint64_t operand = wide == 1 ? (uint64_t)(int64_t)(int8_t)imm[0] : wide == 2 ? (uint64_t)(imm[0] | imm[1] << 8)
+                                   : (uint64_t)(int64_t)(int32_t)(imm[0] | imm[1] << 8 | imm[2] << 16 | (uint32_t)imm[3] << 24);
+                uint64_t m = opbits == 64 ? ~0ull : (1ull << opbits) - 1;
+                value_flags(c, (0ull - operand) & m, opbits, (operand & m) != 0);
+            }
+            p += 1 + length + wide;
+            break;
+        }
+        case 0xFE: case 0xFF:
+            if (((p[1] >> 3) & 7) > 1) return 0;
+            p += 1 + length;
+            break;
+        case 0x02: case 0x03: case 0x0A: case 0x0B: case 0x2A: case 0x2B: case 0x32: case 0x33: case 0x3A: case 0x3B:
+            value_flags(c, value, (p[0] & 1) ? bits : 8, 0);
+            p += 1 + length;
+            break;
+        case 0x22: *reg64(c, reg) &= ~0xFFull; value_flags(c, 0, 8, 0); p += 1 + length; break;
+        case 0x23:
+            if (operand16) *reg64(c, reg) &= ~0xFFFFull; else *reg64(c, reg) = 0;
+            value_flags(c, 0, 32, 0);
+            p += 1 + length;
+            break;
+        case 0x38: case 0x39: {
+            int opbits = (p[0] & 1) ? bits : 8;
+            uint64_t m = opbits == 64 ? ~0ull : (1ull << opbits) - 1;
+            value_flags(c, (0ull - value) & m, opbits, value != 0);
+            p += 1 + length;
+            break;
+        }
+        case 0x84: case 0x85: value_flags(c, 0, 32, 0); p += 1 + length; break;
+        case 0xF6: case 0xF7:
+            if (((p[1] >> 3) & 7) != 0) return 0;
+            value_flags(c, 0, 32, 0);
+            p += 1 + length + (p[0] == 0xF6 ? 1 : (operand16 ? 2 : 4));
+            break;
+        default: return 0;
+        }
+    }
+    tolerated++;
+    c->Rip = (DWORD64)(uintptr_t)p;
+    return 1;
+}
+
+static int divide_by_zero(CONTEXT *c)
+{
+    const uint8_t *p = (const uint8_t *)c->Rip;
+    int length;
+    while (*p == 0x66 || *p == 0x67 || *p == 0xF2 || *p == 0xF3) p++;
+    if ((*p & 0xF0) == 0x40) p++;
+    if ((p[0] != 0xF7 && p[0] != 0xF6) || ((p[1] >> 3) & 7) < 6)
+        return 0;
+    length = modrm_length(p + 1);
+    if (!length) length = 1;
+    c->Rax = 0;
+    c->Rdx = 0;
+    c->Rip = (DWORD64)(uintptr_t)(p + 1 + length);
+    tolerated++;
+    return 1;
+}
+
+static LONG CALLBACK on_fault(EXCEPTION_POINTERS *info)
+{
+    const EXCEPTION_RECORD *record = info->ExceptionRecord;
+    CONTEXT *c = info->ContextRecord;
+    int in_image = c->Rip >= image_low && c->Rip < image_high;
+    static int reporting;
+
+    if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION && record->ExceptionCode != EXCEPTION_ILLEGAL_INSTRUCTION
+        && record->ExceptionCode != EXCEPTION_INT_DIVIDE_BY_ZERO && record->ExceptionCode != EXCEPTION_PRIV_INSTRUCTION)
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (in_image && record->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2
+        && stray_access(c, record->ExceptionInformation[1], record->ExceptionInformation[0] != 0))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    if (in_image && record->ExceptionCode == EXCEPTION_INT_DIVIDE_BY_ZERO && divide_by_zero(c))
+        return EXCEPTION_CONTINUE_EXECUTION;
+    if (reporting)
+        ExitProcess(4);
+    reporting = 1;
+    fprintf(stderr, "crash: exception %08lX at rip %016llX (%s)", record->ExceptionCode, (unsigned long long)c->Rip,
+            in_image ? "game image" : "host");
+    if (record->NumberParameters >= 2)
+        fprintf(stderr, ", %s address %016llX", record->ExceptionInformation[0] ? "writing" : "reading",
+                (unsigned long long)record->ExceptionInformation[1]);
+    fprintf(stderr, "\nstack words that point into the game image:");
+    {
+        const uint64_t *stack = (const uint64_t *)c->Rsp;
+        int i, shown = 0;
+        for (i = 0; i < 600 && shown < 12 && !IsBadReadPtr(stack + i, 8); i++) {
+            if (stack[i] >= image_low && stack[i] < image_high) {
+                fprintf(stderr, " %08llX", (unsigned long long)stack[i]);
+                shown++;
+            }
+        }
+    }
+    fprintf(stderr, "\n%lu stray accesses had been tolerated\n", tolerated);
+    fflush(stderr);
+    ExitProcess(3);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* ---- loading ---- */
+
+static int load_file(const char *path, uint32_t address, uint32_t capacity)
+{
+    FILE *file = fopen(path, "rb");
+    size_t got;
+    if (!file)
+        return -1;
+    got = fread(PTR(address), 1, capacity, file);
+    fclose(file);
+    return (int)got;
+}
+
+/* ELF32 for x86-64 (the x32 ABI): copy each PT_LOAD segment to its address. Returns the entry point. */
+static uint32_t load_image(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    uint8_t header[52], program[32];
+    uint32_t entry, offset, low = ~0u, high = 0;
+    int count, size, i;
+
+    if (!file)
+        return 0;
+    if (fread(header, 1, 52, file) != 52 || memcmp(header, "\x7f" "ELF\x01", 5) != 0) {
+        fclose(file);
+        return 0;
+    }
+    memcpy(&entry, header + 0x18, 4);
+    memcpy(&offset, header + 0x1C, 4);
+    size = header[0x2A] | header[0x2B] << 8;
+    count = header[0x2C] | header[0x2D] << 8;
+    for (i = 0; i < count; i++) {           /* first pass: the range of the whole image */
+        uint32_t type, address, memory;
+        fseek(file, (long)(offset + (uint32_t)(i * size)), SEEK_SET);
+        fread(program, 1, 32, file);
+        memcpy(&type, program, 4); memcpy(&address, program + 8, 4); memcpy(&memory, program + 20, 4);
+        if (type != 1 || !memory) continue;
+        if (address < low) low = address;
+        if (address + memory > high) high = address + memory;
+    }
+    low &= ~0xFFFFu;
+    high = (high + 0xFFFFu) & ~0xFFFFu;
+    if (low >= high || !low_alloc(low, high - low, PAGE_EXECUTE_READWRITE)) {
+        fclose(file);
+        return 0;
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t type, file_offset, address, file_size;
+        fseek(file, (long)(offset + (uint32_t)(i * size)), SEEK_SET);
+        fread(program, 1, 32, file);
+        memcpy(&type, program, 4); memcpy(&file_offset, program + 4, 4);
+        memcpy(&address, program + 8, 4); memcpy(&file_size, program + 16, 4);
+        if (type != 1) continue;
+        fseek(file, (long)file_offset, SEEK_SET);
+        fread(PTR(address), 1, file_size, file);
+    }
+    fclose(file);
+    image_low = low;
+    image_high = high;
+    return entry;
+}
+
+static const char *find_rom(char *path, size_t capacity)
+{
+    char remembered[MAX_PATH];
+    OPENFILENAMEA dialog;
+    FILE *file;
+    char *slash;
+
+    GetModuleFileNameA(NULL, remembered, sizeof remembered);
+    slash = strrchr(remembered, '\\');
+    strcpy(slash ? slash + 1 : remembered, "rom_path.txt");
+    file = fopen(remembered, "r");
+    if (file) {
+        if (fgets(path, (int)capacity, file))
+            path[strcspn(path, "\r\n")] = 0;
+        fclose(file);
+        if (path[0] && GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
+            return path;
+    }
+    path[0] = 0;
+    memset(&dialog, 0, sizeof dialog);
+    dialog.lStructSize = sizeof dialog;
+    dialog.lpstrFilter = "Game Boy Advance ROM (*.gba)\0*.gba\0All files\0*.*\0";
+    dialog.lpstrFile = path;
+    dialog.nMaxFile = (DWORD)capacity;
+    dialog.lpstrTitle = "ShiningSource: choose your Shining Soul II ROM";
+    dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (!GetOpenFileNameA(&dialog))
+        return NULL;
+    file = fopen(remembered, "w");
+    if (file) {
+        fprintf(file, "%s\n", path);
+        fclose(file);
+    }
+    return path;
+}
+
+/* Run the image's entry on its own stack. Microsoft x64 in, System V out. */
+void ss_enter_image(uint64_t entry, uint64_t stack_top, uint64_t bridge_table, uint64_t stack_low);
+__asm__(
+    ".text\n"
+    ".globl ss_enter_image\n"
+    "ss_enter_image:\n"
+    "    movq %rdx, %rsp\n"            /* never returns: the image ends through the exit service */
+    "    movl %r8d, %edi\n"            /* System V argument 1: the bridge table */
+    "    movl %r9d, %esi\n"            /* argument 2: lowest address of this stack */
+    "    movl %edx, %edx\n"            /* argument 3: its top */
+    "    callq *%rcx\n"
+    "    ud2\n");
+
+static int fail(int code, const char *text)
+{
+    fprintf(stderr, "%s\n", text);
+    MessageBoxA(NULL, text, "ShiningSource", MB_ICONERROR);
+    return code;
+}
+
+int main(int argc, char **argv)
+{
+    static const struct { uint32_t base, size; const char *name; } regions[] = {
+        { SS_EWRAM, 0x40000, "EWRAM" }, { SS_IWRAM, 0x10000, "IWRAM" }, { SS_IO, 0x10000, "I/O registers" },
+        { SS_PALETTE, 0x10000, "palette" }, { SS_VRAM, 0x20000, "VRAM" }, { SS_OAM, 0x10000, "OAM" },
+        { SS_ROM, 0x1000000, "ROM" },
+    };
+    char image_path[MAX_PATH], rom_buffer[MAX_PATH], message[400];
+    const char *rom = argc >= 2 ? argv[1] : find_rom(rom_buffer, sizeof rom_buffer);
+    uint32_t entry, stack;
+    char *slash;
+    unsigned i;
+
+    if (!rom)
+        return 2;
+    AddVectoredExceptionHandler(1, on_fault);
+    for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
+        if (!low_alloc(regions[i].base, regions[i].size, PAGE_READWRITE)) {
+            snprintf(message, sizeof message, "The address range the game needs for its %s (0x%08X) is not free in this process.",
+                     regions[i].name, (unsigned)regions[i].base);
+            return fail(3, message);
+        }
+    }
+    if ((uintptr_t)ss_arena > ARENA_FROM || (uintptr_t)ss_arena + sizeof ss_arena < ARENA_TO)
+        return fail(3, "The host was not linked so that its arena covers the game's address space.");
+    if (load_file(rom, SS_ROM, 0x1000000) < 0x100000)
+        return fail(2, "The ROM file could not be read.");
+    GetModuleFileNameA(NULL, image_path, sizeof image_path);
+    slash = strrchr(image_path, '\\');
+    strcpy(slash ? slash + 1 : image_path, argc >= 3 ? argv[2] : "ss2_game.elf");
+    entry = load_image(argc >= 3 && strchr(argv[2], ':') ? argv[2] : image_path);
+    if (!entry)
+        return fail(4, "The game image (ss2_game.elf) is missing, damaged, or its address range is taken.");
+
+    ENTRY(SS_B_VERSION, b_version); ENTRY(SS_B_WRITE, b_write); ENTRY(SS_B_OPEN, b_open); ENTRY(SS_B_READ, b_read);
+    ENTRY(SS_B_CLOSE, b_close); ENTRY(SS_B_REMOVE, b_remove); ENTRY(SS_B_RENAME, b_rename); ENTRY(SS_B_GETENV, b_getenv);
+    ENTRY(SS_B_EXIT, b_exit); ENTRY(SS_B_VIDEO_INIT, b_video_init); ENTRY(SS_B_PRESENT, b_present); ENTRY(SS_B_AUDIO, b_audio);
+    ENTRY(SS_B_STACK_ALLOC, b_stack_alloc); ENTRY(SS_B_STACK_FREE, b_stack_free); ENTRY(SS_B_STACK_BOUNDS, b_stack_bounds);
+    ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
+    if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32)
+        return fail(4, "The host was not linked below 4 GiB.");
+
+    stack = main_stack;
+    fprintf(stderr, "host64: GBA memory mapped, ROM and image loaded (image %08X-%08X, entry %08X)\n",
+            (unsigned)image_low, (unsigned)image_high, (unsigned)entry);
+    b_stack_bounds(stack, stack + 0x400000);
+    ss_enter_image(entry, stack + 0x400000, (uintptr_t)bridge, stack);
+    return 0;
+}

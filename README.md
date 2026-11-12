@@ -45,7 +45,8 @@ The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md).
 - **The original game logic, natively.** Every function of the cartridge is C
   from the decompilation; the port adds a platform layer under it (video,
   audio, input, saves, link cable) and nothing in between.
-- **64-bit** on PC, Linux and Android. Consoles use what their hardware allows.
+- **64-bit** on PC, Linux and Android (the Windows 64-bit build already runs).
+  Consoles use what their hardware allows.
 - **Widescreen that is real**, not stretched: the field shows more of the
   authored map; menus keep their composition; the HUD follows the window edges
   and scales with it.
@@ -72,6 +73,12 @@ python3 tools/link.py               # milestone 1: links; lists what is still st
 
 `tools/build.py prepare` shows what is changed in the game's C for a non-ARM
 compiler: the decompilation itself is never edited from this repository.
+
+The 64-bit Windows version is built with `python3 tools/build_win64.py`
+(`build/win64/ss2/ss2_win64.exe` plus the game image `ss2_game.elf`). It is
+frame-for-frame identical to the 32-bit development build for the first 27,082
+frames of the test play-through; the remaining difference is tracked in the
+roadmap. It needs SDL3 development files for x86-64 (`SHININGSOURCE_SDL3`).
 
 ## Layout
 
