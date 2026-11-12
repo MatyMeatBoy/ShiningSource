@@ -167,7 +167,15 @@ Open:
       (`tools/check_calls.py`) are still wrong C even where both builds agree.
       Resolve them in the decompilation with `tools/scripts/try_edit.py`
       (six done on 2026-11-12).
-- [ ] Linux and Android hosts (the image is already operating-system neutral).
+- [x] Linux host (`runtime/host64/host_linux.c`, `tools/build_linux64.py`):
+      cross-compiled from Windows against a Debian sysroot. **Not run yet**:
+      there is no Linux on the development machine. First run on Linux is the
+      check (`./ss2_linux64 ROM.gba`, then the same `SS_HASH_ALL` comparison).
+- [ ] Android host. Needs an arm64 game image (the same sources compiled for
+      `aarch64` with 32-bit pointers, `arm64_32`/ILP32), a host inside an SDL
+      Android activity that maps the low address space, and an APK project.
+      The arm64 coroutine switch and fault decoder have to be written (the
+      x86-64 ones do not apply).
 - [ ] The host commits about 220 MB of address space for the arena; most of it
       is never touched. Reduce after the layout settles.
 
