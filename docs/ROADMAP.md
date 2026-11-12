@@ -231,6 +231,9 @@ Open:
       return, killed player). Passing: 4 players, 13,000 frames into multiplayer
       mode, 10% loss, 120-160 ms lag, on dev32 and on the 64-bit build; the
       single-player reference (32,000 frames, hash 5711719E) is unchanged.
+- [x] Real-time check (`pace`): four players with 70-90 ms of lag each way run
+      at full speed with delay 6; with delay 3 (too short) the same session
+      takes 50% longer and nothing breaks.
 - [x] Launcher page: room name, delay, server, connection measurement.
 - [x] Window title shows the room, the seat and who is being waited for.
 - [ ] Relay running on the VPS (needs the owner's access; `relay/README.md`).

@@ -1,11 +1,12 @@
 #!/bin/sh
-# net_test.sh PLAYERS FRAMES [DELAY] [INPUT] [DUMP_FRAME] [LOSS LAG JITTER] [win64]: headless online test on this machine.
+# net_test.sh PLAYERS FRAMES [DELAY] [INPUT] [DUMP_FRAME] [LOSS LAG JITTER] [win64|dev32] [pace]: headless online test on this machine.
 # Starts the relay, runs PLAYERS copies of the dev32 build in one room and compares what each was given.
 # Every copy logs one line per delivered frame (label, players, hash); frames delivered to several copies with
 # the same players must have the same hash.
 set -u
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 EXE=$ROOT/build/dev32/ss2/ss2_dev32.exe
+[ "${10:-}" = pace ] && export SS_PACE=1
 [ "${9:-}" = win64 ] && EXE=$ROOT/build/win64/ss2/ss2_win64.exe
 ROM=${SS_ROM_PATH:-D:/01Claude/GBA/ss2-nov03-w6/baserom.gba}
 PLAYERS=$1

@@ -189,11 +189,28 @@ int rename(const char *from, const char *to) { return SS_HOST(SS_B_RENAME, int (
 
 char *getenv(const char *name)
 {
-    static char values[4][0x20000];      /* test scripts in SS_INPUT can be tens of kilobytes */
-    static int next;
-    char *slot = values[next++ & 3];
-    int length = SS_HOST(SS_B_GETENV, int (*)(uint32_t, uint32_t, uint32_t))((uint32_t)(uintptr_t)name, (uint32_t)(uintptr_t)slot, 0x20000);
-    return length < 0 ? NULL : slot;
+    /* A value stays valid for the life of the program, as callers of getenv expect: each name gets its own
+     * place in the pool the first time it is asked for. Test scripts in SS_INPUT can be tens of kilobytes. */
+    static char pool[0x60000], names[64][24];
+    static char *values[64];
+    static int count, used;
+    size_t size = strlen(name) + 1;
+    int i, length;
+
+    for (i = 0; i < count; i++)
+        if (size <= sizeof names[i] && !memcmp(names[i], name, size))
+            return values[i];
+    if (used + 0x20000 > (int)sizeof pool)
+        used = sizeof pool - 0x20000;           /* pool exhausted: the last place is reused */
+    length = SS_HOST(SS_B_GETENV, int (*)(uint32_t, uint32_t, uint32_t))((uint32_t)(uintptr_t)name, (uint32_t)(uintptr_t)(pool + used), 0x20000);
+    if (count < 64 && size <= sizeof names[0]) {
+        memcpy(names[count], name, size);
+        values[count++] = length < 0 ? NULL : pool + used;
+    }
+    if (length < 0)
+        return NULL;
+    used += length + 1;
+    return pool + used - length - 1;
 }
 
 void exit(int code)
