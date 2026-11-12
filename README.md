@@ -76,9 +76,8 @@ compiler: the decompilation itself is never edited from this repository.
 
 The 64-bit Windows version is built with `python3 tools/build_win64.py`
 (`build/win64/ss2/ss2_win64.exe` plus the game image `ss2_game.elf`). It is
-frame-for-frame identical to the 32-bit development build for the first 27,082
-frames of the test play-through; the remaining difference is tracked in the
-roadmap. It needs SDL3 development files for x86-64 (`SHININGSOURCE_SDL3`).
+frame-for-frame identical to the 32-bit development build over the whole
+32,000-frame test play-through. It needs SDL3 development files for x86-64 (`SHININGSOURCE_SDL3`).
 
 ## Layout
 

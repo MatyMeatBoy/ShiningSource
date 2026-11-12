@@ -47,7 +47,9 @@ PREPARE_STEPS = [
     # global.h pulls the ARM assembler macros into every translation unit
     ("drop file-scope ARM assembler include", lambda text: text.replace('asm(".include \\"asm/macros.inc\\"");', "")),
 ]
-CFLAGS = ["--target=i686-w64-mingw32", "-std=gnu89", "-O1", "-g", "-fno-strict-aliasing", "-fwrapv", "-fsigned-char",
+CFLAGS = ["--target=i686-w64-mingw32",
+          # Windows targets lay out bit-fields by Microsoft's rules unless told otherwise; the cartridge was built by GCC
+          "-mno-ms-bitfields", "-std=gnu89", "-O1", "-g", "-fno-strict-aliasing", "-fwrapv", "-fsigned-char",
           "-fno-builtin", "-ferror-limit=0", "-w",
           # The cartridge reads a few locals before writing them; on the console the value is whatever the
           # register held. Zero on every platform keeps all builds identical, which online play requires.
@@ -56,6 +58,8 @@ CFLAGS = ["--target=i686-w64-mingw32", "-std=gnu89", "-O1", "-g", "-fno-strict-a
           "-Wno-error=int-conversion", "-Wno-error=return-mismatch", "-Wno-error=incompatible-pointer-types",
           "-Wno-error=implicit-function-declaration", "-Wno-error=implicit-int", "-Wno-error=return-type",
           "-DSHININGSOURCE=1", "-DPORT=1"]
+if os.environ.get("SHININGSOURCE_TRACE"):       # call trace build, see runtime/core/trace.c
+    CFLAGS.append("-finstrument-functions")
 
 
 def clang():

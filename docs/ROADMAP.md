@@ -148,29 +148,25 @@ scripted input (`SS_HASH_ALL=1`, compare the two outputs with `diff`).
 - Locals read before being written are zero on every build
   (`-ftrivial-auto-var-init=zero`).
 
-Result: identical to dev32 for the first **27,082 frames** of the scripted
+- Bit-fields follow GCC's layout on every build (`-mno-ms-bitfields` for the
+  Windows 32-bit target, which otherwise uses Microsoft's rules).
+
+Result: **identical to dev32 for all 32,000 frames** of the scripted
 play-through (new game, then nine minutes of random movement and attacks).
+
+How the last difference was found, as a method: per-frame hashes gave the first
+differing frame (27,083); a RAM dump of both builds at that frame gave the
+first differing bytes (an actor record whose fields were shifted by one byte);
+a call trace of the frame (`SHININGSOURCE_TRACE=1` build, `SS_CALLTRACE=N`,
+`tools/calltrace.py`) showed both builds made the same calls, so the cause was
+layout, not logic.
 
 Open:
 
-- [ ] Frame 27,083: an enemy's position differs. The remaining suspects are
-      calls that pass fewer arguments than the function takes and rely on what
-      an ARM register still held (`tools/check_calls.py`: about 30 functions,
-      100 call sites, some of them false positives of the checker). On dev32
-      the missing argument is whatever is on the stack, on 64-bit whatever is
-      in a register, so both are wrong in different ways. Each one has to be
-      resolved from the ROM and written out in the decompilation (the ROM must
-      still match), as was done for `sub_08057328` and `sub_0807A378`. This is
-      also a requirement for online: every platform must compute the same game.
-      Method: SS2Decomp `tools/scripts/try_edit.py` applies a candidate edit only
-      if the module object stays identical; six were done on 2026-11-12
-      (wrappers that forward their argument, and two calls that take the
-      result of the call before them). They did not move frame 27,083. To find
-      the cause: `SS_DUMP=27083` on both builds writes `ss_ram_dump.bin`; the
-      first differing words are an actor position at `0x02006C74`; `SS_WATCH=
-      02006C74 SS_WATCH_FROM=27082` on dev32 names the writer
-      (`sub_08013E90`, called from `sub_0801801C`). The inputs of that call
-      (speed, direction, the collision check) are the next thing to compare.
+- [ ] Calls that pass fewer arguments than the function takes
+      (`tools/check_calls.py`) are still wrong C even where both builds agree.
+      Resolve them in the decompilation with `tools/scripts/try_edit.py`
+      (six done on 2026-11-12).
 - [ ] Linux and Android hosts (the image is already operating-system neutral).
 - [ ] The host commits about 220 MB of address space for the arena; most of it
       is never touched. Reduce after the layout settles.
