@@ -63,6 +63,40 @@ void ss_raise_interrupt(uint16_t flag)
     }
 }
 
+/* Sound of one game frame (48 kHz stereo). It is measured, optionally written to ss_audio.raw
+ * (SS_AUDIO_FILE), and handed to the platform, which plays it when there is a device. */
+static unsigned long audio_frames, audio_loud;
+static int audio_peak;
+static FILE *audio_file;
+
+void ss_audio_push(const int16_t *samples, int frames)
+{
+    static int file_checked;
+    int i;
+    for (i = 0; i < frames * 2; i++) {
+        int magnitude = samples[i] < 0 ? -samples[i] : samples[i];
+        if (magnitude > audio_peak) audio_peak = magnitude;
+        if (magnitude > 256) audio_loud++;
+    }
+    audio_frames += (unsigned long)frames;
+    if (!file_checked) {
+        file_checked = 1;
+        if (getenv("SS_AUDIO_FILE"))
+            audio_file = fopen("ss_audio.raw", "wb");
+    }
+    if (audio_file)
+        fwrite(samples, 4, (size_t)frames, audio_file);
+    if (windowed)
+        ss_plat_audio(samples, frames);
+}
+
+void ss_audio_report(void)
+{
+    fprintf(stderr, "audio: %lu sample frames, peak %d, %lu samples above the noise floor%c", audio_frames, audio_peak, audio_loud, 10);
+    if (audio_file)
+        fclose(audio_file);
+}
+
 static void scripted_input(void)
 {
     const char *cursor = input_script;
@@ -109,7 +143,7 @@ void VBlankIntrWait(void)
         input_script = getenv("SS_INPUT");
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
-        if (windowed && ss_video_init("ShiningSource") != 0)
+        if (windowed && ss_plat_video_init("ShiningSource") != 0)
             exit(1);
     }
     REG_VCOUNT = 160;
@@ -127,8 +161,11 @@ void VBlankIntrWait(void)
             exit(0);
         }
     }
-    if (windowed)
-        ss_video_frame();
+    if (windowed) {
+        static uint32_t pixels[SS_SCREEN_W * SS_SCREEN_H];
+        ss_ppu_render(pixels, SS_SCREEN_W);
+        REG_KEYINPUT = (uint16_t)(~ss_plat_present(pixels) & 0x03FF);    /* the register is active low */
+    }
     if (input_script)
         scripted_input();
     REG_DISPSTAT &= ~1;

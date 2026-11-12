@@ -2,7 +2,7 @@
  *
  * The cartridge implements this in hand-written ARM (asm/sched.s in the decompilation): tasks live in a list
  * ordered by priority, each with its own stack, and switch by saving and restoring registers. Here every task
- * is a fiber with a native stack; the task record in GBA memory keeps the same fields and states, because game
+ * is a coroutine with a native stack; the task record in GBA memory keeps the same fields and states, because game
  * code reads them.
  *
  * Task record (offsets as in the original):
@@ -14,7 +14,6 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <windows.h>
 
 typedef struct Task {
     uint32_t next, state, priority, entry, sp, signal, prev, unused1C, memory, destructor;
@@ -26,14 +25,13 @@ typedef struct Task {
 #define COUNT    (*(uint32_t *)(uintptr_t)0x03001244u)   /* scheduled tasks */
 
 enum { DEAD = 0, READY = 1, RUNNING = 2, RAN = 3, WAITING = 4 };
-enum { MAX_FIBERS = 256, STACK_BYTES = 512 * 1024 };
+enum { MAX_FIBERS = 256 };
 
 /* provided by the game */
 void sub_08001204(void);            /* end of frame: wait for VBlank, wake signal 1, flush sprites */
 void sub_08001538(uint32_t memory); /* free */
 
 static struct Fiber { uint32_t task; void *fiber; uint32_t a, b; int finished; } fibers[MAX_FIBERS];
-static void *scheduler_fiber;
 static int trace = -1;
 #define TRACE(...) do { if (trace < 0) trace = getenv("SS_TRACE") != NULL; if (trace) { fprintf(stderr, __VA_ARGS__); fflush(stderr); } } while (0)
 
@@ -78,7 +76,7 @@ static void finish_task(uint32_t address)
     unlink_task(task);
 }
 
-static void CALLBACK fiber_main(void *parameter)
+static void fiber_main(void *parameter)
 {
     struct Fiber *self = parameter;
     TRACE("task %08X starts at %08X\n", (unsigned)self->task, (unsigned)TASK(self->task)->entry);
@@ -87,18 +85,18 @@ static void CALLBACK fiber_main(void *parameter)
     /* returning from the entry function is the original's "lr = exit routine" */
     finish_task(self->task);
     self->finished = 1;
-    SwitchToFiber(scheduler_fiber);
+    ss_co_switch(NULL);
 }
 
 static void prepare_task(uint32_t address, uint32_t a, uint32_t b)
 {
     struct Fiber *slot = fiber_of(address, 1);
     if (slot->fiber)            /* restarted while an old fiber of the same record still exists */
-        DeleteFiber(slot->fiber);
+        ss_co_delete(slot->fiber);
     slot->a = a;
     slot->b = b;
     slot->finished = 0;
-    slot->fiber = CreateFiber(STACK_BYTES, fiber_main, slot);
+    slot->fiber = ss_co_create(fiber_main, slot);
     TASK(address)->sp -= 0x30;  /* the original builds its first register frame here; kept for any reader */
 }
 
@@ -107,7 +105,7 @@ static void reap(void)
     int i;
     for (i = 0; i < MAX_FIBERS; i++) {
         if (fibers[i].fiber && (fibers[i].finished || TASK(fibers[i].task)->state == DEAD)) {
-            DeleteFiber(fibers[i].fiber);
+            ss_co_delete(fibers[i].fiber);
             fibers[i].fiber = NULL;
             fibers[i].task = 0;
         }
@@ -128,7 +126,7 @@ void sub_0800023C(uint32_t root, uint32_t a, uint32_t b)
     CURRENT = 0;
     task->state = READY;
     COUNT = 1;
-    scheduler_fiber = ConvertThreadToFiber(NULL);
+    ss_co_init();
     TRACE("scheduler starts, root task %08X\n", (unsigned)root);
     prepare_task(root, a, b);
 
@@ -138,7 +136,7 @@ void sub_0800023C(uint32_t root, uint32_t a, uint32_t b)
             if (TASK(address)->state != READY)
                 continue;
             TASK(address)->state = RUNNING;
-            SwitchToFiber(fiber_of(address, 0)->fiber);
+            ss_co_switch(fiber_of(address, 0)->fiber);
             /* back in the scheduler: a task that did not start waiting has run for this frame */
             if (TASK(address)->state != WAITING && TASK(address)->state != DEAD)
                 TASK(address)->state = RAN;
@@ -160,7 +158,7 @@ uint32_t sub_08000274(uint32_t address, uint32_t a, uint32_t b)
     for (cursor = HEAD; cursor; cursor = TASK(cursor)->next)
         if (cursor == address)
             return 1;
-    if (task->entry < 0x01800000u || task->entry >= 0x02000000u) {
+    if (!ss_is_native_code(task->entry)) {
         fprintf(stderr, "scheduler: task %08X has entry %08X, which is not native code; started from %p%c",
                 (unsigned)address, (unsigned)task->entry, __builtin_return_address(0), 10);
         fflush(stderr);
@@ -193,7 +191,7 @@ void sub_080003F4(uint32_t signal)
     Task *task = TASK(CURRENT);
     task->signal = signal;
     task->state = WAITING;
-    SwitchToFiber(scheduler_fiber);
+    ss_co_switch(NULL);
 }
 
 void sub_080003F0(void)
@@ -207,7 +205,7 @@ void sub_0800035C(void)
     struct Fiber *self = fiber_of(CURRENT, 0);
     finish_task(CURRENT);
     self->finished = 1;
-    SwitchToFiber(scheduler_fiber);
+    ss_co_switch(NULL);
 }
 
 /* sub_080003A8: end another task. */

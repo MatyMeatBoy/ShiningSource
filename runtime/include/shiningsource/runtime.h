@@ -22,9 +22,21 @@ int ss_memory_init(const char *rom_path, const char **error);
 /* Draw the current frame from the video registers and memory into 32-bit ARGB pixels. */
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels);
 
-/* Window and input. ss_video_frame presents a frame, reads the keyboard and waits for the next 1/59.7275 s. */
-int ss_video_init(const char *title);
-void ss_video_frame(void);
+/* ---- services every platform provides to the core ---- */
+
+/* Window and sound device. */
+int ss_plat_video_init(const char *title);
+/* Show one 240x160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order). */
+uint16_t ss_plat_present(const uint32_t *pixels);
+/* Play one game frame of 48 kHz stereo samples. */
+void ss_plat_audio(const int16_t *samples, int frames);
+/* Coroutines for the game's task scheduler. ss_co_switch(NULL) returns to the thread that called ss_co_init. */
+void ss_co_init(void);
+void *ss_co_create(void (*entry)(void *), void *argument);
+void ss_co_switch(void *coroutine);
+void ss_co_delete(void *coroutine);
+/* Is this address inside the program's own code? */
+int ss_is_native_code(uint32_t address);
 
 /* Sound output: one game frame of 48 kHz stereo samples. ss_audio_report prints what was produced. */
 void ss_audio_push(const int16_t *samples, int frames);
