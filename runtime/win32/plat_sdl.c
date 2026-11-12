@@ -1,5 +1,6 @@
-/* Platform services through SDL3: window, presentation, keyboard and controller, sound output, frame pacing.
- * Used natively by the dev32 build and by the 64-bit host; the game side only sees the ss_plat_* calls. */
+/* Platform services through SDL3: window, presentation, keyboard, controller and touch screen, sound output,
+ * frame pacing. Used natively by the dev32 build and by the 64-bit hosts (Windows, Linux, Android); the game side
+ * only sees the ss_plat_* calls. */
 #include "shiningsource/runtime.h"
 
 #include <SDL3/SDL.h>
@@ -23,6 +24,9 @@ int ss_plat_video_init(const char *title)
 {
     SDL_AudioSpec spec;
 
+#ifdef __ANDROID__
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");     /* otherwise a resizable window follows the user */
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -45,8 +49,12 @@ int ss_plat_video_init(const char *title)
     }
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+#ifdef __ANDROID__
+    SDL_SetWindowFullscreen(window, true);
+#else
     if (getenv("SS_FULLSCREEN"))
         SDL_SetWindowFullscreen(window, true);
+#endif
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
     next_frame_ns = SDL_GetTicksNS();
@@ -107,6 +115,90 @@ void ss_plat_pump(void)
         handle_event(&event);
 }
 
+/* ---- touch screen: the console's buttons drawn over the picture ----
+ * Positions are in picture units (the view is `width` x 160). On by default on Android while no controller is
+ * connected; SS_TOUCH=1 or 0 forces it. */
+struct touch_button { int bit; float x, y, w, h; };
+
+static int touch_layout(struct touch_button *b, int width)
+{
+    float w = (float)width;
+    int n = 0;
+    b[n++] = (struct touch_button){ 0, w - 36, 90, 30, 30 };                /* A */
+    b[n++] = (struct touch_button){ 1, w - 70, 116, 30, 30 };               /* B */
+    b[n++] = (struct touch_button){ 2, w / 2 - 36, 146, 30, 12 };           /* Select */
+    b[n++] = (struct touch_button){ 3, w / 2 + 6, 146, 30, 12 };            /* Start */
+    b[n++] = (struct touch_button){ 9, 2, 2, 44, 20 };                      /* L */
+    b[n++] = (struct touch_button){ 8, w - 46, 2, 44, 20 };                 /* R */
+    return n;
+}
+
+static uint16_t touch_buttons(int width)
+{
+    static int wanted = -1;
+    const float pad_x = 40, pad_y = 116, pad_radius = 36, dead = 9;
+    struct touch_button buttons[8];
+    SDL_TouchID *devices;
+    SDL_FRect box;
+    uint16_t held = 0;
+    int count = 0, d, i, n, window_w = 1, window_h = 1;
+
+    if (wanted < 0) {
+        const char *text = getenv("SS_TOUCH");
+#ifdef __ANDROID__
+        wanted = text ? atoi(text) : 1;
+#else
+        wanted = text ? atoi(text) : 0;
+#endif
+    }
+    if (!wanted || gamepad)
+        return 0;
+    n = touch_layout(buttons, width);
+    SDL_GetWindowSize(window, &window_w, &window_h);
+    devices = SDL_GetTouchDevices(&count);
+    for (d = 0; devices && d < count; d++) {
+        int fingers = 0, f;
+        SDL_Finger **list = SDL_GetTouchFingers(devices[d], &fingers);
+        for (f = 0; list && f < fingers; f++) {
+            float x, y, dx, dy;
+            SDL_RenderCoordinatesFromWindow(renderer, list[f]->x * (float)window_w, list[f]->y * (float)window_h, &x, &y);
+            dx = x - pad_x;
+            dy = y - pad_y;
+            if (dx * dx + dy * dy < (pad_radius + 14) * (pad_radius + 14)) {    /* the pad: eight directions */
+                if (dx > dead && dx > SDL_fabsf(dy) * 0.45f) held |= 1 << 4;
+                if (dx < -dead && -dx > SDL_fabsf(dy) * 0.45f) held |= 1 << 5;
+                if (dy < -dead && -dy > SDL_fabsf(dx) * 0.45f) held |= 1 << 6;
+                if (dy > dead && dy > SDL_fabsf(dx) * 0.45f) held |= 1 << 7;
+            }
+            for (i = 0; i < n; i++)
+                if (x >= buttons[i].x - 4 && x < buttons[i].x + buttons[i].w + 4 && y >= buttons[i].y - 4 && y < buttons[i].y + buttons[i].h + 4)
+                    held |= (uint16_t)(1 << buttons[i].bit);
+        }
+        SDL_free(list);
+    }
+    SDL_free(devices);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    for (i = 0; i < n; i++) {
+        int on = (held >> buttons[i].bit) & 1;
+        box = (SDL_FRect){ buttons[i].x, buttons[i].y, buttons[i].w, buttons[i].h };
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, on ? 110 : 45);
+        SDL_RenderFillRect(renderer, &box);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
+        SDL_RenderRect(renderer, &box);
+    }
+    for (i = 0; i < 4; i++) {                       /* the pad as a cross: right, left, up, down */
+        static const float ox[4] = { 14, -36, -11, -11 }, oy[4] = { -11, -11, -36, 14 };
+        int on = (held >> (4 + i)) & 1;
+        box = (SDL_FRect){ pad_x + ox[i], pad_y + oy[i], 22, 22 };
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, on ? 110 : 45);
+        SDL_RenderFillRect(renderer, &box);
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
+        SDL_RenderRect(renderer, &box);
+    }
+    return held;
+}
+
 /* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
 uint16_t ss_plat_present(const uint32_t *pixels, int width)
 {
@@ -154,6 +246,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
     SDL_RenderTexture(renderer, texture, &source, NULL);
+    held |= touch_buttons(width);
     SDL_RenderPresent(renderer);
 
     /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */

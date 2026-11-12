@@ -1,10 +1,13 @@
-/* 64-bit host for Linux, x86-64 and ARM64. Same job as the Windows host (host_main.c): map the GBA address
+/* 64-bit host for Linux and Android, x86-64 and ARM64. Same job as the Windows host (host_main.c): map the GBA address
  * space, load the ROM and the game image, serve the bridge.
  *
  * x86-64: the image is the ELF file the Windows host loads. Link the host as a non-PIE program so that its
  * functions have addresses below 4 GiB: the image calls the services through 32-bit pointers.
  * ARM64: the image is the Mach-O file of tools/build_arm64.py, and the services are reached through small
- * jumps placed in low memory, so the host can be loaded anywhere (as Android requires of a library).
+ * jumps placed in low memory, so the host can be loaded anywhere.
+ * Android: the host is the library SDL's activity loads (libmain.so), so it is never below 4 GiB and always
+ * uses the jumps. The image comes from the APK's assets, the ROM and the saves live in the app's own folder,
+ * and the low address range is claimed the moment the library loads, before anything else can settle there.
  */
 #define _GNU_SOURCE
 #include "../guest/bridge.h"
@@ -23,6 +26,12 @@ static unsigned long ss_tolerated;
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
+#ifdef __ANDROID__
+#include <SDL3/SDL.h>
+#include <SDL3/SDL_main.h>
+#include <android/log.h>
+#include <sys/stat.h>
+#endif
 
 #define PTR(a) ((void *)(uintptr_t)(uint32_t)(a))
 #ifndef MAP_FIXED_NOREPLACE
@@ -31,9 +40,32 @@ static unsigned long ss_tolerated;
 
 static uint32_t image_low, image_high;
 
+#ifdef __ANDROID__
+/* Everything the game needs lives between these two addresses. In a 64-bit Android process the range is free
+ * when the library loads (the Java heap starts above it); claim it before the graphics driver or the heap's
+ * growth can land there. */
+enum { LOW_BASE = 0x02000000u, LOW_END = 0x10000000u };
+static int low_reserved;
+
+__attribute__((constructor)) static void reserve_low_memory(void)
+{
+    void *got = mmap(PTR(LOW_BASE), LOW_END - LOW_BASE, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    if (got == PTR(LOW_BASE))
+        low_reserved = 1;
+    else if (got != MAP_FAILED)
+        munmap(got, LOW_END - LOW_BASE);
+}
+#else
+enum { low_reserved = 0, LOW_BASE = 0, LOW_END = 0 };
+#endif
+
 static void *low_map(uint32_t address, uint32_t size, int protection)
 {
-    void *got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    void *got;
+    if (low_reserved && address >= LOW_BASE && address + size <= LOW_END)       /* inside the claimed range */
+        got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+    else
+        got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
     if (got != PTR(address)) {
         if (got != MAP_FAILED)
             munmap(got, size);
@@ -106,7 +138,11 @@ static int b_rename(uint32_t from, uint32_t to) { return rename(PTR(from), PTR(t
 
 static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 {
+#ifdef __ANDROID__
+    const char *value = SDL_getenv(PTR(name));      /* includes the SDL_ENV.* entries of the manifest */
+#else
     const char *value = getenv(PTR(name));
+#endif
     size_t length;
     if (!value)
         return -1;
@@ -142,13 +178,8 @@ static void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
 static void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
 
-#ifdef __x86_64__
-static uint32_t bridge[SS_B_COUNT];
-#define ENTRY(index, function) bridge[index] = (uint32_t)(uintptr_t)(function)
-#else
 static uint64_t bridge[SS_B_COUNT];
 #define ENTRY(index, function) bridge[index] = (uint64_t)(uintptr_t)(function)
-#endif
 #ifdef __aarch64__
 #define IMAGE_NAME "ss2_game.macho"
 #else
@@ -235,6 +266,39 @@ static void on_fault(int number, siginfo_t *info, void *raw)
 
 #endif
 
+/* A whole file in memory. On Android a path that is not absolute is an asset of the APK. */
+static uint8_t *read_whole(const char *path, size_t *size)
+{
+#ifdef __ANDROID__
+    return SDL_LoadFile(path, size);
+#else
+    FILE *file = fopen(path, "rb");
+    uint8_t *data = NULL;
+    long length;
+    if (!file)
+        return NULL;
+    fseek(file, 0, SEEK_END);
+    length = ftell(file);
+    fseek(file, 0, SEEK_SET);
+    if (length > 0 && (data = malloc((size_t)length)) != NULL && fread(data, 1, (size_t)length, file) != (size_t)length) {
+        free(data);
+        data = NULL;
+    }
+    fclose(file);
+    *size = data ? (size_t)length : 0;
+    return data;
+#endif
+}
+
+static void release_whole(uint8_t *data)
+{
+#ifdef __ANDROID__
+    SDL_free(data);
+#else
+    free(data);
+#endif
+}
+
 static int load_file(const char *path, uint32_t address, uint32_t capacity)
 {
     FILE *file = fopen(path, "rb");
@@ -246,51 +310,41 @@ static int load_file(const char *path, uint32_t address, uint32_t capacity)
     return (int)got;
 }
 
+static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+
 #ifdef __x86_64__
 /* ELF32 for x86-64 (the x32 ABI): copy each PT_LOAD segment to its address. Returns the entry point. */
-static uint32_t load_image(const char *path)
+static uint32_t load_image(const uint8_t *data, size_t size)
 {
-    FILE *file = fopen(path, "rb");
-    uint8_t header[52], program[32];
     uint32_t entry, offset, low = ~0u, high = 0;
-    int count, size, i;
+    int count, stride, i;
 
-    if (!file)
+    if (size < 52 || memcmp(data, "\x7f" "ELF\x01", 5) != 0)
         return 0;
-    if (fread(header, 1, 52, file) != 52 || memcmp(header, "\x7f" "ELF\x01", 5) != 0) {
-        fclose(file);
+    entry = rd32(data + 0x18);
+    offset = rd32(data + 0x1C);
+    stride = data[0x2A] | data[0x2B] << 8;
+    count = data[0x2C] | data[0x2D] << 8;
+    if ((size_t)offset + (size_t)count * (size_t)stride > size)
         return 0;
-    }
-    memcpy(&entry, header + 0x18, 4);
-    memcpy(&offset, header + 0x1C, 4);
-    size = header[0x2A] | header[0x2B] << 8;
-    count = header[0x2C] | header[0x2D] << 8;
     for (i = 0; i < count; i++) {
-        uint32_t type, address, memory;
-        fseek(file, (long)(offset + (uint32_t)(i * size)), SEEK_SET);
-        if (fread(program, 1, 32, file) != 32) break;
-        memcpy(&type, program, 4); memcpy(&address, program + 8, 4); memcpy(&memory, program + 20, 4);
-        if (type != 1 || !memory) continue;
+        const uint8_t *program = data + offset + (uint32_t)(i * stride);
+        uint32_t address = rd32(program + 8), memory = rd32(program + 20);
+        if (rd32(program) != 1 || !memory) continue;
         if (address < low) low = address;
         if (address + memory > high) high = address + memory;
     }
     low &= ~0xFFFFu;
     high = (high + 0xFFFFu) & ~0xFFFFu;
-    if (low >= high || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC)) {
-        fclose(file);
+    if (low >= high || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC))
         return 0;
-    }
     for (i = 0; i < count; i++) {
-        uint32_t type, file_offset, address, file_size;
-        fseek(file, (long)(offset + (uint32_t)(i * size)), SEEK_SET);
-        if (fread(program, 1, 32, file) != 32) break;
-        memcpy(&type, program, 4); memcpy(&file_offset, program + 4, 4);
-        memcpy(&address, program + 8, 4); memcpy(&file_size, program + 16, 4);
-        if (type != 1) continue;
-        fseek(file, (long)file_offset, SEEK_SET);
-        if (fread(PTR(address), 1, file_size, file) != file_size) { fclose(file); return 0; }
+        const uint8_t *program = data + offset + (uint32_t)(i * stride);
+        uint32_t file_offset = rd32(program + 4), address = rd32(program + 8), file_size = rd32(program + 16);
+        if (rd32(program) != 1) continue;
+        if ((size_t)file_offset + file_size > size) return 0;
+        memcpy(PTR(address), data + file_offset, file_size);
     }
-    fclose(file);
     image_low = low;
     image_high = high;
     return entry;
@@ -299,45 +353,39 @@ static uint32_t load_image(const char *path)
 #else
 /* Mach-O for arm64_32: map each segment at its address and copy its bytes. Returns the entry point. The file is
  * linked without fixups to apply, so loading is all there is to do. */
-static uint32_t load_image(const char *path)
+static uint32_t load_image(const uint8_t *data, size_t size)
 {
-    FILE *file = fopen(path, "rb");
-    uint8_t header[28], command[56];
-    uint32_t magic, count, at = 28, entry = 0, text_base = 0, low = ~0u, high = 0, i;
+    uint32_t count, at = 28, entry = 0, text_base = 0, low = ~0u, high = 0, i;
 
-    if (!file)
+    if (size < 28 || rd32(data) != 0xFEEDFACEu)
         return 0;
-    if (fread(header, 1, 28, file) != 28) { fclose(file); return 0; }
-    memcpy(&magic, header, 4);
-    memcpy(&count, header + 16, 4);
-    if (magic != 0xFEEDFACEu) { fclose(file); return 0; }
-    for (i = 0; i < count; i++) {
-        uint32_t kind, size;
-        fseek(file, (long)at, SEEK_SET);
-        if (fread(command, 1, 8, file) != 8) break;
-        memcpy(&kind, command, 4);
-        memcpy(&size, command + 4, 4);
-        if (kind == 1 && fread(command + 8, 1, 48, file) == 48) {          /* LC_SEGMENT */
-            uint32_t address, memory, offset, bytes, first, last;
-            memcpy(&address, command + 24, 4); memcpy(&memory, command + 28, 4);
-            memcpy(&offset, command + 32, 4); memcpy(&bytes, command + 36, 4);
+    count = rd32(data + 16);
+    for (i = 0; i < count && (size_t)at + 8 <= size; i++) {
+        const uint8_t *command = data + at;
+        uint32_t kind = rd32(command), length = rd32(command + 4);
+        if ((size_t)at + length > size || length < 8)
+            return 0;
+        if (kind == 1 && length >= 56) {                        /* LC_SEGMENT */
+            uint32_t address = rd32(command + 24), memory = rd32(command + 28);
+            uint32_t offset = rd32(command + 32), bytes = rd32(command + 36), first, last;
             if (address && memory && memcmp(command + 8, "__LINKEDIT", 10) != 0) {
                 first = address & ~0xFFFFu;
                 last = (address + memory + 0xFFFFu) & ~0xFFFFu;
                 if (first < high) first = high;                 /* segments share a 64 KiB block with the previous one */
-                if (last > first && !low_map(first, last - first, PROT_READ | PROT_WRITE | PROT_EXEC)) { fclose(file); return 0; }
-                fseek(file, (long)offset, SEEK_SET);
-                if (bytes && fread(PTR(address), 1, bytes, file) != bytes) { fclose(file); return 0; }
+                if (last > first && !low_map(first, last - first, PROT_READ | PROT_WRITE | PROT_EXEC))
+                    return 0;
+                if ((size_t)offset + bytes > size)
+                    return 0;
+                memcpy(PTR(address), data + offset, bytes);
                 if (!offset && bytes) text_base = address;
-                if (first < low) low = address & ~0xFFFFu;
+                if ((address & ~0xFFFFu) < low) low = address & ~0xFFFFu;
                 if (last > high) high = last;
             }
-        } else if (kind == 0x80000028u && fread(command + 8, 1, 16, file) == 16) {     /* LC_MAIN: offset of the entry */
-            memcpy(&entry, command + 8, 4);
+        } else if (kind == 0x80000028u && length >= 24) {       /* LC_MAIN: offset of the entry */
+            entry = rd32(command + 8);
         }
-        at += size;
+        at += length;
     }
-    fclose(file);
     if (!text_base || !entry)
         return 0;
     image_low = low;
@@ -349,19 +397,39 @@ static uint32_t load_image(const char *path)
 #endif
 
 /* Run the image's entry on its own low stack. Never returns: the image ends through the exit service. */
+uint64_t ss_host_sp __attribute__((visibility("hidden")));
+void ss_host_call(void);
 #ifdef __x86_64__
 void ss_enter_image(uint64_t entry, uint64_t stack_top, uint64_t bridge_table, uint64_t stack_low);
 __asm__(
     ".text\n"
     ".globl ss_enter_image\n"
     "ss_enter_image:\n"
+    "    movq %rsp, %rax\n"
+    "    andq $-16, %rax\n"
+    "    subq $256, %rax\n"
+    "    movq %rax, ss_host_sp(%rip)\n"    /* where the services run, see ss_host_call */
     "    movq %rsi, %rsp\n"            /* System V in: rdi entry, rsi stack top, rdx bridge, rcx stack low */
     "    movq %rdi, %rax\n"
     "    movl %edx, %edi\n"            /* out: edi bridge, esi stack low, edx stack top */
     "    movl %esi, %edx\n"
     "    movl %ecx, %esi\n"
     "    callq *%rax\n"
-    "    ud2\n");
+    "    ud2\n"
+    /* A service called by the image: rax holds its address, the arguments are in place. The image runs on its
+     * own stacks in low memory; the system's libraries (and Android's Java runtime, which checks) expect the
+     * thread's real stack, so the call is made there. */
+    ".globl ss_host_call\n"
+    "ss_host_call:\n"
+    "    movq %rsp, %r11\n"
+    "    movq ss_host_sp(%rip), %rsp\n"
+    "    pushq %r11\n"
+    "    subq $8, %rsp\n"
+    "    callq *%rax\n"
+    "    addq $8, %rsp\n"
+    "    popq %r11\n"
+    "    movq %r11, %rsp\n"
+    "    ret\n");
 
 #else
 void ss_enter_image(uint64_t entry, uint64_t stack_top, uint64_t bridge_table, uint64_t stack_low);
@@ -370,6 +438,11 @@ __asm__(
     ".globl ss_enter_image\n"
     ".type ss_enter_image, %function\n"
     "ss_enter_image:\n"
+    "    mov x9, sp\n"
+    "    sub x9, x9, #256\n"
+    "    and x9, x9, #-16\n"
+    "    adrp x10, ss_host_sp\n"
+    "    str x9, [x10, :lo12:ss_host_sp]\n"    /* where the services run, see ss_host_call */
     "    mov sp, x1\n"                 /* in: x0 entry, x1 stack top, x2 bridge, x3 stack low */
     "    mov x9, x0\n"
     "    mov x10, x1\n"
@@ -378,28 +451,86 @@ __asm__(
     "    mov w2, w10\n"
     "    mov x29, #0\n"
     "    blr x9\n"
-    "    brk #1\n");
+    "    brk #1\n"
+    /* A service called by the image: x16 holds its address. Same reason as on x86-64: run it on the thread's
+     * real stack. */
+    ".globl ss_host_call\n"
+    ".type ss_host_call, %function\n"
+    "ss_host_call:\n"
+    "    mov x9, sp\n"
+    "    adrp x10, ss_host_sp\n"
+    "    ldr x10, [x10, :lo12:ss_host_sp]\n"
+    "    mov sp, x10\n"
+    "    stp x9, x30, [sp, #-16]!\n"
+    "    blr x16\n"
+    "    ldp x9, x30, [sp], #16\n"
+    "    mov sp, x9\n"
+    "    ret\n");
+
+#endif
 
 /* The image calls the services through 32-bit addresses, and this host may be loaded above 4 GiB. Each service
- * gets a jump in low memory: `ldr x16, target; br x16; target: .quad`. The table moves there too. */
+ * gets a few instructions in low memory that load its real address and go through ss_host_call. The table
+ * moves there too. */
 static uint32_t *low_bridge(const uint64_t *targets, int count)
 {
-    uint32_t base = 0x0F800000u, *code, *table;
+    uint32_t base = 0x0F800000u, *table;
+    uint64_t through = (uint64_t)(uintptr_t)ss_host_call;
+    uint8_t *code;
     int i;
     if (!low_map(base, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC))
         return NULL;
     table = PTR(base);
     code = PTR(base + 0x1000);
     for (i = 0; i < count; i++) {
-        code[i * 4 + 0] = 0x58000050u;         /* ldr x16, #8 */
-        code[i * 4 + 1] = 0xD61F0200u;         /* br x16 */
-        memcpy(&code[i * 4 + 2], &targets[i], 8);
-        table[i] = base + 0x1000 + (uint32_t)i * 16;
+        uint8_t *slot = code + i * 32;
+#ifdef __x86_64__
+        static const uint8_t load[2] = { 0x48, 0xB8 };                             /* movabs $target, %rax */
+        static const uint8_t jump[6] = { 0xFF, 0x25, 0x00, 0x00, 0x00, 0x00 };     /* jmp *0(%rip) */
+        memcpy(slot, load, 2);
+        memcpy(slot + 2, &targets[i], 8);
+        memcpy(slot + 10, jump, 6);
+        memcpy(slot + 16, &through, 8);
+#else
+        static const uint32_t stub[4] = { 0x58000090u,     /* ldr x16, #16  (the service) */
+                                          0x580000B1u,     /* ldr x17, #20  (ss_host_call) */
+                                          0xD61F0220u,     /* br x17 */
+                                          0xD503201Fu };   /* nop */
+        memcpy(slot, stub, 16);
+        memcpy(slot + 16, &targets[i], 8);
+        memcpy(slot + 24, &through, 8);
+#endif
+        table[i] = base + 0x1000 + (uint32_t)i * 32;
     }
-    __builtin___clear_cache((char *)code, (char *)(code + count * 4));
+    __builtin___clear_cache((char *)code, (char *)code + count * 32);
     return table;
 }
 
+#ifdef __ANDROID__
+static void say(const char *text)
+{
+    __android_log_print(ANDROID_LOG_INFO, "ShiningSource", "%s", text);
+    fprintf(stderr, "%s\n", text);
+}
+
+/* KEY=VALUE lines written by the app's first screen (and by tests): the settings of this run. */
+static void read_settings(const char *path)
+{
+    FILE *file = fopen(path, "r");
+    char line[0x8000];
+    if (!file)
+        return;
+    while (fgets(line, sizeof line, file)) {
+        char *equals = strchr(line, '='), *end = line + strlen(line);
+        while (end > line && (end[-1] == '\n' || end[-1] == '\r'))
+            *--end = 0;
+        if (equals && equals > line) {
+            *equals = 0;
+            SDL_setenv_unsafe(line, equals + 1, 1);
+        }
+    }
+    fclose(file);
+}
 #endif
 
 int main(int argc, char **argv)
@@ -413,16 +544,45 @@ int main(int argc, char **argv)
     struct sigaction action;
     stack_t alternate;
     char image_path[4096];
-    const char *rom = argc >= 2 ? argv[1] : getenv("SHININGSOURCE_ROM");
+    const char *rom;
+    uint8_t *image;
+    size_t image_size = 0;
     uint32_t entry;
     uintptr_t table;
-    ssize_t length;
     unsigned i;
 
+#ifdef __ANDROID__
+    /* the app's own folder: ROM, saves, settings and the log; the image is an asset */
+    const char *folder = SDL_GetAndroidExternalStoragePath();
+    static char rom_path[1024];
+    (void)argc; (void)argv;
+    if (!folder || chdir(folder) != 0) {
+        say("the app's folder is not available");
+        return 2;
+    }
+    freopen("shiningsource.log", "w", stderr);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+    read_settings("shiningsource.env");
+    read_settings("shiningsource.test.env");        /* tests: SS_FRAMES, SS_INPUT and the like, pushed with adb */
+    snprintf(rom_path, sizeof rom_path, "%s/rom.gba", folder);
+    rom = rom_path;
+    snprintf(image_path, sizeof image_path, "%s", IMAGE_NAME);
+#else
+    rom = argc >= 2 ? argv[1] : getenv("SHININGSOURCE_ROM");
     if (!rom) {
         fprintf(stderr, "usage: %s ROM.gba [game image]   (or set SHININGSOURCE_ROM)\n", argv[0]);
         return 2;
     }
+    if (argc >= 3) {
+        snprintf(image_path, sizeof image_path, "%s", argv[2]);
+    } else {
+        char *slash;
+        ssize_t length = readlink("/proc/self/exe", image_path, sizeof image_path - 32);
+        image_path[length > 0 ? length : 0] = 0;
+        slash = strrchr(image_path, '/');
+        strcpy(slash ? slash + 1 : image_path, IMAGE_NAME);
+    }
+#endif
     for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
         if (!low_map(regions[i].base, regions[i].size, PROT_READ | PROT_WRITE)) {
             fprintf(stderr, "the address range for the game's %s (0x%08X) is not free; check vm.mmap_min_addr\n",
@@ -438,16 +598,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "the ROM file could not be read: %s\n", rom);
         return 2;
     }
-    if (argc >= 3) {
-        snprintf(image_path, sizeof image_path, "%s", argv[2]);
-    } else {
-        char *slash;
-        length = readlink("/proc/self/exe", image_path, sizeof image_path - 32);
-        image_path[length > 0 ? length : 0] = 0;
-        slash = strrchr(image_path, '/');
-        strcpy(slash ? slash + 1 : image_path, IMAGE_NAME);
-    }
-    entry = load_image(image_path);
+    image = read_whole(image_path, &image_size);
+    entry = image ? load_image(image, image_size) : 0;
+    if (image)
+        release_whole(image);
     if (!entry) {
         fprintf(stderr, "the game image is missing, damaged, or its address range is taken: %s\n", image_path);
         return 4;
@@ -470,19 +624,11 @@ int main(int argc, char **argv)
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
     ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
     ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status);
-#ifdef __x86_64__
-    if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32) {
-        fprintf(stderr, "the host must be linked as a non-PIE program (its code has to live below 4 GiB)\n");
-        return 4;
-    }
-    table = (uintptr_t)bridge;
-#else
     table = (uintptr_t)low_bridge(bridge, SS_B_COUNT);
     if (!table) {
         fprintf(stderr, "the address range for the service jumps is not free\n");
         return 3;
     }
-#endif
     fprintf(stderr, "host64: GBA memory mapped, ROM and image loaded (image %08X-%08X, entry %08X)\n",
             (unsigned)image_low, (unsigned)image_high, (unsigned)entry);
     ss_enter_image(entry, main_stack + 0x400000, table, main_stack);
