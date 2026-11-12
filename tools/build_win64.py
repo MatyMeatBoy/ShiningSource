@@ -123,7 +123,7 @@ def main():
     response = out / "link.rsp"
     response.write_text("\n".join('"%s"' % str(p).replace("\\", "/") for p in objects + runtime_objects + extra), encoding="utf-8")
     run([str(bindir / "ld.lld.exe"), "-m", "elf32_x86_64", "-static", "-T", str(ROOT / "runtime/guest/guest.ld"), "-o", str(image),
-         "@" + str(response), "--wrap=sub_08001494", "--wrap=sub_08001538", "-z", "noexecstack"], "image link")
+         "@" + str(response), *["--wrap=" + name for name in link.WRAPS], "-z", "noexecstack"], "image link")
 
     # 5. the host
     sdl = next((Path(h) / "x86_64-w64-mingw32" for h in link.SDL_HINTS if h and (Path(h) / "x86_64-w64-mingw32/lib").is_dir()), None)
@@ -131,8 +131,8 @@ def main():
         sys.exit("SDL3 development files not found: set SHININGSOURCE_SDL3")
     host = out / ("%s_win64.exe" % args.game)
     run([cc, "--target=x86_64-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(sdl / "include"),
-         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), "-o", str(host),
-         "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32",
+         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), "-o", str(host),
+         "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32", "-lws2_32",
          # host code must be callable through 32-bit addresses
          "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x800000"], "host")
     shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")

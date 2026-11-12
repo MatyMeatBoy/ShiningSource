@@ -100,6 +100,14 @@ void ss_plat_audio(const int16_t *samples, int frames)
     SS_HOST(SS_B_AUDIO, void (*)(uint32_t, int))((uint32_t)(uintptr_t)samples, frames);
 }
 
+void ss_plat_pump(void) { SS_HOST(SS_B_PUMP, void (*)(void))(); }
+int ss_plat_net_open(const char *host, int port) { return SS_HOST(SS_B_NET_OPEN, int (*)(uint32_t, int))((uint32_t)(uintptr_t)host, port); }
+int ss_plat_net_send(const void *data, int size) { return SS_HOST(SS_B_NET_SEND, int (*)(uint32_t, int))((uint32_t)(uintptr_t)data, size); }
+int ss_plat_net_recv(void *data, int capacity) { return SS_HOST(SS_B_NET_RECV, int (*)(uint32_t, int))((uint32_t)(uintptr_t)data, capacity); }
+void ss_plat_net_wait(int milliseconds) { SS_HOST(SS_B_NET_WAIT, void (*)(int))(milliseconds); }
+void ss_plat_net_farewell(const void *data, int size) { SS_HOST(SS_B_NET_FAREWELL, void (*)(uint32_t, int))((uint32_t)(uintptr_t)data, size); }
+uint32_t ss_plat_ticks_ms(void) { return SS_HOST(SS_B_TICKS, uint32_t (*)(void))(); }
+
 /* ---- entry: called by the host on a low stack, with the GBA memory mapped and the ROM loaded ---- */
 
 void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_high)

@@ -4,7 +4,7 @@
  * handlers that the game fills. Here the table is read directly and the handler is a native function.
  *
  * Test controls (environment):
- *   SS_FRAMES=N     run N frames without a window, print frame hashes, exit
+ *   SS_FRAMES=N     run N frames without a window, print frame hashes, exit (SS_PACE=1: at 60 frames a second)
  *   SS_DUMP=N       at frame N write ss_video_dump.bin (registers, palette, VRAM, OAM) and ss_frame.raw (rendered)
  *   SS_INPUT=...    scripted buttons: "300:0001,310:0000,..." = from frame 300 hold mask 0x0001 (A), then release.
  *                   Mask bits: A B Select Start Right Left Up Down R L.
@@ -185,6 +185,16 @@ void VBlankIntrWait(void)
         if (frame_count >= frame_limit) {
             ss_audio_report();
             exit(0);
+        }
+        {                               /* SS_PACE=1: real time without a window, for network tests */
+            static int paced = -1;
+            static uint32_t started;
+            if (paced < 0) {
+                paced = getenv("SS_PACE") != NULL;
+                started = ss_plat_ticks_ms() - (uint32_t)(frame_count * 1000 / 60);
+            }
+            while (paced && ss_plat_ticks_ms() - started < frame_count * 1000 / 60)
+                ss_plat_net_wait(1);
         }
     }
     if (windowed) {

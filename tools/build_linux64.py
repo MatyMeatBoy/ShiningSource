@@ -39,7 +39,7 @@ def main():
     done = subprocess.run([build.clang(), "--target=x86_64-linux-gnu", "--sysroot=" + str(base / "sysroot"), "-fuse-ld=lld",
                            "-no-pie",       # host code must be callable through 32-bit addresses
                            "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(base / "sdl/include"),
-                           str(ROOT / "runtime/host64/host_linux.c"), str(ROOT / "runtime/win32/plat_sdl.c"), "-o", str(host),
+                           str(ROOT / "runtime/host64/host_linux.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), "-o", str(host),
                            "-L", str(base / "sdl/lib"), "-lSDL3", "-lm", "-Wl,-rpath,$ORIGIN/lib"], capture_output=True, text=True)
     if done.returncode:
         print(done.stderr[-3000:])

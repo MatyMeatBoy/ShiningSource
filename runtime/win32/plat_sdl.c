@@ -74,6 +74,29 @@ int ss_plat_view_width(void)
     return width;
 }
 
+static void handle_event(const SDL_Event *event)
+{
+    if (event->type == SDL_EVENT_QUIT || (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_ESCAPE))
+        exit(0);
+    if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
+        gamepad = SDL_OpenGamepad(event->gdevice.which);
+    if (event->type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == event->gdevice.which) {
+        SDL_CloseGamepad(gamepad);
+        gamepad = NULL;
+    }
+    if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F11)
+        SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+}
+
+void ss_plat_pump(void)
+{
+    SDL_Event event;
+    if (!window)
+        return;
+    while (SDL_PollEvent(&event))
+        handle_event(&event);
+}
+
 /* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
 uint16_t ss_plat_present(const uint32_t *pixels, int width)
 {
@@ -88,18 +111,8 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
 
     if (!window)
         return 0;
-    while (SDL_PollEvent(&event)) {
-        if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE))
-            exit(0);
-        if (event.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
-            gamepad = SDL_OpenGamepad(event.gdevice.which);
-        if (event.type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
-            SDL_CloseGamepad(gamepad);
-            gamepad = NULL;
-        }
-        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11)
-            SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
-    }
+    while (SDL_PollEvent(&event))
+        handle_event(&event);
     state = SDL_GetKeyboardState(NULL);
     for (i = 0; i < 10; i++)
         if (state[keys[i]])

@@ -141,6 +141,13 @@ static SYSV double b_pow(double a, double b) { return pow(a, b); }
 static SYSV double b_sin(double a) { return sin(a); }
 static SYSV double b_cos(double a) { return cos(a); }
 static SYSV double b_fmod(double a, double b) { return fmod(a, b); }
+static SYSV void b_pump(void) { ss_plat_pump(); }
+static SYSV int b_net_open(uint32_t host, int port) { return ss_plat_net_open(PTR(host), port); }
+static SYSV int b_net_send(uint32_t data, int size) { return ss_plat_net_send(PTR(data), size); }
+static SYSV int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR(data), capacity); }
+static SYSV void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
+static SYSV void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
+static SYSV uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
 
 static uint32_t bridge[SS_B_COUNT];
 #define ENTRY(index, function) bridge[index] = (uint32_t)(uintptr_t)(function)
@@ -375,6 +382,8 @@ int main(int argc, char **argv)
     ENTRY(SS_B_EXIT, b_exit); ENTRY(SS_B_VIDEO_INIT, b_video_init); ENTRY(SS_B_PRESENT, b_present); ENTRY(SS_B_AUDIO, b_audio);
     ENTRY(SS_B_STACK_ALLOC, b_stack_alloc); ENTRY(SS_B_STACK_FREE, b_stack_free); ENTRY(SS_B_STACK_BOUNDS, b_stack_bounds);
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
+    ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
+    ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks);
     if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32)
         return fail(4, "The host was not linked below 4 GiB.");
 

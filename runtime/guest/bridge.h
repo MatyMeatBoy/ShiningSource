@@ -26,9 +26,16 @@ enum {
     SS_B_STACK_BOUNDS,      /* void (u32 low, u32 high)                          tell the system which stack runs now */
     SS_B_POW, SS_B_SIN, SS_B_COS, SS_B_FMOD,    /* double (double[, double]) */
     SS_B_VIEW_WIDTH,        /* int (void)                                        picture width that fills the window */
+    SS_B_PUMP,              /* void (void) */
+    SS_B_NET_OPEN,          /* int (u32 host, int port) */
+    SS_B_NET_SEND,          /* int (u32 data, int size) */
+    SS_B_NET_RECV,          /* int (u32 data, int capacity) */
+    SS_B_NET_WAIT,          /* void (int milliseconds) */
+    SS_B_NET_FAREWELL,      /* void (u32 data, int size) */
+    SS_B_TICKS,             /* u32 (void)                                        milliseconds */
     SS_B_COUNT
 };
-#define SS_BRIDGE_VERSION 2u
+#define SS_BRIDGE_VERSION 3u
 
 extern const uint32_t *ss_bridge;
 #define SS_HOST(index, type) ((type)(uintptr_t)ss_bridge[index])

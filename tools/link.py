@@ -58,6 +58,9 @@ def function_names(game):
     return names
 
 
+WRAPS = ['sub_08001494', 'sub_08001538', 'sub_0800170C', 'sub_08001804', 'sub_08001A64']
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--game", default="ss2", choices=sorted(build.GAMES))
@@ -74,7 +77,7 @@ def main():
     # the runtime, compiled with the host's own headers
     runtime_objects = []
     (out / "rt").mkdir(exist_ok=True)
-    for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/win32").glob("*.c")):
+    for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/win32").glob("*.c")) + sorted((ROOT / "runtime/plat").glob("*.c")):
         target = out / "rt" / (source.stem + ".o")
         run = subprocess.run([cc, "--target=i686-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"),
                               "-I", str(sdl / "include"),
@@ -148,9 +151,10 @@ def main():
     run = subprocess.run([cc, "--target=i686-w64-mingw32", "-g", "@" + str(response), "-o", str(exe),
                           "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x400000",
                           # SDL is loaded on first use, after the runtime has reserved the GBA address ranges
-                          "-L", str(sdl / "lib"), "-lSDL3", "-Wl,--delayload=SDL3.dll", "-lcomdlg32",
+                          "-L", str(sdl / "lib"), "-lSDL3", "-Wl,--delayload=SDL3.dll", "-lcomdlg32", "-lws2_32",
                           # runtime/src/debug_alloc.c reports failed allocations of the game's heap
-                          "-Wl,--wrap=sub_08001494", "-Wl,--wrap=sub_08001538"],
+                          # and core/netlink.c takes the link driver's three entry points
+                          *["-Wl,--wrap=" + name for name in WRAPS]],
                          capture_output=True, text=True)
     if run.returncode:
         errors = run.stderr.splitlines()

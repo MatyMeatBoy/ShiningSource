@@ -51,6 +51,16 @@ int ss_plat_view_width(void);
 uint16_t ss_plat_present(const uint32_t *pixels, int width);
 /* Play one game frame of 48 kHz stereo samples. */
 void ss_plat_audio(const int16_t *samples, int frames);
+/* Handle window events without showing a frame (used while a frame waits for the network). */
+void ss_plat_pump(void);
+/* Network: one UDP socket to the relay. open returns 0 on success; recv returns 0 when nothing is waiting;
+ * wait sleeps until a packet arrives or the time passes; farewell is a packet sent when the program exits. */
+int ss_plat_net_open(const char *host, int port);
+int ss_plat_net_send(const void *data, int size);
+int ss_plat_net_recv(void *data, int capacity);
+void ss_plat_net_wait(int milliseconds);
+void ss_plat_net_farewell(const void *data, int size);
+uint32_t ss_plat_ticks_ms(void);
 /* Coroutines for the game's task scheduler. ss_co_switch(NULL) returns to the thread that called ss_co_init. */
 void ss_co_init(void);
 void *ss_co_create(void (*entry)(void *), void *argument);
