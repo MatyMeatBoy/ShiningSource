@@ -31,8 +31,12 @@ int ss_plat_video_init(const char *title)
     spec.channels = 2;
     spec.freq = 48000;
     audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
-    if (audio)
+    if (audio) {
+        const char *volume = getenv("SS_VOLUME");      /* 0..100, set by the launcher */
+        if (volume)
+            SDL_SetAudioStreamGain(audio, (float)atoi(volume) / 100.0f);
         SDL_ResumeAudioStreamDevice(audio);
+    }
     else
         fprintf(stderr, "no audio device: %s\n", SDL_GetError());
     if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
@@ -41,6 +45,8 @@ int ss_plat_video_init(const char *title)
     }
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    if (getenv("SS_FULLSCREEN"))
+        SDL_SetWindowFullscreen(window, true);
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
     next_frame_ns = SDL_GetTicksNS();

@@ -74,6 +74,9 @@ python3 tools/link.py               # milestone 1: links; lists what is still st
 `tools/build.py prepare` shows what is changed in the game's C for a non-ARM
 compiler: the decompilation itself is never edited from this repository.
 
+`python3 tools/build_launcher.py` builds the launcher (`ShiningSource.exe`): it
+verifies your ROM, holds the settings and starts the game.
+
 The 64-bit Windows version is built with `python3 tools/build_win64.py`
 (`build/win64/ss2/ss2_win64.exe` plus the game image `ss2_game.elf`). It is
 frame-for-frame identical to the 32-bit development build over the whole

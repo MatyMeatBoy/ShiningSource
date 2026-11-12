@@ -199,8 +199,19 @@ Open:
 - [ ] Sprites near the side columns: the game does not create or draw actors
       beyond its own 240 columns, so they appear late at the sides.
 - [ ] Per-scanline register effects in wide scenes.
-- [ ] Launcher (ROM check, settings, controller mapping, languages).
-- [ ] Achievements.
+- [x] Launcher, first version (`launcher/launcher.cpp`, `tools/build_launcher.py`
+      -> `ShiningSource.exe`): Dear ImGui on SDL3 and OpenGL as in ReKHCoM. Game
+      list (Shining Soul II; Shining Soul shown as closed), ROM chooser with
+      SHA-1 verification, picture width, full screen, volume, controller list,
+      English and Spanish. Settings live in `shiningsource.ini` and reach the
+      game as environment variables.
+- [ ] Launcher: controller remapping, save-file management, online lobby (M7),
+      Linux and Android versions of the launcher.
+- [ ] Achievements. rcheevos needs a client (login, HTTP, the game's memory
+      exposed in RetroAchievements' GBA layout) and a decision the owner has to
+      make: RetroAchievements only accepts approved emulators for official
+      unlocks, so ReKHCoM shows the official set as a catalogue and keeps its own
+      port achievements. The same policy is assumed here until said otherwise.
 
 ## M7. Online
 
