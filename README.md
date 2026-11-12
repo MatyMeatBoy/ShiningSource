@@ -37,12 +37,18 @@ plugged in (d-pad or left stick, A/B as on the console, shoulders, Start, Back).
 window with scripted input and writes the picture of one frame, which is how the
 port is tested. No screenshots are stored here: they are game artwork.
 
-**Online** works on one machine: the game's MULTIPLAYER MODE runs over the
-network for 2 to 4 players, through a small relay (`relay/`). Tested with four
-players, 10% packet loss and 120-160 ms of lag, and through the public relay
-from one PC; not yet between real machines.
-In the launcher: page Online, same room name for everyone, then MULTIPLAYER
-MODE in the game. Without the launcher: `SS_NET=host:port SS_NET_ROOM=name`.
+**Online** works: the game's MULTIPLAYER MODE runs over the network for 2 to
+4 players, through a small relay (`relay/`, running on a public server). Tested
+with four players for 80,000 frames, with 10% packet loss and 120-160 ms of
+lag, and between Windows, Android and Linux ARM64. Not yet tested between
+players in different places. In the launcher: page Online, same room name for
+everyone, then MULTIPLAYER MODE in the game.
+
+**Platforms.** Windows x64, Linux x64 and ARM64, and Android (arm64-v8a and
+x86_64) all run the same scripted 32,000-frame play-through to the same frame
+hash. Linux and Android were run in a virtual machine and in the emulator, not
+yet on a desktop or a phone. `docs/OPTIPORT.md` has the measurements of
+memory, frame pacing, crash reports and save protection.
 
 Still stubbed: the three link-cable interrupt routines, which online replaces.
 The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md).

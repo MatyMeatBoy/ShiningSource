@@ -192,9 +192,26 @@ Open:
 - [x] Trapping divisions give the same numbers everywhere: by zero the quotient
       is 0 and the remainder the dividend, `INT_MIN / -1` keeps the dividend
       (what ARM64 does without trapping; the x86 handlers now do the same).
-- [ ] ARM64 is not yet identical to x86-64: the first difference is at frame
-      2,702 of the play-through (see the notes below this list when resolved).
-      Until it is, ARM64 players must not be mixed with x86-64 players online.
+- [x] ARM64 identical to x86-64 (2026-11-12): all 32,000 frames of the
+      play-through have the same hash on Debian 12 ARM64 (QEMU). The method was
+      the one of the 64-bit work, one step longer: per-frame hashes gave the
+      first differing frame; a call trace of that frame on both processors
+      (`SS_CALLTRACE`) gave the function; a value trace (`SS_VALUES`, a
+      temporary source patch that prints arguments) gave the argument. Three
+      causes, all from declarations that disagree between files, which the
+      arm64_32 convention does not forgive:
+      - small arguments on the stack are packed (a `u16` takes two bytes), so
+        a caller that declared `s32` put them elsewhere: sprite scale and
+        rotation arrived shifted (frame 2,702);
+      - the function trusts the caller to have extended a small argument, so a
+        `u16 y` that arrived as -48 stayed -48 instead of 65,488 and a sprite
+        that x86 clips was drawn (frame 3,057);
+      - the struct adapters of `tools/abi_thunks.py` were not generated: the
+        size probe did not expect Mach-O's symbol prefix (frame 10,164).
+      `tools/stack_args.py` rewrites the generated sources for this target so
+      that every function narrows its own small arguments, as the console's
+      compiler did (375 definitions). The decompilation's declarations are
+      still inconsistent; fixing them there is the lasting repair.
 - [ ] Android on a real phone (ARM64): not run yet. Sound, pause/resume,
       controller, the ROM chooser with a real file provider.
 - [ ] The host commits about 220 MB of address space for the arena; most of it
@@ -234,7 +251,7 @@ Open:
       unlocks, so ReKHCoM shows the official set as a catalogue and keeps its own
       port achievements. The same policy is assumed here until said otherwise.
 
-## M7. Online (working on one machine, 2026-11-12)
+## M7. Online (working through the public relay, 2026-11-12)
 
 - Acceptance test (owner's requirement, 2026-11-12): four players on different
   continents play a full session without a disconnect. That means the design
@@ -261,13 +278,20 @@ Open:
       port 47900, next to ReKHCoM's relay and sharing nothing with it
       (`relay/Dockerfile`). Four players on one PC played through it at full
       speed with delay 4 (12 ms to the server), 3,109 frames, all consistent.
+- [x] Sessions between different processors and systems through the public
+      relay, each compared line by line: Android (x86_64 emulator) with Windows
+      x64, and Linux ARM64 (QEMU) with Windows x64.
+- [x] A long session in the game itself: four players, 80,000 frames, from the
+      title through MULTIPLAYER MODE into the first field with random movement
+      and attacks, 2% packet loss: every label consistent, all four still in
+      the session at the end (`build/input_multi_play.txt`, made by the test).
 - [ ] Real sessions: two machines, then four players on different continents.
-- [ ] A scripted multiplayer run that goes into a dungeon (so far the scripts
-      reach the opening scenes, with the game's `GO`/`OK` barriers passing).
+- [ ] A scripted multiplayer run that goes into a dungeon (the scripts reach
+      the first field, with the players and an enemy on screen).
 - [ ] Delay chosen automatically from the players' measured latency before the
       session starts (today the host sets it in the launcher).
-- [ ] Online on Linux (the host runs there; a session has not been tried)
-      and the Android build.
+- [ ] Online on a Linux desktop and on a real phone (so far: a virtual
+      machine and the emulator).
 - Shelved: prediction with rollback. The game reads its own block locally, so
   delay does not slow the player's own controls (docs/ARCHITECTURE.md, 7).
 
