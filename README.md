@@ -13,13 +13,26 @@ the decompilation is a git submodule and the game data is read from your ROM.
 
 ## Where it stands
 
-Milestone 0, "the game's C compiles for a PC target", is in progress:
+Milestones 0 and 1 are done: the game's C compiles and links for a PC target,
+and the executable runs the cartridge's own `AgbMain` until it needs the first
+piece of hardware that is not written yet.
 
 ```
-ss2 / dev32: 41 of 47 game modules compile, 8 error(s); 12 module(s) replaced by the runtime
+$ python3 tools/build.py compile
+ss2 / dev32: 44 of 44 game modules compile, 0 error(s); 15 module(s) replaced by the runtime
+$ python3 tools/link.py
+build/dev32/ss2/ss2_dev32.exe: 725 absolute symbols (memory and ROM), 47 functions still stubbed
+$ build/dev32/ss2/ss2_dev32.exe your_rom.gba
+memory mapped, ROM loaded; entering the game's AgbMain
+[stub   1] RegisterRamReset
+[stub   2] CpuSet
+[stub   3] m4aSoundInit
+[stub   4] m4aSoundVSyncOff
+[stub   5] sub_0800023C
 ```
 
-Nothing runs yet. The order of work and what each milestone proves is in
+`sub_0800023C` is the game's task scheduler: the next thing to write. There is
+no picture or sound yet. The order of work and what each milestone proves is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What this port will be
@@ -48,7 +61,8 @@ Requirements: Python 3, git, and [llvm-mingw](https://github.com/mstorsjo/llvm-m
 ```sh
 git clone --recurse-submodules https://github.com/MatyMeatBoy/ShiningSource
 cd ShiningSource
-python3 tools/build.py compile      # milestone 0 gate: prints the line above
+python3 tools/build.py compile      # milestone 0: every game module compiles
+python3 tools/link.py               # milestone 1: links; lists what is still stubbed
 ```
 
 `tools/build.py prepare` shows what is changed in the game's C for a non-ARM
@@ -71,8 +85,9 @@ ShiningSource es el port nativo de Shining Soul II (y, cuando exista su decomp,
 de Shining Soul 1) hecho desde la decompilación: el juego original compilado
 para PC, Linux, Android y consolas, con pantalla ancha real, HUD que se ajusta
 a la ventana y online de 2 a 4 jugadores con crossplay. No incluye ROM ni datos
-del juego. Hoy está en el hito 0: 41 de 47 módulos del juego ya compilan para
-PC; todavía no ejecuta. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
+del juego. Hitos 0 y 1 cumplidos: el código del juego compila y enlaza para PC, y
+el ejecutable ya corre el arranque del cartucho hasta pedir el scheduler de
+tareas, que es lo siguiente por escribir. Aún no hay imagen ni sonido. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 

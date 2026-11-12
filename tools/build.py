@@ -31,12 +31,19 @@ EMPTY_ASM = re.compile(r'\basm(?:\s+volatile)?\s*\(\s*""\s*(?::[^;]*?)?\)\s*;')
 # `asm volatile("movs %0, #1" : "=r"(x))` loads a constant with a chosen instruction; in C it is an assignment.
 MOVS_CONST = re.compile(r'asm\s+volatile\s*\(\s*"movs %0, #(\d+)"\s*:\s*"=r"\s*\((\w+)\)\s*\)\s*;')
 LTORG = re.compile(r'asm\s+volatile\s*\(\s*"\.ltorg"\s*\)\s*;')
+# `extern T name asm("gUnk_03001234")` gives a C object the assembler name of the ROM symbol. 32-bit Windows
+# prefixes C symbols with an underscore, so explicit assembler names get the same prefix to keep one namespace.
+ASM_LABEL = re.compile(r'(\b(?:__asm__|asm)\s*\(\s*")([A-Za-z_]\w*(?:[-+]\d+)?)("\s*\))')
+# the same through a stringizing macro: asm(#name)
+ASM_LABEL_MACRO = re.compile(r'(\b(?:__asm__|asm)\s*\(\s*)#\s*(\w+)(\s*\))')
 PREPARE_STEPS = [
     ("constant loads written as ARM instructions", lambda text: MOVS_CONST.sub(lambda m: "%s = %s;" % (m[2], m[1]), text)),
     ("literal pool placement", lambda text: LTORG.sub(";", text)),
     ("strip ARM register pins on function pointers", lambda text: ARM_PIN_FUNCPTR.sub(lambda m: m[1], text)),
     ("drop empty asm barriers", lambda text: EMPTY_ASM.sub(";", text)),
     ("strip ARM register pins", lambda text: ARM_PIN.sub(lambda m: m[1], text)),
+    ("assembler names follow the platform's C prefix", lambda text: ASM_LABEL.sub(lambda m: m[1] + "_" + m[2] + m[3], text)),
+    ("assembler names through a stringizing macro", lambda text: ASM_LABEL_MACRO.sub(lambda m: m[1] + '"_" #' + m[2] + m[3], text)),
     # global.h pulls the ARM assembler macros into every translation unit
     ("drop file-scope ARM assembler include", lambda text: text.replace('asm(".include \\"asm/macros.inc\\"");', "")),
 ]
