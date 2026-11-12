@@ -58,14 +58,32 @@ Open from this milestone:
 - [ ] `IntrMain`, `sub_080004B8`, `sub_080004F8`: start-up leftovers and the
       link-cable interrupt routines, stubbed until M7.
 
-## M3. Picture and input (next)
+## M3. Picture and input (working, 2026-11-12)
 
-Check: title screen and first field scene match reference screenshots.
+Check: run the executable with a ROM; the window shows language selection,
+title and character selection, and the keyboard drives the menus.
 
-- Software PPU: mode 0 backgrounds, sprites, windows, blending, mosaic, affine
-  background (the game uses BG2 affine effects).
-- SDL3 window, integer/fit scaling, 59.7275 Hz pacing.
-- Input: keyboard and controller.
+- Software PPU (`runtime/src/ppu.c`): text and affine backgrounds, regular and
+  affine sprites, priorities, windows, alpha blending and fades.
+- SDL3 window, integer scaling, keyboard, pacing at 59.7275 Hz
+  (`runtime/src/video_sdl.c`). SDL is delay-loaded so the GBA address space is
+  reserved first.
+- The GBA address space is part of the executable image (`runtime/src/memory.c`):
+  asking the system for those addresses at run time is not reliable.
+- Scripted input and frame capture for tests (`tools/run.sh`).
+
+Open:
+
+- [ ] Per-scanline effects (registers changed during HBlank): the renderer
+      draws whole frames.
+- [ ] Controller input and remapping.
+- [ ] Calls that rely on ARM register reuse. `tools/check_calls.py` lists calls
+      that pass fewer arguments than the function takes; the real ones are
+      fixed **in the decompilation** (the ROM still matches with the argument
+      written out; first case fixed: `sub_0807A378`). Struct-by-value arguments
+      that the ROM passes as separate registers work on 32-bit x86 and must be
+      checked again for host64.
+- [ ] Play further into the game with scripted input and fix what breaks.
 
 ## M4. Sound and saves
 

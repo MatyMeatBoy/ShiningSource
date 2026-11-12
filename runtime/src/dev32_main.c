@@ -25,7 +25,7 @@ static LONG CALLBACK report_crash(EXCEPTION_POINTERS *info)
     for (i = 0; i < 400 && shown < 12; i++) {
         if (IsBadReadPtr(stack + i, 4))
             break;
-        if (stack[i] >= 0x10000000u && stack[i] < 0x11000000u) {
+        if (stack[i] >= 0x01800000u && stack[i] < 0x02000000u) {
             fprintf(stderr, " %08lX", (unsigned long)stack[i]);
             shown++;
         }

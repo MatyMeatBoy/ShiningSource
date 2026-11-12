@@ -1,30 +1,26 @@
-/* GBA memory map for the modes where GBA addresses are real addresses. */
+/* GBA memory map for the dev32 build, where GBA addresses are real addresses.
+ *
+ * The address ranges cannot be requested from the system at run time: Windows may already have placed
+ * something there. They are made part of the executable image instead. The program is linked at a low base
+ * and carries one large zero-filled block; the image is the first thing mapped into a new process, so the
+ * block is guaranteed, and the GBA regions are simply addresses inside it.
+ */
 #include "shiningsource/runtime.h"
 
 #include <stdio.h>
-#include <windows.h>
 
-static int map(uint32_t base, uint32_t size)
-{
-    return VirtualAlloc((void *)(uintptr_t)base, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) == (void *)(uintptr_t)base;
-}
+char ss_gba_arena[0x08000000];      /* must span 0x02000000-0x09000000; checked below */
 
 int ss_memory_init(const char *rom_path, const char **error)
 {
-    static const struct { uint32_t base, size; const char *name; } regions[] = {
-        { SS_EWRAM, 0x40000, "EWRAM" }, { SS_IWRAM, 0x8000, "IWRAM" }, { SS_IO, 0x10000, "I/O registers" },
-        { SS_PALETTE, 0x10000, "palette" }, { SS_VRAM, 0x20000, "VRAM" }, { SS_OAM, 0x10000, "OAM" },
-        { SS_ROM, 0x1000000, "ROM" },
-    };
-    unsigned i;
+    uintptr_t low = (uintptr_t)ss_gba_arena, high = low + sizeof ss_gba_arena;
     FILE *rom;
     size_t got;
 
-    for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
-        if (!map(regions[i].base, regions[i].size)) {
-            *error = regions[i].name;
-            return -1;
-        }
+    if (low > SS_EWRAM || high < SS_ROM + 0x1000000) {
+        fprintf(stderr, "arena is %08lX-%08lX\n", (unsigned long)low, (unsigned long)high);
+        *error = "the executable was not linked so that its arena covers the GBA address space";
+        return -1;
     }
     rom = fopen(rom_path, "rb");
     if (!rom) {

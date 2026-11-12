@@ -16,6 +16,16 @@
 /* Map every region and load the ROM file. Returns 0 on success; on failure `error` says which step failed. */
 int ss_memory_init(const char *rom_path, const char **error);
 
+#define SS_SCREEN_W 240
+#define SS_SCREEN_H 160
+
+/* Draw the current frame from the video registers and memory into 32-bit ARGB pixels. */
+void ss_ppu_render(uint32_t *pixels, int pitch_pixels);
+
+/* Window and input. ss_video_frame presents a frame, reads the keyboard and waits for the next 1/59.7275 s. */
+int ss_video_init(const char *title);
+void ss_video_frame(void);
+
 /* Replace ROM words that hold game function addresses by the native functions. Returns how many. */
 unsigned ss_patch_code_pointers(void);
 

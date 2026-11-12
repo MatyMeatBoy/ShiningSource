@@ -15,13 +15,14 @@ What the game's objects still need is sorted into four groups:
 
 A symbol that fits no group stops the link with its name: nothing is guessed.
 """
-import argparse, json, re, subprocess, sys
+import argparse, json, os, re, shutil, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build
 
 ROOT = build.ROOT
+SDL_HINTS = [os.environ.get("SHININGSOURCE_SDL3", ""), "D:/01Claude/toolchain/SDL3-3.4.18"]
 ADDRESS = re.compile(r'gUnk_(0[2-9A-E][0-9A-F]{6})([-+]\d+)?$')
 
 
@@ -67,12 +68,16 @@ def main():
         sys.exit("no objects: run tools/build.py compile")
     cc = build.clang()
 
+    sdl = next((Path(h) / "i686-w64-mingw32" for h in SDL_HINTS if h and (Path(h) / "i686-w64-mingw32/lib").is_dir()), None)
+    if sdl is None:
+        sys.exit("SDL3 development files not found: set SHININGSOURCE_SDL3 to the SDL3 mingw package folder")
     # the runtime, compiled with the host's own headers
     runtime_objects = []
     (out / "rt").mkdir(exist_ok=True)
     for source in sorted((ROOT / "runtime/src").glob("*.c")):
         target = out / "rt" / (source.stem + ".o")
-        run = subprocess.run([cc, "--target=i686-w64-mingw32", "-O1", "-g", "-Wall", "-I", str(ROOT / "runtime/include"),
+        run = subprocess.run([cc, "--target=i686-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"),
+                              "-I", str(sdl / "include"),
                               "-c", str(source), "-o", str(target)], capture_output=True, text=True)
         if run.returncode:
             sys.exit(run.stderr)
@@ -141,12 +146,15 @@ def main():
     response = out / "link.rsp"
     response.write_text("\n".join('"%s"' % str(p).replace("\\", "/") for p in objects + runtime_objects + extra), encoding="utf-8")
     run = subprocess.run([cc, "--target=i686-w64-mingw32", "-g", "@" + str(response), "-o", str(exe),
-                          "-Wl,--image-base=0x10000000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x400000"],
+                          "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x400000",
+                          # SDL is loaded on first use, after the runtime has reserved the GBA address ranges
+                          "-L", str(sdl / "lib"), "-lSDL3", "-Wl,--delayload=SDL3.dll"],
                          capture_output=True, text=True)
     if run.returncode:
         errors = run.stderr.splitlines()
         print("\n".join(errors[:40]))
         sys.exit("link failed (%d lines of diagnostics)" % len(errors))
+    shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")
     print("%s: %d absolute symbols (memory and ROM), %d functions still stubbed" % (exe.relative_to(ROOT), len(absolute), len(stubs)))
     return 0
 
