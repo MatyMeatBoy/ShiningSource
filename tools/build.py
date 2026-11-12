@@ -157,6 +157,10 @@ def prepare(game, prefix=True, abi_flags=None, variant=None, prefix_after=False,
         pending[out / "src/abi_thunks.c"] = adapters
         (out / "abi_thunks.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
     if prefix_after:
+        # arm64_32 packs small stack arguments: give each one a 32-bit slot in every declaration and definition
+        import stack_args
+        (out / "stack_args.txt").parent.mkdir(parents=True, exist_ok=True)
+        (out / "stack_args.txt").write_text("\n".join(stack_args.apply(pending)) + "\n", encoding="utf-8")
         # Mach-O: the adapters were worked out on plain names; the C prefix goes on every assembler name last
         for target in list(pending):
             for label, step in PREPARE_STEPS:

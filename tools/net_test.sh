@@ -15,7 +15,9 @@ PORT=47955
 SS_RELAY_LOSS=${6:-0} SS_RELAY_LAG=${7:-0} SS_RELAY_JITTER=${8:-0} "$ROOT/build/relay/ss_relay.exe" $PORT > "$ROOT/build/relay/relay.log" 2>&1 &
 RELAY=$!
 sleep 1
-export SS_NET=${11:-127.0.0.1:$PORT} SS_NET_ROOM=test$$ SS_NET_DELAY=${3:-4} SS_FRAMES=$FRAMES SS_INPUT=${4:-} SS_NET_PLAYERS=$PLAYERS SS_DUMP=${5:-0}
+export SS_NET=${11:-127.0.0.1:$PORT} SS_NET_ROOM=test$$ SS_NET_DELAY=${3:-4} SS_FRAMES=$FRAMES SS_NET_PLAYERS=$PLAYERS SS_DUMP=${5:-0}
+# INPUT is a script ("420:0001,430:0000") or a file that holds one
+if [ -f "${4:-}" ]; then export SS_INPUT_FILE=$(cygpath -m "$(cd "$(dirname "$4")" && pwd)/$(basename "$4")" 2>/dev/null || echo "$4"); else export SS_INPUT=${4:-}; fi
 i=1
 while [ $i -le "$PLAYERS" ]; do
     mkdir -p "$ROOT/build/net$i"

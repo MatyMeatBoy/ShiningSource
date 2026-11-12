@@ -171,11 +171,32 @@ Open:
       cross-compiled on Windows and run on Debian 12 x86-64 (a QEMU machine):
       the 32,000-frame play-through ends with the same hash as Windows,
       5711719E. Not yet run with a window and sound on a Linux desktop.
-- [ ] Android host. Needs an arm64 game image (the same sources compiled for
-      `aarch64` with 32-bit pointers, `arm64_32`/ILP32), a host inside an SDL
-      Android activity that maps the low address space, and an APK project.
-      The arm64 coroutine switch and fault decoder have to be written (the
-      x86-64 ones do not apply).
+- [x] One host source for Linux and Android on x86-64 and ARM64
+      (`runtime/host64/host_linux.c`). The services are reached through short
+      jumps in low memory, so the host can be loaded anywhere (Android loads it
+      as a library), and every service runs on the thread's real stack: Android's
+      Java runtime aborts a call made from any other stack.
+- [x] ARM64 game image (`tools/build_arm64.py`): the same generated sources
+      compiled by clang's `arm64_32` target (AArch64 code, 32-bit pointers), a
+      flat Mach-O at `0x0A000000` that the host maps itself. No ELF toolchain
+      offers 32-bit pointers on AArch64. Coroutine switch
+      (`runtime/guest/co_a64.S`) and a stray-access handler for AArch64 loads and
+      stores are in place. On Debian 12 ARM64 (QEMU) the 32,000-frame
+      play-through runs to the end.
+- [x] Android app (`android/`, `tools/build_android.py`): first screen (ROM
+      chooser with SHA-1 check, online settings, Play), the game in SDL's
+      activity in its own process, touch controls, landscape, APK for
+      `arm64-v8a` and `x86_64`. On the x86_64 emulator (API 34) the play-through
+      ends with hash 5711719E, the picture and the controls show, and a session
+      with a Windows player through the public relay stays consistent.
+- [x] Trapping divisions give the same numbers everywhere: by zero the quotient
+      is 0 and the remainder the dividend, `INT_MIN / -1` keeps the dividend
+      (what ARM64 does without trapping; the x86 handlers now do the same).
+- [ ] ARM64 is not yet identical to x86-64: the first difference is at frame
+      2,702 of the play-through (see the notes below this list when resolved).
+      Until it is, ARM64 players must not be mixed with x86-64 players online.
+- [ ] Android on a real phone (ARM64): not run yet. Sound, pause/resume,
+      controller, the ROM chooser with a real file provider.
 - [ ] The host commits about 220 MB of address space for the arena; most of it
       is never touched. Reduce after the layout settles.
 

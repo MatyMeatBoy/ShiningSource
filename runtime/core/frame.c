@@ -5,8 +5,9 @@
  *
  * Test controls (environment):
  *   SS_FRAMES=N     run N frames without a window, print frame hashes, exit (SS_PACE=1: at 60 frames a second)
+ *   SS_QUIT=N       with a window: end the program at frame N (timed test runs; SS_STATS=1 prints the measurements)
  *   SS_DUMP=N       at frame N write ss_video_dump.bin (registers, palette, VRAM, OAM) and ss_frame.raw (rendered)
- *   SS_INPUT=...    scripted buttons: "300:0001,310:0000,..." = from frame 300 hold mask 0x0001 (A), then release.
+ *   SS_INPUT=...    scripted buttons (SS_INPUT_FILE=path reads the script from a file): "300:0001,310:0000,..." = from frame 300 hold mask 0x0001 (A), then release.
  *                   Mask bits: A B Select Start Right Left Up Down R L.
  */
 #include "shiningsource/runtime.h"
@@ -160,6 +161,16 @@ void VBlankIntrWait(void)
         text = getenv("SS_DUMP");
         dump_at = text ? strtoul(text, NULL, 10) : 0;
         input_script = getenv("SS_INPUT");
+        text = getenv("SS_INPUT_FILE");         /* the same script in a file: long ones do not fit an environment */
+        if (text) {
+            static char script[0x40000];
+            FILE *file = fopen(text, "rb");
+            if (file) {
+                script[fread(script, 1, sizeof script - 1, file)] = 0;
+                fclose(file);
+                input_script = script;
+            }
+        }
         text = getenv("SS_VIEW");             /* SS_VIEW=284 forces the picture width; SS_VIEW=240 turns wide view off */
         forced_width = text ? (int)strtoul(text, NULL, 10) : 0;
         if (forced_width && forced_width < SS_SCREEN_W) forced_width = SS_SCREEN_W;
@@ -196,6 +207,13 @@ void VBlankIntrWait(void)
             while (paced && ss_plat_ticks_ms() - started < frame_count * 1000 / 60)
                 ss_plat_net_wait(1);
         }
+    }
+    if (windowed) {
+        static long quit_at = -1;
+        if (quit_at < 0)
+            quit_at = getenv("SS_QUIT") ? (long)strtoul(getenv("SS_QUIT"), NULL, 10) : 0;
+        if (quit_at && frame_count >= (unsigned long)quit_at)
+            exit(0);
     }
     if (windowed) {
         static uint32_t pixels[SS_MAX_VIEW_W * SS_SCREEN_H];

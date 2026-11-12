@@ -45,3 +45,18 @@ NO_TRACE void __cyg_profile_func_exit(void *function, void *call_site)
     (void)function;
     (void)call_site;
 }
+
+/* Value trace: a temporary source patch (games/<game>/port/patches.json) can call this from a game function to
+ * print up to six values during frame SS_VALUES, which shows where two builds compute different numbers when
+ * their call traces are the same. */
+NO_TRACE void ss_values(const char *tag, int a, int b, int c, int d, int e, int f)
+{
+    static unsigned long wanted = ~0ul;
+    if (wanted == ~0ul) {
+        const char *text = getenv("SS_VALUES");
+        wanted = text ? strtoul(text, NULL, 10) : 0;
+    }
+    if (wanted && ss_frame_number() == wanted)
+        fprintf(stderr, "values %s %08X %08X %08X %08X %08X %08X\n", tag, (unsigned)a, (unsigned)b, (unsigned)c, (unsigned)d,
+                (unsigned)e, (unsigned)f);
+}
