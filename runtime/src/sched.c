@@ -160,6 +160,11 @@ uint32_t sub_08000274(uint32_t address, uint32_t a, uint32_t b)
     for (cursor = HEAD; cursor; cursor = TASK(cursor)->next)
         if (cursor == address)
             return 1;
+    if (task->entry < 0x01800000u || task->entry >= 0x02000000u) {
+        fprintf(stderr, "scheduler: task %08X has entry %08X, which is not native code; started from %p%c",
+                (unsigned)address, (unsigned)task->entry, __builtin_return_address(0), 10);
+        fflush(stderr);
+    }
     if (task->priority == 0)
         task->priority = 1;
     task->state = READY;

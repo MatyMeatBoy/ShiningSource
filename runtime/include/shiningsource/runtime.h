@@ -29,6 +29,11 @@ void ss_video_frame(void);
 /* Replace ROM words that hold game function addresses by the native functions. Returns how many. */
 unsigned ss_patch_code_pointers(void);
 
+/* Absorb a memory access the console would have ignored (see stray.c). `context` is the CPU context of the fault. */
+int ss_stray_access(void *context, uint32_t address, int is_write);
+int ss_divide_by_zero(void *context);
+unsigned long ss_stray_count(void);
+
 /* Called by a generated stub the first time a function nobody implements yet is reached. */
 void ss_stub(const char *name, int *seen);
 

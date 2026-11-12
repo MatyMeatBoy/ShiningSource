@@ -16,8 +16,9 @@ the decompilation is a git submodule and the game data is read from your ROM.
 The native executable **runs the game and draws it**. Start-up, the task
 scheduler, interrupts, saving and the picture are the port's own code; the game
 logic is the decompilation, compiled unchanged. Today it goes from power-on
-through the language selection and the title screen to the character selection
-screen, with a window, keyboard input and correct speed. There is no sound yet.
+through language selection, title, character selection and naming **into the
+first field scene**, with the HUD, the player, an NPC and an enemy on screen, in
+a window with keyboard input and correct speed. There is no sound yet.
 
 ```
 $ python3 tools/build.py compile
@@ -85,9 +86,10 @@ ShiningSource es el port nativo de Shining Soul II (y, cuando exista su decomp,
 de Shining Soul 1) hecho desde la decompilación: el juego original compilado
 para PC, Linux, Android y consolas, con pantalla ancha real, HUD que se ajusta
 a la ventana y online de 2 a 4 jugadores con crossplay. No incluye ROM ni datos
-del juego. Hoy **el juego corre nativo y se ve**: arranca, pasa la selección de
-idioma y la pantalla de título y llega a la selección de personaje, con ventana,
-teclado y velocidad correcta. Aún no tiene sonido ni online. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
+del juego. Hoy **el juego corre nativo y se ve**: arranca, pasa idioma, título,
+selección y nombre del personaje y **entra a la primera escena de campo**, con
+HUD, jugador, NPC y enemigo en pantalla, con ventana, teclado y velocidad
+correcta. Aún no tiene sonido ni online. El plan está en [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 

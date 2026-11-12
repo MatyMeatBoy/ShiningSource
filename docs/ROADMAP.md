@@ -83,7 +83,24 @@ Open:
       written out; first case fixed: `sub_0807A378`). Struct-by-value arguments
       that the ROM passes as separate registers work on 32-bit x86 and must be
       checked again for host64.
+- [x] New game reaches the first field scene (frame 9000 of the scripted run).
 - [ ] Play further into the game with scripted input and fix what breaks.
+
+What the first playthrough needed, as a guide for what comes next:
+
+- **Stray accesses** (`runtime/src/stray.c`): the cartridge writes through a
+  NULL pointer and reads unmapped addresses on the way into the game, and
+  divides by zero; the console ignores all three. The fault handler absorbs
+  them for game code only and reports each site once.
+- **Arguments left in registers**: three calls to the task-creation helper
+  passed one argument and relied on the second already being in `r1`. Fixed in
+  the decompilation, ROM unchanged. `tools/check_calls.py` and
+  `tools/check_decls.py` list the candidates; each real one shows up as a
+  crash or a wrong task entry, and `SS_TRACE=1` plus the scheduler's own check
+  name the caller.
+- **Failed allocations** are reported where they happen
+  (`runtime/src/debug_alloc.c`), because the game does not check them.
+
 
 ## M4. Sound and saves
 
