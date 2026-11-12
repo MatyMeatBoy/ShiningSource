@@ -122,8 +122,10 @@ void VBlankIntrWait(void)
     if (frame_limit) {
         if (frame_count <= 5 || frame_count % 60 == 0 || frame_count == frame_limit)
             fprintf(stderr, "frame %5lu  hash %08X  stubs reached %d\n", frame_count, (unsigned)ss_frame_hash(), ss_stub_count());
-        if (frame_count >= frame_limit)
+        if (frame_count >= frame_limit) {
+            ss_audio_report();
             exit(0);
+        }
     }
     if (windowed)
         ss_video_frame();

@@ -102,11 +102,27 @@ What the first playthrough needed, as a guide for what comes next:
   (`runtime/src/debug_alloc.c`), because the game does not check them.
 
 
-## M4. Sound and saves
+## M4. Sound and saves (first version working, 2026-11-12)
 
-- Native m4a sequencer and mixer reading songs from the ROM (the data layout is
-  described in SS2Decomp: 400 songs, 676 tracks, 181 samples).
-- Flash save file with atomic replace.
+Check: run with a window and listen; headless, `SS_FRAMES=N` ends with an
+`audio:` line (sample frames produced, peak), and `SS_AUDIO_FILE=1` writes
+`ss_audio.raw` (48 kHz stereo, 16-bit).
+
+- Native m4a sequencer and mixer (`runtime/src/m4a.c`) reading the song table,
+  headers, tracks, voice groups and samples from the ROM; driven once per frame
+  by the game's own `m4aSoundMain`; SDL3 audio stream (`runtime/src/video_sdl.c`).
+- Flash save file with atomic replace: done in M2.
+
+Open:
+
+- [ ] Compare against the cartridge by ear and by waveform: nobody has listened
+      to it yet. Likely differences: envelope timing of the synthesised
+      channels, loudness balance between voices, fixed-rate samples.
+- [ ] LFO modulation (vibrato, tremolo), reverb, `MEMACC` conditionals.
+- [ ] Voice priority and the engine's channel limit (the mixer allows 48 voices
+      and steals the oldest).
+- [ ] The game reads only the player's status word today; check whether any
+      code reads other fields of `MusicPlayerInfo` or the track structures.
 
 ## M5. host64
 

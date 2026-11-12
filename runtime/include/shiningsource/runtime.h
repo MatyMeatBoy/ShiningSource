@@ -26,6 +26,10 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels);
 int ss_video_init(const char *title);
 void ss_video_frame(void);
 
+/* Sound output: one game frame of 48 kHz stereo samples. ss_audio_report prints what was produced. */
+void ss_audio_push(const int16_t *samples, int frames);
+void ss_audio_report(void);
+
 /* Replace ROM words that hold game function addresses by the native functions. Returns how many. */
 unsigned ss_patch_code_pointers(void);
 

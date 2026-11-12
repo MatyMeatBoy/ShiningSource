@@ -18,12 +18,60 @@ static const SDL_Scancode keys[10] = {
     SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_V, SDL_SCANCODE_C,
 };
 
+static SDL_AudioStream *audio;
+static unsigned long audio_frames, audio_loud_frames;
+static int audio_peak;
+static FILE *audio_file;
+
+/* One game frame of 48 kHz stereo sound. Without a window the samples are only measured (and written to
+ * ss_audio.raw when SS_AUDIO_FILE is set), so a headless test can tell that the engine produces a signal. */
+void ss_audio_push(const int16_t *samples, int frames)
+{
+    int i;
+    static int file_checked;
+    for (i = 0; i < frames * 2; i++) {
+        int magnitude = samples[i] < 0 ? -samples[i] : samples[i];
+        if (magnitude > audio_peak) audio_peak = magnitude;
+        if (magnitude > 256) audio_loud_frames++;
+    }
+    audio_frames += (unsigned long)frames;
+    if (!file_checked) {
+        file_checked = 1;
+        if (getenv("SS_AUDIO_FILE"))
+            audio_file = fopen("ss_audio.raw", "wb");
+    }
+    if (audio_file)
+        fwrite(samples, 4, (size_t)frames, audio_file);
+    if (audio) {
+        /* never let more than about a tenth of a second queue up: late sound is worse than a dropped frame */
+        if (SDL_GetAudioStreamQueued(audio) < 48000 * 4 / 10)
+            SDL_PutAudioStreamData(audio, samples, frames * 4);
+    }
+}
+
+void ss_audio_report(void)
+{
+    fprintf(stderr, "audio: %lu sample frames, peak %d, %lu samples above the noise floor\n", audio_frames, audio_peak, audio_loud_frames);
+    if (audio_file)
+        fclose(audio_file);
+}
+
 int ss_video_init(const char *title)
 {
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    SDL_AudioSpec spec;
+
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
+    spec.format = SDL_AUDIO_S16;
+    spec.channels = 2;
+    spec.freq = 48000;
+    audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    if (audio)
+        SDL_ResumeAudioStreamDevice(audio);
+    else
+        fprintf(stderr, "no audio device: %s\n", SDL_GetError());
     if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
