@@ -162,6 +162,15 @@ Open:
       resolved from the ROM and written out in the decompilation (the ROM must
       still match), as was done for `sub_08057328` and `sub_0807A378`. This is
       also a requirement for online: every platform must compute the same game.
+      Method: SS2Decomp `tools/scripts/try_edit.py` applies a candidate edit only
+      if the module object stays identical; six were done on 2026-11-12
+      (wrappers that forward their argument, and two calls that take the
+      result of the call before them). They did not move frame 27,083. To find
+      the cause: `SS_DUMP=27083` on both builds writes `ss_ram_dump.bin`; the
+      first differing words are an actor position at `0x02006C74`; `SS_WATCH=
+      02006C74 SS_WATCH_FROM=27082` on dev32 names the writer
+      (`sub_08013E90`, called from `sub_0801801C`). The inputs of that call
+      (speed, direction, the collision check) are the next thing to compare.
 - [ ] Linux and Android hosts (the image is already operating-system neutral).
 - [ ] The host commits about 220 MB of address space for the arena; most of it
       is never touched. Reduce after the layout settles.
