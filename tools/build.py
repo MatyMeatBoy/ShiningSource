@@ -72,11 +72,23 @@ def hoists(game):
 
 def prototype(text, name):
     """The declaration of `name` at file scope: an extern line, or the header of its definition."""
-    m = re.search(r'^(?![ \t#/])[^\n;{}#]*\b%s\s*\((?:[^;{}()]|\([^()]*\))*\)\s*(?:asm\s*\([^)]*\)\s*)?;' % re.escape(name), text, re.M)
+    args = r'\((?:[^;{}()]|\([^()]*\))*\)'
+    # 1. the definition: it has the real parameter types (a K&R `extern void f();` does not)
+    m = re.search(r'^(?![ \t#/])([^\n;{}#]*\b%s\s*%s)\s*\{' % (re.escape(name), args), text, re.M)
     if m:
-        return m[0].strip()
-    m = re.search(r'^(?![ \t#/])([^\n;{}#]*\b%s\s*\((?:[^;{}()]|\([^()]*\))*\))\s*\{' % re.escape(name), text, re.M)
-    return m[1].strip() + ";" if m else None
+        return m[1].strip() + ";"
+    # 2. a declaration with parameters, at file scope or inside a function body
+    kind = r'(?:(?:const|unsigned|signed|struct|union)\s+)*[A-Za-z_]\w*[ \t\*]+'      # a return type must be present
+    for m in re.finditer(r'^[ \t]*((?:extern\s+)?%s%s\s*%s)\s*(?:asm\s*\([^)]*\)\s*)?;' % (kind, re.escape(name), args), text, re.M):
+        if not re.search(r'\(\s*\)$', m[1].strip()):
+            return m[1].strip() + ";"
+    return None
+
+
+def forward_structs(protos):
+    """`struct X;` lines so a hoisted prototype and the later definition name the same type."""
+    tags = sorted({"%s %s;" % (kind, tag) for p in protos for kind, tag in re.findall(r'\b(struct|union)\s+(\w+)', p)})
+    return "\n".join(tags) + ("\n" if tags else "")
 
 
 def prepare(game):
@@ -98,11 +110,19 @@ def prepare(game):
                     sys.exit("%s: patch no longer applies exactly once: %s" % (path.name, patch["why"]))
                 text = text.replace(patch["find"], patch["replace"])
             names = hoist.get(path.stem, []) if sub == "src" else []
-            protos = [p for p in (prototype(text, n) for n in names) if p]
+            found = [(n, prototype(text, n)) for n in names]
+            protos = [p for _, p in found if p]
             if protos:
+                for n, p in found:
+                    if p:       # a declaration without parameters cannot stand next to the real prototype
+                        text = re.sub(r'^[ \t]*(?:extern\s+)?[\w \t\*]+\b%s\s*\(\s*\)\s*;[ \t]*\n' % re.escape(n), "", text, flags=re.M)
+                        # nor can a block-scope redeclaration with other parameter types
+                        text = re.sub(r'^[ \t]+(?:extern\s+)?[A-Za-z_][\w \t\*]*[ \t\*]%s\s*\((?:[^;{}()]|\([^()]*\))*\)\s*;[ \t]*\n'
+                                      % re.escape(n), "", text, flags=re.M)
                 # after the includes, before first use: the function is called before the file declares it
                 at = max((m.end() for m in re.finditer(r'^#include[^\n]*\n', text, re.M)), default=0)
-                text = text[:at] + "/* hoisted by tools/build.py: used before declared */\n" + "\n".join(protos) + "\n" + text[at:]
+                text = (text[:at] + "/* hoisted by tools/build.py: used before declared */\n" + forward_structs(protos)
+                        + "\n".join(protos) + "\n" + text[at:])
             target = out / path.relative_to(src)
             target.parent.mkdir(parents=True, exist_ok=True)
             if not target.exists() or target.read_bytes().decode("utf-8", errors="replace") != text:

@@ -1,16 +1,19 @@
 {
  "runtime": {
+  "libgcc2": "Compiler support library of the original toolchain; the host compiler brings its own.",
+  "m4a": "Sound library entry points and BIOS sound calls; provided by the runtime's native m4a engine together with the mixer.",
+  "m4a_1": "Sound library entry points and BIOS sound calls; provided by the runtime's native m4a engine together with the mixer.",
   "m4a_1_abi": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_btm": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_commands": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_engine": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
+  "m4a_1_jump": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
+  "m4a_1_mod": "Sound library entry points and BIOS sound calls; provided by the runtime's native m4a engine together with the mixer.",
   "m4a_1_mul": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_port": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_read": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_rest": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
   "m4a_1_sound": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
-  "m4a_1_vsync": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively.",
-  "libgcc2": "Compiler support library of the original toolchain; the host compiler brings its own.",
-  "m4a_1_jump": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively."
+  "m4a_1_vsync": "GBA sound engine written to mirror hand-tuned assembly (naked functions, ARM register variables). The runtime provides the m4a engine natively."
  }
 }
