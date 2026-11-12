@@ -58,7 +58,7 @@ def function_names(game):
     return names
 
 
-WRAPS = ['sub_08001494', 'sub_08001538', 'sub_0800170C', 'sub_08001804', 'sub_08001A64']
+WRAPS = ['sub_08001494', 'sub_08001538', 'sub_0800170C', 'sub_08001804']
 
 
 def main():

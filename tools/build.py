@@ -105,9 +105,10 @@ def forward_structs(protos):
     return "\n".join(tags) + ("\n" if tags else "")
 
 
-def prepare(game, prefix=True, abi_flags=None):
-    """prefix: the target prepends an underscore to C symbols (32-bit Windows); ELF targets do not."""
-    src, out = GAMES[game], ROOT / ("build/gen" if prefix else "build/gen-elf") / game
+def prepare(game, prefix=True, abi_flags=None, variant=None, prefix_after=False, wraps=()):
+    """prefix: the target prepends an underscore to C symbols (32-bit Windows, Mach-O); ELF targets do not.
+    variant: folder name under build/ when a target needs its own generated sources."""
+    src, out = GAMES[game], ROOT / ("build/" + variant if variant else "build/gen" if prefix else "build/gen-elf") / game
     if not (src / "src").is_dir():
         sys.exit("decomp submodule missing: git submodule update --init")
     hoist = hoists(game)
@@ -155,6 +156,26 @@ def prepare(game, prefix=True, abi_flags=None):
         pending.update(fixed)
         pending[out / "src/abi_thunks.c"] = adapters
         (out / "abi_thunks.txt").write_text("\n".join(report) + "\n", encoding="utf-8")
+    if prefix_after:
+        # Mach-O: the adapters were worked out on plain names; the C prefix goes on every assembler name last
+        for target in list(pending):
+            for label, step in PREPARE_STEPS:
+                if label.startswith("assembler names"):
+                    pending[target] = step(pending[target])
+        # The Mach-O linker has no --wrap. Same effect in the sources: in the file that defines a wrapped function
+        # its name becomes __real_<name>; everywhere else it becomes __wrap_<name>. Assembler names count too.
+        for target in list(pending):
+            if target.suffix != ".c" or target.parent.name != "src":
+                continue
+            text, lines = pending[target], []
+            for name in wraps:
+                body = r'^[A-Za-z_][^\n;=]*\b%s\s*\([^;{]*\)\s*\{'
+                aliases = re.findall(r'\b(\w+)\s*\([^;{}]*\)\s*(?:__asm__|asm)\s*\(\s*"_%s"\s*\)' % name, text)
+                defines = re.search(body % name, text, re.M) or any(re.search(body % alias, text, re.M) for alias in aliases)
+                new = "__%s_%s" % ("real" if defines else "wrap", name)
+                text = re.sub(r'((?:__asm__|asm)\s*\(\s*")_%s("\s*\))' % name, lambda m: m[1] + "_" + new + m[2], text)
+                lines.append("#define %s %s" % (name, new))
+            pending[target] = "\n".join(lines) + "\n" + text if lines else text
     for target, text in pending.items():
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or target.read_bytes().decode("utf-8", errors="replace") != text:

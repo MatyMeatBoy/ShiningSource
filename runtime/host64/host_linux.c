@@ -1,13 +1,19 @@
-/* 64-bit host for Linux (x86-64). Same job as the Windows host (host_main.c): map the GBA address space, load
- * the ROM and the game image, serve the bridge. The image file is the same one the Windows host loads.
+/* 64-bit host for Linux, x86-64 and ARM64. Same job as the Windows host (host_main.c): map the GBA address
+ * space, load the ROM and the game image, serve the bridge.
  *
- * Link it as a non-PIE program so that its functions have addresses below 4 GiB: the image calls the services
- * through 32-bit pointers.
+ * x86-64: the image is the ELF file the Windows host loads. Link the host as a non-PIE program so that its
+ * functions have addresses below 4 GiB: the image calls the services through 32-bit pointers.
+ * ARM64: the image is the Mach-O file of tools/build_arm64.py, and the services are reached through small
+ * jumps placed in low memory, so the host can be loaded anywhere (as Android requires of a library).
  */
 #define _GNU_SOURCE
 #include "../guest/bridge.h"
 #include "shiningsource/runtime.h"
+#ifdef __x86_64__
 #include "stray64.h"
+#else
+static unsigned long ss_tolerated;
+#endif
 
 #include <math.h>
 #include <signal.h>
@@ -112,7 +118,12 @@ static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
     return (int)length;
 }
 
-static void b_exit(int code) { exit(code); }
+static void b_exit(int code)
+{
+    if (ss_tolerated)
+        fprintf(stderr, "%lu stray accesses were tolerated\n", ss_tolerated);
+    exit(code);
+}
 static uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
 static uint32_t b_present(uint32_t pixels, int width) { return ss_plat_present(PTR(pixels), width); }
@@ -131,9 +142,20 @@ static void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
 static void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
 
+#ifdef __x86_64__
 static uint32_t bridge[SS_B_COUNT];
 #define ENTRY(index, function) bridge[index] = (uint32_t)(uintptr_t)(function)
+#else
+static uint64_t bridge[SS_B_COUNT];
+#define ENTRY(index, function) bridge[index] = (uint64_t)(uintptr_t)(function)
+#endif
+#ifdef __aarch64__
+#define IMAGE_NAME "ss2_game.macho"
+#else
+#define IMAGE_NAME "ss2_game.elf"
+#endif
 
+#ifdef __x86_64__
 /* SIGSEGV / SIGFPE raised by game code: absorb what the console would have ignored, report the rest. */
 static void on_fault(int number, siginfo_t *info, void *raw)
 {
@@ -161,6 +183,58 @@ static void on_fault(int number, siginfo_t *info, void *raw)
     _exit(3);
 }
 
+#else
+/* ARM64: a load or store that hit unmapped memory. Loads give zero, stores are dropped, as on x86 (win32/stray.c
+ * has the reasoning). Division by zero does not trap on this processor. */
+static void on_fault(int number, siginfo_t *info, void *raw)
+{
+    ucontext_t *context = raw;
+    uint64_t pc = context->uc_mcontext.pc, address = (uint64_t)(uintptr_t)info->si_addr;
+    int in_image = pc >= image_low && pc < image_high;
+
+    if (in_image && (number == SIGSEGV || number == SIGBUS) && !(address >= SS_EWRAM && address < SS_ROM + 0x1000000)) {
+        uint32_t insn = *(const uint32_t *)(uintptr_t)pc;
+        uint64_t *x = (uint64_t *)context->uc_mcontext.regs;
+        int rt = insn & 31, rn = (insn >> 5) & 31, handled = 0;
+        if ((insn & 0x3A000000u) == 0x28000000u) {             /* load/store pair: stp, ldp */
+            int rt2 = (insn >> 10) & 31, mode = (insn >> 23) & 3;
+            if (insn & (1u << 22)) {
+                if (!(insn & (1u << 26))) {                     /* general registers; vector pairs are left alone */
+                    if (rt != 31) x[rt] = 0;
+                    if (rt2 != 31) x[rt2] = 0;
+                }
+            }
+            if (mode == 1 || mode == 3) {                       /* post- or pre-index: the base still moves */
+                int64_t offset = ((int64_t)(int32_t)(insn << 10) >> 25) * ((insn >> 31) ? 8 : 4);
+                if (rn == 31) context->uc_mcontext.sp += (uint64_t)offset; else x[rn] += (uint64_t)offset;
+            }
+            handled = 1;
+        } else if ((insn & 0x3B000000u) == 0x38000000u || (insn & 0x3B000000u) == 0x39000000u) {   /* single register */
+            int load = (insn >> 22) & 3;                        /* 0 store, others are loads (or prefetch) */
+            if (load && !(insn & (1u << 26)) && rt != 31)
+                x[rt] = 0;
+            if (!(insn & (1u << 24)) && !(insn & (1u << 21)) && (insn & (1u << 10))) {   /* imm9 with writeback */
+                int64_t offset = (int64_t)(int32_t)(insn << 11) >> 23;
+                if (rn == 31) context->uc_mcontext.sp += (uint64_t)offset; else x[rn] += (uint64_t)offset;
+            }
+            handled = 1;
+        } else if ((insn & 0x3B000000u) == 0x18000000u) {      /* load from a literal */
+            if (!(insn & (1u << 26)) && rt != 31) x[rt] = 0;
+            handled = 1;
+        }
+        if (handled) {
+            context->uc_mcontext.pc = pc + 4;
+            ss_tolerated++;
+            return;
+        }
+    }
+    fprintf(stderr, "crash: signal %d at pc %016llx (%s), address %p; %lu stray accesses had been tolerated\n", number,
+            (unsigned long long)pc, in_image ? "game image" : "host", info->si_addr, ss_tolerated);
+    _exit(3);
+}
+
+#endif
+
 static int load_file(const char *path, uint32_t address, uint32_t capacity)
 {
     FILE *file = fopen(path, "rb");
@@ -172,6 +246,7 @@ static int load_file(const char *path, uint32_t address, uint32_t capacity)
     return (int)got;
 }
 
+#ifdef __x86_64__
 /* ELF32 for x86-64 (the x32 ABI): copy each PT_LOAD segment to its address. Returns the entry point. */
 static uint32_t load_image(const char *path)
 {
@@ -221,7 +296,60 @@ static uint32_t load_image(const char *path)
     return entry;
 }
 
+#else
+/* Mach-O for arm64_32: map each segment at its address and copy its bytes. Returns the entry point. The file is
+ * linked without fixups to apply, so loading is all there is to do. */
+static uint32_t load_image(const char *path)
+{
+    FILE *file = fopen(path, "rb");
+    uint8_t header[28], command[56];
+    uint32_t magic, count, at = 28, entry = 0, text_base = 0, low = ~0u, high = 0, i;
+
+    if (!file)
+        return 0;
+    if (fread(header, 1, 28, file) != 28) { fclose(file); return 0; }
+    memcpy(&magic, header, 4);
+    memcpy(&count, header + 16, 4);
+    if (magic != 0xFEEDFACEu) { fclose(file); return 0; }
+    for (i = 0; i < count; i++) {
+        uint32_t kind, size;
+        fseek(file, (long)at, SEEK_SET);
+        if (fread(command, 1, 8, file) != 8) break;
+        memcpy(&kind, command, 4);
+        memcpy(&size, command + 4, 4);
+        if (kind == 1 && fread(command + 8, 1, 48, file) == 48) {          /* LC_SEGMENT */
+            uint32_t address, memory, offset, bytes, first, last;
+            memcpy(&address, command + 24, 4); memcpy(&memory, command + 28, 4);
+            memcpy(&offset, command + 32, 4); memcpy(&bytes, command + 36, 4);
+            if (address && memory && memcmp(command + 8, "__LINKEDIT", 10) != 0) {
+                first = address & ~0xFFFFu;
+                last = (address + memory + 0xFFFFu) & ~0xFFFFu;
+                if (first < high) first = high;                 /* segments share a 64 KiB block with the previous one */
+                if (last > first && !low_map(first, last - first, PROT_READ | PROT_WRITE | PROT_EXEC)) { fclose(file); return 0; }
+                fseek(file, (long)offset, SEEK_SET);
+                if (bytes && fread(PTR(address), 1, bytes, file) != bytes) { fclose(file); return 0; }
+                if (!offset && bytes) text_base = address;
+                if (first < low) low = address & ~0xFFFFu;
+                if (last > high) high = last;
+            }
+        } else if (kind == 0x80000028u && fread(command + 8, 1, 16, file) == 16) {     /* LC_MAIN: offset of the entry */
+            memcpy(&entry, command + 8, 4);
+        }
+        at += size;
+    }
+    fclose(file);
+    if (!text_base || !entry)
+        return 0;
+    image_low = low;
+    image_high = high;
+    __builtin___clear_cache((char *)PTR(low), (char *)PTR(high));
+    return text_base + entry;
+}
+
+#endif
+
 /* Run the image's entry on its own low stack. Never returns: the image ends through the exit service. */
+#ifdef __x86_64__
 void ss_enter_image(uint64_t entry, uint64_t stack_top, uint64_t bridge_table, uint64_t stack_low);
 __asm__(
     ".text\n"
@@ -234,6 +362,45 @@ __asm__(
     "    movl %ecx, %esi\n"
     "    callq *%rax\n"
     "    ud2\n");
+
+#else
+void ss_enter_image(uint64_t entry, uint64_t stack_top, uint64_t bridge_table, uint64_t stack_low);
+__asm__(
+    ".text\n"
+    ".globl ss_enter_image\n"
+    ".type ss_enter_image, %function\n"
+    "ss_enter_image:\n"
+    "    mov sp, x1\n"                 /* in: x0 entry, x1 stack top, x2 bridge, x3 stack low */
+    "    mov x9, x0\n"
+    "    mov x10, x1\n"
+    "    mov w0, w2\n"                 /* out: w0 bridge, w1 stack low, w2 stack top */
+    "    mov w1, w3\n"
+    "    mov w2, w10\n"
+    "    mov x29, #0\n"
+    "    blr x9\n"
+    "    brk #1\n");
+
+/* The image calls the services through 32-bit addresses, and this host may be loaded above 4 GiB. Each service
+ * gets a jump in low memory: `ldr x16, target; br x16; target: .quad`. The table moves there too. */
+static uint32_t *low_bridge(const uint64_t *targets, int count)
+{
+    uint32_t base = 0x0F800000u, *code, *table;
+    int i;
+    if (!low_map(base, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC))
+        return NULL;
+    table = PTR(base);
+    code = PTR(base + 0x1000);
+    for (i = 0; i < count; i++) {
+        code[i * 4 + 0] = 0x58000050u;         /* ldr x16, #8 */
+        code[i * 4 + 1] = 0xD61F0200u;         /* br x16 */
+        memcpy(&code[i * 4 + 2], &targets[i], 8);
+        table[i] = base + 0x1000 + (uint32_t)i * 16;
+    }
+    __builtin___clear_cache((char *)code, (char *)(code + count * 4));
+    return table;
+}
+
+#endif
 
 int main(int argc, char **argv)
 {
@@ -248,6 +415,7 @@ int main(int argc, char **argv)
     char image_path[4096];
     const char *rom = argc >= 2 ? argv[1] : getenv("SHININGSOURCE_ROM");
     uint32_t entry;
+    uintptr_t table;
     ssize_t length;
     unsigned i;
 
@@ -277,7 +445,7 @@ int main(int argc, char **argv)
         length = readlink("/proc/self/exe", image_path, sizeof image_path - 32);
         image_path[length > 0 ? length : 0] = 0;
         slash = strrchr(image_path, '/');
-        strcpy(slash ? slash + 1 : image_path, "ss2_game.elf");
+        strcpy(slash ? slash + 1 : image_path, IMAGE_NAME);
     }
     entry = load_image(image_path);
     if (!entry) {
@@ -302,12 +470,21 @@ int main(int argc, char **argv)
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
     ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
     ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status);
+#ifdef __x86_64__
     if ((uintptr_t)bridge >> 32 || (uintptr_t)b_version >> 32) {
         fprintf(stderr, "the host must be linked as a non-PIE program (its code has to live below 4 GiB)\n");
         return 4;
     }
+    table = (uintptr_t)bridge;
+#else
+    table = (uintptr_t)low_bridge(bridge, SS_B_COUNT);
+    if (!table) {
+        fprintf(stderr, "the address range for the service jumps is not free\n");
+        return 3;
+    }
+#endif
     fprintf(stderr, "host64: GBA memory mapped, ROM and image loaded (image %08X-%08X, entry %08X)\n",
             (unsigned)image_low, (unsigned)image_high, (unsigned)entry);
-    ss_enter_image(entry, main_stack + 0x400000, (uintptr_t)bridge, main_stack);
+    ss_enter_image(entry, main_stack + 0x400000, table, main_stack);
     return 0;
 }

@@ -196,13 +196,16 @@ int ss_stray_access(void *context, uint32_t address, int is_write)
     return 1;
 }
 
-/* Division by zero. The cartridge divides with a library routine that returns instead of trapping; a PC
- * instruction traps. Skip the divide and give quotient and remainder zero. Returns 1 if handled. */
+/* Division that traps on a PC: by zero, or the most negative number by -1. The cartridge divides with a library
+ * routine that returns instead of trapping. Every build must give the same numbers (online play compares them),
+ * so the result is the one an ARM64 processor gives, where division never traps: by zero the quotient is 0 and
+ * the remainder is the dividend; the overflow keeps the dividend as quotient with remainder 0. Returns 1 if
+ * handled. */
 int ss_divide_by_zero(void *context)
 {
     CONTEXT *c = context;
     const uint8_t *p = (const uint8_t *)(uintptr_t)c->Eip;
-    int length;
+    int length, wide;
 
     while (*p == 0x66 || *p == 0xF2 || *p == 0xF3)
         p++;
@@ -210,11 +213,19 @@ int ss_divide_by_zero(void *context)
         return 0;
     if (((p[1] >> 3) & 7) < 6)              /* only div and idiv */
         return 0;
+    wide = p[0] == 0xF7 && p == (const uint8_t *)(uintptr_t)c->Eip;     /* a plain 32-bit divide */
     length = modrm_length(p + 1);
     if (!length)
         length = 1;                         /* register operand */
-    c->Eax = 0;
-    c->Edx = 0;
+    if (wide && ((p[1] >> 3) & 7) == 7 && (p[1] >> 6) == 3 && *reg32(c, p[1] & 7) == 0xFFFFFFFFu) {
+        c->Edx = 0;                         /* overflow: the quotient register already holds the dividend */
+    } else if (wide) {
+        c->Edx = c->Eax;
+        c->Eax = 0;
+    } else {
+        c->Eax = 0;
+        c->Edx = 0;
+    }
     c->Eip = (DWORD)(uintptr_t)(p + 1 + length);
     tolerated++;
     return 1;

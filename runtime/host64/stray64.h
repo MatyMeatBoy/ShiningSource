@@ -134,18 +134,27 @@ static int ss_stray_access64(struct ss_cpu *c, uint64_t address, int is_write, u
 }
 
 /* The cartridge divides with a routine that returns instead of trapping: skip the divide, results are zero. */
+/* A trapping division: see ss_divide_by_zero in win32/stray.c for the rule (the ARM64 results). */
 static int ss_divide_by_zero64(struct ss_cpu *c)
 {
     const uint8_t *p = (const uint8_t *)(uintptr_t)*c->rip;
-    int length;
-    while (*p == 0x66 || *p == 0x67 || *p == 0xF2 || *p == 0xF3) p++;
-    if ((*p & 0xF0) == 0x40) p++;
+    int length, rex = 0, prefixed = 0, wide;
+    while (*p == 0x66 || *p == 0x67 || *p == 0xF2 || *p == 0xF3) { prefixed |= *p == 0x66; p++; }
+    if ((*p & 0xF0) == 0x40) rex = *p++;
     if ((p[0] != 0xF7 && p[0] != 0xF6) || ((p[1] >> 3) & 7) < 6)
         return 0;
+    wide = p[0] == 0xF7 && !prefixed && !(rex & 8);         /* a plain 32-bit divide */
     length = ss_modrm_length(p + 1);
     if (!length) length = 1;
-    *c->reg[0] = 0;
-    *c->reg[2] = 0;
+    if (wide && ((p[1] >> 3) & 7) == 7 && (p[1] >> 6) == 3 && (uint32_t)*c->reg[(p[1] & 7) | ((rex & 1) << 3)] == 0xFFFFFFFFu) {
+        *c->reg[2] = 0;                     /* overflow: the quotient register already holds the dividend */
+    } else if (wide) {
+        *c->reg[2] = (uint32_t)*c->reg[0];
+        *c->reg[0] = 0;
+    } else {
+        *c->reg[0] = 0;
+        *c->reg[2] = 0;
+    }
     *c->rip = (uint64_t)(uintptr_t)(p + 1 + length);
     ss_tolerated++;
     return 1;

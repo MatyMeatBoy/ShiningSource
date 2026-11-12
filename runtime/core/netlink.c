@@ -1,8 +1,8 @@
 /* Online play: the link cable replaced by the network, under the game's own link driver.
  *
  * The game talks to the cable through the SDK's MultiSio library: once per frame it hands over one 24-byte
- * block and gets back the block each connected console sent, plus a status word. Those three entry points are
- * replaced here (linked with --wrap); nothing above them changes, so the game's own lobby, handshakes and
+ * block and gets back the block each connected console sent, plus a status word. Its init and per-frame entry
+ * points are replaced here (linked with --wrap); nothing above them changes, so the game's own lobby, handshakes and
  * packets run as they do over a cable.
  *
  * Rules (the GBANoCable model):
@@ -34,10 +34,8 @@ enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END };
 
 void sub_0800170C(void);
 uint32_t sub_08001804(void *sendp, void *recvp);
-void sub_08001A64(void);
 void __real_sub_0800170C(void);
 uint32_t __real_sub_08001804(void *sendp, void *recvp);
-void __real_sub_08001A64(void);
 
 struct stream {                 /* the blocks of one seat, by label */
     int known;                  /* a stream of this seat is being received */
@@ -309,11 +307,10 @@ void __wrap_sub_0800170C(void)
     send_hello();
 }
 
-/* MultiSioStop */
-void __wrap_sub_08001A64(void)
+/* The link task ended its session (called from the game through games/<game>/port/patches.json). */
+void ss_net_leave(void)
 {
     leave();
-    __real_sub_08001A64();
 }
 
 /* MultiSioMain: one block out, the blocks of frame F - delay in. */

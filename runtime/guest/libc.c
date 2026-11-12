@@ -224,3 +224,9 @@ double sin(double x) { return SS_HOST(SS_B_SIN, double (*)(double))(x); }
 double cos(double x) { return SS_HOST(SS_B_COS, double (*)(double))(x); }
 double fmod(double x, double y) { return SS_HOST(SS_B_FMOD, double (*)(double, double))(x, y); }
 long lround(double x) { return (long)(x < 0 ? x - 0.5 : x + 0.5); }
+
+/* clang for the arm64_32 target turns a zeroing memset into this call */
+void bzero(void *destination, size_t size)
+{
+    memset(destination, 0, size);
+}

@@ -6,7 +6,13 @@
 #include <stdlib.h>
 
 const uint32_t *ss_bridge;
+#ifdef __MACH__         /* arm64_32 image: the linker names the bounds of the code section */
+extern char __image_start[] __asm("section$start$__TEXT$__text");
+extern char __text_end[] __asm("section$end$__TEXT$__text");
+#define __image_end __text_end
+#else
 extern char __image_start[], __image_end[], __text_end[];
+#endif
 
 void AgbMain(void);
 
@@ -40,6 +46,15 @@ void *ss_co_create(void (*entry)(void *), void *argument)
     }
     co->stack_low = SS_HOST(SS_B_STACK_ALLOC, uint32_t (*)(uint32_t))(STACK_BYTES);
     co->stack_high = co->stack_low + STACK_BYTES;
+#ifdef __aarch64__
+    /* what ss_co_swap loads: x19..x30 and d8..d15 (22 slots); x30 is where it returns */
+    frame = (uint64_t *)(uintptr_t)(co->stack_high - 192);
+    for (i = 0; i < 24; i++)
+        frame[i] = 0;
+    frame[0] = (uint64_t)(uintptr_t)argument;   /* x19 */
+    frame[1] = (uint64_t)(uintptr_t)entry;      /* x20 */
+    frame[11] = (uint64_t)(uintptr_t)ss_co_start;       /* x30 */
+#else
     /* what ss_co_swap pops: r15 r14 r13 r12 rbx rbp, then the return address */
     frame = (uint64_t *)(uintptr_t)(co->stack_high - 64);
     frame[0] = 0;                               /* r15 */
@@ -50,6 +65,7 @@ void *ss_co_create(void (*entry)(void *), void *argument)
     frame[5] = 0;                               /* rbp */
     frame[6] = (uint64_t)(uintptr_t)ss_co_start;
     frame[7] = 0;
+#endif
     co->sp = (uint64_t)(uintptr_t)frame;
     return co;
 }

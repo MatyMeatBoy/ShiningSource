@@ -65,7 +65,7 @@ def main():
     runtime_objects = []
     rt_flags = [*GUEST_TARGET, "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/guest/include"), "-I", str(ROOT / "runtime/include"),
                 "-I", str(ROOT / "runtime/guest")]
-    for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/guest").glob("*.c")) + sorted((ROOT / "runtime/guest").glob("*.S")):
+    for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/guest").glob("*.c")) + [ROOT / "runtime/guest/co_x64.S"]:
         target = out / "rt" / (source.stem + ".o")
         run([cc, *rt_flags, "-c", str(source), "-o", str(target)], source.name)
         runtime_objects.append(target)

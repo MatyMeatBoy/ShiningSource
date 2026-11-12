@@ -12,5 +12,12 @@
    "find": "asm volatile(\"movs r1, #16\\n\\t.hword 0x4308\\n\\tmovs r1, #9\\n\\t.hword 0x4249\\n\\t.hword 0x4008\" : \"+r\"(value) : : \"r1\", \"memory\");",
    "replace": "value = (value | 16) & ~8u;"
   }
+ ],
+ "code_08001A50.c": [
+  {
+   "why": "Online: the link task tells the network layer that the session ended, so the other players are told at once. The call to MultiSioStop sits in the same file as its definition, where a linker wrap does not reach.",
+   "find": "    sub_08001A64();\n    gLinkFlags = 0x80000000;",
+   "replace": "    sub_08001A64();\n    ss_net_leave();\n    gLinkFlags = 0x80000000;"
+  }
  ]
 }
