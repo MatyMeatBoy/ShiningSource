@@ -11,6 +11,7 @@ static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
 static uint64_t next_frame_ns;
+static SDL_Gamepad *gamepad;
 
 /* GBA buttons, bit order of KEYINPUT: A B Select Start Right Left Up Down R L */
 static const SDL_Scancode keys[10] = {
@@ -60,7 +61,7 @@ int ss_video_init(const char *title)
 {
     SDL_AudioSpec spec;
 
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO)) {
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
@@ -99,11 +100,37 @@ void ss_video_frame(void)
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_EVENT_QUIT || (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_ESCAPE))
             exit(0);
+        if (event.type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
+            gamepad = SDL_OpenGamepad(event.gdevice.which);
+        if (event.type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == event.gdevice.which) {
+            SDL_CloseGamepad(gamepad);
+            gamepad = NULL;
+        }
+        if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11)
+            SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
     }
     state = SDL_GetKeyboardState(NULL);
     for (i = 0; i < 10; i++)
         if (state[keys[i]])
             held |= (uint16_t)(1 << i);
+    if (gamepad) {
+        /* same bit order as `keys`; the south button is A as on the console's layout, sticks act as the d-pad */
+        static const SDL_GamepadButton buttons[10] = {
+            SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
+            SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+            SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
+        };
+        int x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
+        for (i = 0; i < 10; i++)
+            if (SDL_GetGamepadButton(gamepad, buttons[i]))
+                held |= (uint16_t)(1 << i);
+        if (x > 12000) held |= 1 << 4;
+        if (x < -12000) held |= 1 << 5;
+        if (y < -12000) held |= 1 << 6;
+        if (y > 12000) held |= 1 << 7;
+    }
+    if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
+    if ((held & 0xC0) == 0xC0) held &= ~0xC0;
     REG_KEYINPUT = (uint16_t)(~held & 0x03FF);     /* the register is active low */
 
     ss_ppu_render(pixels, SS_SCREEN_W);

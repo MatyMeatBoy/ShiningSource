@@ -32,7 +32,8 @@ $ build/dev32/ss2/ss2_dev32.exe                       # or double-click: asks fo
 ```
 
 Keys: arrows, `X` = A, `Z` = B, `C` = L, `V` = R, `Enter` = Start, right
-`Shift` = Select, `Esc` quits. `tools/run.sh FRAMES INPUT DUMP` runs without a
+`Shift` = Select, `F11` full screen, `Esc` quits. A controller works when
+plugged in (d-pad or left stick, A/B as on the console, shoulders, Start, Back). `tools/run.sh FRAMES INPUT DUMP` runs without a
 window with scripted input and writes the picture of one frame, which is how the
 port is tested. No screenshots are stored here: they are game artwork.
 

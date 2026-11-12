@@ -76,7 +76,9 @@ Open:
 
 - [ ] Per-scanline effects (registers changed during HBlank): the renderer
       draws whole frames.
-- [ ] Controller input and remapping.
+- [x] Controller input (SDL gamepad, hot-plug). Remapping comes with the launcher.
+- [x] Stability: 32,000 frames of play with random scripted input in the first
+      field scene (movement, attacks, the menu ring) without a crash.
 - [ ] Calls that rely on ARM register reuse. `tools/check_calls.py` lists calls
       that pass fewer arguments than the function takes; the real ones are
       fixed **in the decompilation** (the ROM still matches with the argument
