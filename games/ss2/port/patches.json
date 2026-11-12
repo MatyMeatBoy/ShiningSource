@@ -12,12 +12,5 @@
    "find": "asm volatile(\"movs r1, #16\\n\\t.hword 0x4308\\n\\tmovs r1, #9\\n\\t.hword 0x4249\\n\\t.hword 0x4008\" : \"+r\"(value) : : \"r1\", \"memory\");",
    "replace": "value = (value | 16) & ~8u;"
   }
- ],
- "code_0805D094.c": [
-  {
-   "why": "The array is declared one line before its element struct is defined; a C compiler other than agbcc needs the struct first.",
-   "find": "extern struct Player61 gParty61[] asm(\"gUnk_03003CE0\");\nstruct Player61 { u8 pad[0x38]; s16 limit; u8 rest[0x112]; };",
-   "replace": "struct Player61 { u8 pad[0x38]; s16 limit; u8 rest[0x112]; };\nextern struct Player61 gParty61[] asm(\"gUnk_03003CE0\");"
-  }
  ]
 }
