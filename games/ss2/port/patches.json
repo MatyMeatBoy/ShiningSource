@@ -1,0 +1,23 @@
+{
+ "code_08021DC4.c": [
+  {
+   "why": "The original reads the three incoming argument registers with ARM instructions; in C they are the parameters.",
+   "find": "asm volatile(\"movs %0, r0\\n\\tmov %1, r1\\n\\tmovs %2, r2\" : \"=r\"(val0), \"=r\"(val1), \"=r\"(val2));",
+   "replace": "val0 = arg0; val1 = arg1; val2 = (u32)arg2;"
+  }
+ ],
+ "code_0801AAF8.c": [
+  {
+   "why": "Hand-encoded Thumb: r0 |= 16; r1 = -9; r0 &= r1. Sets bit 4 and clears bit 3.",
+   "find": "asm volatile(\"movs r1, #16\\n\\t.hword 0x4308\\n\\tmovs r1, #9\\n\\t.hword 0x4249\\n\\t.hword 0x4008\" : \"+r\"(value) : : \"r1\", \"memory\");",
+   "replace": "value = (value | 16) & ~8u;"
+  }
+ ],
+ "code_0805D094.c": [
+  {
+   "why": "The array is declared one line before its element struct is defined; a C compiler other than agbcc needs the struct first.",
+   "find": "extern struct Player61 gParty61[] asm(\"gUnk_03003CE0\");\nstruct Player61 { u8 pad[0x38]; s16 limit; u8 rest[0x112]; };",
+   "replace": "struct Player61 { u8 pad[0x38]; s16 limit; u8 rest[0x112]; };\nextern struct Player61 gParty61[] asm(\"gUnk_03003CE0\");"
+  }
+ ]
+}

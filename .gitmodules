@@ -1,0 +1,3 @@
+[submodule "games/ss2/decomp"]
+	path = games/ss2/decomp
+	url = https://github.com/MatyMeatBoy/SS2Decomp.git
