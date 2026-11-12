@@ -39,7 +39,8 @@ port is tested. No screenshots are stored here: they are game artwork.
 
 **Online** works on one machine: the game's MULTIPLAYER MODE runs over the
 network for 2 to 4 players, through a small relay (`relay/`). Tested with four
-players, 10% packet loss and 120-160 ms of lag; not yet between real machines.
+players, 10% packet loss and 120-160 ms of lag, and through the public relay
+from one PC; not yet between real machines.
 In the launcher: page Online, same room name for everyone, then MULTIPLAYER
 MODE in the game. Without the launcher: `SS_NET=host:port SS_NET_ROOM=name`.
 

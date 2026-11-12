@@ -32,6 +32,17 @@ The unit runs it as an unprivileged dynamic user and restarts it if it stops.
 Restarting the relay does not end a session: the players keep asking for their
 seat and get it back within a quarter of a second.
 
+## Run as a container
+
+```
+docker build -t ss_relay relay
+docker run -d --restart=always -p 47900:47900/udp ss_relay
+```
+
+The image is a static binary on an empty base, running as an unprivileged
+user. On a panel that builds from a pasted Dockerfile, publish UDP port 47900
+to the same port of the container.
+
 ## Testing a bad network on one machine
 
 ```

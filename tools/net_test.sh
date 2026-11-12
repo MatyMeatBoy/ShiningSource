@@ -1,5 +1,5 @@
 #!/bin/sh
-# net_test.sh PLAYERS FRAMES [DELAY] [INPUT] [DUMP_FRAME] [LOSS LAG JITTER] [win64|dev32] [pace]: headless online test on this machine.
+# net_test.sh PLAYERS FRAMES [DELAY] [INPUT] [DUMP_FRAME] [LOSS LAG JITTER] [win64|dev32] [pace] [SERVER host:port instead of a local relay]: headless online test on this machine.
 # Starts the relay, runs PLAYERS copies of the dev32 build in one room and compares what each was given.
 # Every copy logs one line per delivered frame (label, players, hash); frames delivered to several copies with
 # the same players must have the same hash.
@@ -15,7 +15,7 @@ PORT=47955
 SS_RELAY_LOSS=${6:-0} SS_RELAY_LAG=${7:-0} SS_RELAY_JITTER=${8:-0} "$ROOT/build/relay/ss_relay.exe" $PORT > "$ROOT/build/relay/relay.log" 2>&1 &
 RELAY=$!
 sleep 1
-export SS_NET=127.0.0.1:$PORT SS_NET_ROOM=test$$ SS_NET_DELAY=${3:-4} SS_FRAMES=$FRAMES SS_INPUT=${4:-} SS_NET_PLAYERS=$PLAYERS SS_DUMP=${5:-0}
+export SS_NET=${11:-127.0.0.1:$PORT} SS_NET_ROOM=test$$ SS_NET_DELAY=${3:-4} SS_FRAMES=$FRAMES SS_INPUT=${4:-} SS_NET_PLAYERS=$PLAYERS SS_DUMP=${5:-0}
 i=1
 while [ $i -le "$PLAYERS" ]; do
     mkdir -p "$ROOT/build/net$i"

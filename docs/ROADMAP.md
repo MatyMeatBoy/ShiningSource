@@ -168,9 +168,9 @@ Open:
       Resolve them in the decompilation with `tools/scripts/try_edit.py`
       (six done on 2026-11-12).
 - [x] Linux host (`runtime/host64/host_linux.c`, `tools/build_linux64.py`):
-      cross-compiled from Windows against a Debian sysroot. **Not run yet**:
-      there is no Linux on the development machine. First run on Linux is the
-      check (`./ss2_linux64 ROM.gba`, then the same `SS_HASH_ALL` comparison).
+      cross-compiled on Windows and run on Debian 12 x86-64 (a QEMU machine):
+      the 32,000-frame play-through ends with the same hash as Windows,
+      5711719E. Not yet run with a window and sound on a Linux desktop.
 - [ ] Android host. Needs an arm64 game image (the same sources compiled for
       `aarch64` with 32-bit pointers, `arm64_32`/ILP32), a host inside an SDL
       Android activity that maps the low address space, and an APK project.
@@ -236,13 +236,17 @@ Open:
       takes 50% longer and nothing breaks.
 - [x] Launcher page: room name, delay, server, connection measurement.
 - [x] Window title shows the room, the seat and who is being waited for.
-- [ ] Relay running on the VPS (needs the owner's access; `relay/README.md`).
+- [x] Relay running on the server (2026-11-12): its own container and UDP
+      port 47900, next to ReKHCoM's relay and sharing nothing with it
+      (`relay/Dockerfile`). Four players on one PC played through it at full
+      speed with delay 4 (12 ms to the server), 3,109 frames, all consistent.
 - [ ] Real sessions: two machines, then four players on different continents.
 - [ ] A scripted multiplayer run that goes into a dungeon (so far the scripts
       reach the opening scenes, with the game's `GO`/`OK` barriers passing).
 - [ ] Delay chosen automatically from the players' measured latency before the
       session starts (today the host sets it in the launcher).
-- [ ] Linux and Android builds tested on their systems (same code).
+- [ ] Online on Linux (the host runs there; a session has not been tried)
+      and the Android build.
 - Shelved: prediction with rollback. The game reads its own block locally, so
   delay does not slow the player's own controls (docs/ARCHITECTURE.md, 7).
 
