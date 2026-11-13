@@ -192,6 +192,59 @@ static void walk_lines(void)
     REG_VCOUNT = 160;
 }
 
+/* ---- the finished picture, before it is shown ----
+ *
+ * Fast flicker. The cartridge makes things blink by changing them every frame or every two (the option being
+ * confirmed in a menu, a selection that is redrawn, effects), counting on a slow screen to melt the two pictures
+ * together; a modern display shows each one sharply and the eye gets a hard blink. Where a pixel goes A, B, A
+ * (or A, A, B, B, A) it is shown as the mix of the two, steadily, for as long as it keeps doing that. A pixel
+ * that simply changes is untouched, so movement stays sharp. SS_SMOOTH=0 turns it off.
+ *
+ * The sides. In a scene that keeps the console's composition the columns beside it are left to the platform,
+ * which draws its own field there. When the game's picture goes dark (a fade, a loading screen) a bright
+ * frame around a black screen is the last thing wanted: the sides darken with the picture, a step at a time. */
+static void finish_picture(uint32_t *pixels, int width)
+{
+    static uint32_t past[4][SS_MAX_VIEW_W * SS_SCREEN_H];
+    static int past_width, smooth = -1, shade;
+    int count = width * SS_SCREEN_H, i, peak = 0, wanted;
+
+    if (smooth < 0)
+        smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
+    if (past_width != width) {          /* the window changed: nothing to compare with */
+        for (i = 0; i < 4; i++)
+            memcpy(past[i], pixels, (size_t)count * 4);
+        past_width = width;
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t now = pixels[i], a = past[0][i], b = past[1][i], c = past[2][i], d = past[3][i], other = now;
+        past[3][i] = c; past[2][i] = b; past[1][i] = a; past[0][i] = now;
+        if (!(now >> 24))
+            continue;                   /* a side column: nothing of the game's there */
+        if ((i & 3) == 0) {
+            int r = (now >> 16) & 255, g = (now >> 8) & 255, bl = now & 255;
+            if (r > peak) peak = r;
+            if (g > peak) peak = g;
+            if (bl > peak) peak = bl;
+        }
+        if (!smooth)
+            continue;
+        if (now != a && now == b) other = a;                            /* A B A */
+        else if (now != a && a == b && now == c) other = a;             /* A B B A */
+        else if (now == a && now != b && b == c && now == d) other = b; /* A A B B A A */
+        if (other != now && (other >> 24))
+            pixels[i] = 0xFF000000u | (((now >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + (now & other & 0x010101));
+    }
+    /* how dark the sides are: full when the picture is black, none from a third of full brightness up */
+    wanted = peak >= 96 ? 0 : 255 - peak * 255 / 96;
+    if (wanted > shade) shade = wanted - shade > 24 ? shade + 24 : wanted;
+    else shade = shade - wanted > 24 ? shade - 24 : wanted;
+    if (shade)
+        for (i = 0; i < count; i++)
+            if (!(pixels[i] >> 24))
+                pixels[i] = (uint32_t)shade << 24;      /* black, as strong as the picture is dark */
+}
+
 void VBlankIntrWait(void)
 {
     ss_net_flush();             /* online: what this frame wrote goes out before the frame's time is waited out */
@@ -272,6 +325,7 @@ void VBlankIntrWait(void)
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
             if (skip.present) {
                 ss_ppu_render(pixels, width, &view);
+                finish_picture(pixels, width);
                 ss_plat_overlay(skip.darkness, skip.text);
                 held = ss_plat_present(pixels, width);
             } else if (ss_net_active()) {

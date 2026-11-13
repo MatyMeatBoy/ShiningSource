@@ -23,7 +23,7 @@
 
 enum { KEY_A = 0x001, KEY_B = 0x002, KEY_START = 0x008 };
 enum { IDLE, PROMPT, VOTING, FADE_OUT, SKIPPING, FADE_IN };
-enum { FADE_STEP = 13, PROMPT_FRAMES = 180, SKIP_LIMIT = 36000, ONLINE_LIMIT = 3600 };
+enum { FADE_STEP = 7, PROMPT_FRAMES = 180, SKIP_LIMIT = 36000, ONLINE_LIMIT = 3600 };
 
 uint32_t ss_frame_hash(void);   /* frame.c: a hash of the video state */
 void sub_08086860(void);        /* TaskPlayStoryIntroduction */
