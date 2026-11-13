@@ -823,6 +823,19 @@ static std::string keep_copy(const char *source, const char *label)
     return CopyFileA((folder + source).c_str(), (folder + "saves\\" + name).c_str(), TRUE) ? name : "";
 }
 
+/* Tests: SS_LAUNCHER_TEST=keep, or restore (a comma list) presses that button of this page once, as a click
+ * would: "keep" the first "Keep a copy now", "restore" the newest copy's "Put back" and then its "Yes". */
+static bool test_press(const char *what)
+{
+    static std::string done;
+    const char *list = getenv("SS_LAUNCHER_TEST");
+    std::string token = std::string(",") + what + ",";
+    if (!list || (std::string(",") + list + ",").find(token) == std::string::npos || done.find(token) != std::string::npos)
+        return false;
+    done += token;
+    return true;
+}
+
 static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green)
 {
     static std::string answer, ask_restore;
@@ -848,7 +861,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
         if (have_before)
             ImGui::TextColored(dim, text("Backup of the one before: %s", "Respaldo de la anterior: %s"), minute_of(before.when).c_str());
         ImGui::BeginDisabled(!have);
-        if (ImGui::Button(text("Keep a copy now", "Guardar una copia ahora"))) {
+        if (ImGui::Button(text("Keep a copy now", "Guardar una copia ahora")) || (have && &kind == &kinds[0] && test_press("keep"))) {
             std::string name = keep_copy(kind.file, kind.label);
             answer_good = !name.empty();
             answer = answer_good ? std::string(text("Copy kept: ", "Copia guardada: ")) + name : text("The copy could not be written.", "No se pudo escribir la copia.");
@@ -870,7 +883,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
     for (const SaveFile &copy : copies) {
         bool rebel = copy.name.compare(0, 5, "rebel") == 0;
         ImGui::PushID(copy.name.c_str());
-        if (ImGui::SmallButton(text("Put back", "Recuperar")))
+        if (ImGui::SmallButton(text("Put back", "Recuperar")) || (&copy == &copies[0] && test_press("restore")))
             ask_restore = copy.name;
         ImGui::SameLine();
         ImGui::Text("%s", minute_of(copy.when).c_str());
@@ -885,7 +898,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
         ImGui::TextWrapped(text("Put %s back as %s? The present save is first kept as a copy here. Close the game before doing this.",
                                 "\xC2\xBFRecuperar %s como %s? La partida actual se guarda antes como copia aqu\xC3\xAD. Cierra el juego antes de hacerlo."),
                            ask_restore.c_str(), text(kind.english, kind.spanish));
-        if (ImGui::Button(text("Yes, put it back", "S\xC3\xAD, recuperar"))) {
+        if (ImGui::Button(text("Yes, put it back", "S\xC3\xAD, recuperar")) || test_press("restore-yes")) {
             SaveFile present;
             bool safe = !file_facts(folder + kind.file, present) || !keep_copy(kind.file, rebel ? "rebel-before-restore" : "normal-before-restore").empty();
             answer_good = safe && CopyFileA((folder + "saves\\" + ask_restore).c_str(), (folder + kind.file).c_str(), FALSE);
