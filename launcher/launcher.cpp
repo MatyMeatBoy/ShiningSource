@@ -617,8 +617,8 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
             }
             ImGui::TextWrapped("%s", text("Off: the list is still followed while you play and kept on this PC. On: unlocks are sent as softcore. "
                                           "RetroAchievements only counts programs it has approved, and this port is not one of them yet: use it at your own judgement.",
-                                          "Desactivado: la lista se sigue igualmente mientras juegas y se guarda en este PC. Activado: los logros se env\xC3\xADan como softcore. "
-                                          "RetroAchievements solo cuenta los programas que ha aprobado y este port a\xC3\xBAn no lo es: \xC3\xBAsalo bajo tu criterio."));
+                                          "Desactivado: la lista se sigue igualmente mientras juegas y se guarda en este PC. Activado: los logros se env\xC3\xAD" "an como softcore. "
+                                          "RetroAchievements solo cuenta los programas que ha aprobado y este port a\xC3\xBA" "n no lo es: \xC3\xBAsalo bajo tu criterio."));
         }
     } else {
         ImGui::TextWrapped("%s", text("Sign in with your RetroAchievements account to see this game's achievements.",
