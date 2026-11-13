@@ -148,7 +148,7 @@ def main():
             run([cc, *ra_flags, "-Wall" if ours else "-w", "-c", str(source), "-o", str(target)], source.name)
         ra_objects.append(str(target))
     run([cc, "--target=x86_64-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(sdl / "include"),
-         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), *ra_objects, "-o", str(host),
+         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), *ra_objects, *[o for o in [build.icon_object(out)] if o], "-o", str(host),
          "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32", "-lws2_32", "-lwinhttp", "-lcrypt32",
          "-Wl,-Bstatic", "-lwinpthread", "-Wl,-Bdynamic",      # rcheevos' clock; static, so no extra DLL ships
          # host code must be callable through 32-bit addresses

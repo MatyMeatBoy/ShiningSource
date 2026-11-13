@@ -62,6 +62,18 @@ if os.environ.get("SHININGSOURCE_TRACE"):       # call trace build, see runtime/
     CFLAGS.append("-finstrument-functions")
 
 
+def icon_object(out):
+    """The port's icon as a Windows resource object (assets/icon.ico, drawn by tools/make_icon.py), or None."""
+    icon = ROOT / "assets/icon.ico"
+    windres = Path(clang()).with_name("x86_64-w64-mingw32-windres.exe")
+    if not icon.exists() or not windres.exists():
+        return None
+    rc, obj = Path(out) / "icon.rc", Path(out) / "icon.res.o"
+    rc.write_text('1 ICON "%s"\n' % icon.as_posix(), encoding="utf-8")
+    done = subprocess.run([str(windres), str(rc), "-O", "coff", "-o", str(obj)], capture_output=True, text=True)
+    return str(obj) if done.returncode == 0 else None
+
+
 def clang():
     for hint in TOOLCHAIN_HINTS:
         exe = Path(hint) / "bin/clang.exe"
