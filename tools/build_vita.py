@@ -22,7 +22,7 @@ import build, link, make_icon, rebase_ir, rebased
 ROOT = build.ROOT
 TARGET = ["--target=armv7a-none-eabihf", "-mcpu=cortex-a9", "-mfpu=neon", "-mthumb", "-ffreestanding", "-fno-short-enums",
           "-fno-stack-protector", "-fno-common", "-fno-unwind-tables", "-fno-asynchronous-unwind-tables"]
-TITLE_ID, VERSION = "SSRC00001", "00.84"
+TITLE_ID, VERSION = "SSRC00001", "00.85"
 # the Vita's user memory starts at 0x81000000: any address below this is nothing of the program's
 STRAY = rebase_ir.STRAY_BELOW(0x10000000)
 
