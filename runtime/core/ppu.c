@@ -291,11 +291,11 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
             int obj_visible, semi = 0;
 
             if (!view.world && view.width > W && native_x(X, y) < 0 && y >= view.hud_rows) {
-                out[X] = 0xFF000000u;       /* side bars of a scene that keeps the console's composition */
+                out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 continue;
             }
             if (view.world && (X < view.hud_left || X >= view.hud_right)) {
-                out[X] = 0xFF000000u;       /* beside a map narrower than the view there is nothing: black, not the backdrop colour */
+                out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* beside a map narrower than the view there is nothing: black, not the backdrop colour */
                 continue;
             }
             if (windows) {

@@ -162,6 +162,7 @@ int ss_plat_video_init(const char *title)
     }
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);      /* transparent pixels let the side field show */
 #ifdef __ANDROID__
     SDL_SetWindowFullscreen(window, true);
 #else
@@ -193,7 +194,7 @@ void ss_plat_audio(const int16_t *samples, int frames)
  * a border. SS_BORDER is its thickness in console pixels (0 to 64) and SS_BORDER_STYLE its look (0 black,
  * 1 graphite, 2 indigo, 3 silver, 4 "Soul", the default). The border is drawn here, with no artwork of any game
  * or console. */
-static int classic = -1, border, border_style;
+static int classic = -1, border, border_style, sides_field = 1;
 
 static void read_mode(void)
 {
@@ -202,6 +203,7 @@ static void read_mode(void)
     border = getenv("SS_BORDER") ? atoi(getenv("SS_BORDER")) : 16;
     if (border < 0) border = 0;
     if (border > 64) border = 64;
+    sides_field = !(getenv("SS_SIDES") && getenv("SS_SIDES")[0] == '0');
     border_style = getenv("SS_BORDER_STYLE") ? atoi(getenv("SS_BORDER_STYLE")) : 4;
     if (border_style < 0 || border_style > 4) border_style = 4;
 }
@@ -224,6 +226,24 @@ static void jewel(int cx, int cy, int size, int r, int g, int b)
     fill((float)(cx - size / 2), (float)(cy - size / 2), (float)(size / 2 + 1), 1, 255, 250, 220);
 }
 
+/* The field of the Soul look: blue-green, darker towards the bottom, with a fixed pattern of points of light.
+ * Nothing is drawn inside the given box (where the picture goes). */
+static void draw_field(int w, int h, int box_left, int box_top, int box_right, int box_bottom)
+{
+    int x, y, k;
+    for (y = 0; y < h; y++) {
+        int t = y * 255 / (h > 1 ? h - 1 : 1);
+        fill(0, (float)y, (float)w, 1, 20 - t * 10 / 255, 62 - t * 34 / 255, 74 - t * 36 / 255);
+    }
+    for (y = 3; y < h; y += 7)
+        for (x = 3 + (y * 5) % 11; x < w; x += 13) {
+            if (x >= box_left && x < box_right && y >= box_top && y < box_bottom)
+                continue;
+            k = (x * 31 + y * 17) % 5;
+            fill((float)x, (float)y, 1, 1, 60 + k * 22, 120 + k * 20, 130 + k * 20);
+        }
+}
+
 /* Style 4, "Soul": the port's own frame in the spirit of the game's menus. A deep blue-green field that darkens
  * towards the bottom, faint lattice of light points like a night sky, a gold frame with a bright and a dark
  * line, and jewels at the corners and the middles of the sides. Everything is computed; nothing is copied from
@@ -232,19 +252,9 @@ static void draw_soul_border(void)
 {
     const int w = SS_SCREEN_W + 2 * border, h = SS_SCREEN_H + 2 * border;
     const int left = border, top = border, right = border + SS_SCREEN_W, bottom = border + SS_SCREEN_H;
-    int y, x, k, size = border >= 20 ? 4 : border >= 12 ? 3 : 2;
+    int k, size = border >= 20 ? 4 : border >= 12 ? 3 : 2;
 
-    for (y = 0; y < h; y++) {                       /* the field, darker towards the bottom */
-        int t = y * 255 / (h > 1 ? h - 1 : 1);
-        fill(0, (float)y, (float)w, 1, 20 - t * 10 / 255, 62 - t * 34 / 255, 74 - t * 36 / 255);
-    }
-    for (y = 3; y < h; y += 7)                       /* points of light, a fixed pattern */
-        for (x = 3 + (y * 5) % 11; x < w; x += 13) {
-            if (x >= left - 3 && x < right + 3 && y >= top - 3 && y < bottom + 3)
-                continue;
-            k = (x * 31 + y * 17) % 5;
-            fill((float)x, (float)y, 1, 1, 60 + k * 22, 120 + k * 20, 130 + k * 20);
-        }
+    draw_field(w, h, left - 3, top - 3, right + 3, bottom + 3);
     if (border < 4) {
         fill((float)left - 1, (float)top - 1, SS_SCREEN_W + 2, SS_SCREEN_H + 2, 232, 168, 56);
         return;
@@ -558,6 +568,10 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     } else {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+        /* Enhanced mode: where the picture has nothing to show (beside a menu, past the edge of a map) the
+         * renderer leaves the pixels transparent and the port's field shows through. SS_SIDES=0 keeps black. */
+        if (width > SS_SCREEN_W && sides_field)
+            draw_field(width, SS_SCREEN_H, 0, 0, 0, 0);
         SDL_RenderTexture(renderer, texture, &source, NULL);
         draw_overlay(width, SS_SCREEN_H);
         held |= touch_buttons(width);
