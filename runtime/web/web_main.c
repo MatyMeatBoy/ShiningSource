@@ -118,10 +118,14 @@ uint32_t ss_plat_ticks_ms(void) { return (uint32_t)emscripten_get_now(); }
 
 /* ---- start ---- */
 
-int main(void)
+int main(int argc, char **argv)
 {
     const char *error = "";
     FILE *probe;
+    (void)argc; (void)argv;
+    /* Showing a frame does not wait for the display in a browser (it only hands control back for a moment), so
+     * the display cannot pace the game here: the game keeps the console's own 59.7275 Hz. */
+    setenv("SS_VSYNC", "0", 0);
     /* the page puts the user's file there when they choose it */
     while ((probe = fopen("/rom.gba", "rb")) == NULL)
         emscripten_sleep(100);

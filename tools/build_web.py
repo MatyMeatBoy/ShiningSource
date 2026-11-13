@@ -13,10 +13,16 @@ LLVM IR before it is compiled:
     a symbol at an address;
   - every division is given the cartridge's results explicitly (tools/division_ir.py): a division by zero
     stops a WebAssembly program for good;
-  - a function declared with another signature than its definition is redeclared with the real one, and the
-    compiler then adapts each call (a call with a signature that is not the function's is replaced by a trap
-    otherwise). The decompilation's declarations are being corrected at the source; this keeps the build
-    independent of how far that is.
+  - a function declared with another signature than its definition is redeclared with the real one, and each
+    call that does not agree with it goes through a small function that converts the values as the cartridge's
+    registers would have (adapt_calls below): a call with a signature that is not the function's is replaced
+    by a trap otherwise. A function another module declares as a variable, to take its address, is declared as
+    the function it is: the linker crashes on a name that is a function here and data there. The
+    decompilation's declarations are being corrected at the source; this keeps the build independent of how
+    far that is.
+
+Emscripten is run with its own Python: its library cache is emptied whenever the spelling of its path changes,
+which depends on the Python that runs it.
 """
 import argparse, concurrent.futures, json, os, re, shutil, subprocess, sys
 from pathlib import Path
@@ -25,24 +31,124 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import absolute_ir, build, division_ir, link
 
 ROOT = build.ROOT
-DEFINE = re.compile(r'^define (?:[\w()]+ )*?((?:[\w.%"*\[\] ]+?)) @([\w.$]+)\(((?:[^()\n]|\([^()\n]*\))*)\)[^\n]*\{', re.M)
+# a variable a module defines and other modules can see (not `external`, not local to the module)
+VARIABLE = re.compile(r'^@(?:"((?:[^"\\]|\\.)+)"|([-\w.$]+)) = (?!external |internal |private |extern_weak )[^\n]*\b(?:global|constant) ', re.M)
+DEFINE =re.compile(r'^define (?:[\w()]+ )*?((?:[\w.%"*\[\] ]+?)) @([\w.$]+)\(((?:[^()\n]|\([^()\n]*\))*)\)[^\n]*\{', re.M)
 DECLARE = re.compile(r'^declare (?:(?:![\w.]+|[\w()]+) )*?((?:[\w.%"*\[\] ]+?)) @([\w.$]+)\(((?:[^()\n]|\([^()\n]*\))*)\)[^\n]*$', re.M)
 
 
-def plain(parameters):
-    """Parameter list of a definition without the value names: what a declaration of it looks like."""
+CALL = re.compile(r'^(\s*(?:%[\w.]+ = )?(?:tail |notail )?call )([^@\n]*?)@([\w.$]+)\(', re.M)
+BITS = {"i1": 1, "i8": 8, "i16": 16, "i32": 32, "i64": 64, "ptr": 32}
+BYVAL = re.compile(r'byval\([^)]*\)(?: align \d+)?')
+
+
+def pieces(parameters):
+    """A parameter or argument list cut at its commas (not those inside brackets)."""
     out, depth, current = [], 0, ""
     for ch in parameters + ",":
         depth += ch in "([{"
         depth -= ch in ")]}"
         if ch == "," and depth == 0:
-            text = re.sub(r'\s+%[\w.]+\s*$', "", current.strip())
-            if text:
-                out.append(text)
+            if current.strip():
+                out.append(current.strip())
             current = ""
         else:
             current += ch
-    return ", ".join(out)
+    return out
+
+
+def plain(parameters):
+    """Parameter list of a definition without the value names: what a declaration of it looks like."""
+    return ", ".join(re.sub(r'\s+%[\w.]+\s*$', "", text) for text in pieces(parameters))
+
+
+def shape(text, result=False):
+    """(type, extension, by-value attribute) of a parameter or an argument, or of a return type, as the IR writes it:
+    the type comes first in a parameter ("i16 noundef signext %0") and last in a result ("hidden signext i16")."""
+    words = text.split()
+    extension = "signext" if "signext" in words else "zeroext" if "zeroext" in words else ""
+    by_value = BYVAL.search(text)
+    return words[-1] if result else words[0], extension, by_value[0] if by_value else ""
+
+
+def convert(lines, value, source, target, signed):
+    """Add the instructions that turn `value` of type `source` into type `target`; returns the new value."""
+    def step(operation, a, b, value):
+        name = "%%c%d" % len(lines)
+        lines.append("  %s = %s %s %s to %s" % (name, operation, a, value, b))
+        return name
+    if source == target:
+        return value
+    if source == "ptr":
+        value, source = step("ptrtoint", "ptr", "i32", value), "i32"
+    integer = "i32" if target == "ptr" else target
+    if source != integer:
+        value = step("trunc" if BITS[source] > BITS[integer] else "sext" if signed else "zext", source, integer, value)
+    return step("inttoptr", "i32", "ptr", value) if target == "ptr" else value
+
+
+def adapt_calls(text, signatures):
+    """Make every direct call agree with the function it calls.
+
+    The decompilation still declares many functions with another signature than their definition has (a 16-bit
+    parameter declared as 32-bit, a missing parameter, a result nobody returns). The cartridge's processor does
+    not care: parameters travel in registers. WebAssembly checks the signature, and the compiler replaces a call
+    it cannot reconcile by a trap. Each such call therefore goes through a small function with the signature the
+    call uses, which converts the values as the registers would have: a narrower value is the low bits, a wider
+    one is extended as its declaration says, a parameter the call does not give is 0, and so is a result the
+    function does not return. Returns (new text, number of calls redirected, calls left alone because of a type
+    this does not know).
+    """
+    local = {m[2]: (m[1].strip(), plain(m[3])) for m in DEFINE.finditer(text)}
+    wrappers, unknown = {}, set()
+
+    def redirect(m):
+        name = m[3]
+        real = local.get(name) or signatures.get(name)
+        if not real or "(" in m[2]:                    # not the game's, or a call that states a whole function type
+            return m[0]
+        end, depth = m.end(), 1
+        while depth:
+            depth += text[end] == "("
+            depth -= text[end] == ")"
+            end += 1
+        arguments = [shape(a) for a in pieces(text[m.end():end - 1])]
+        result, real_result = shape(m[2], True), shape(real[0], True)
+        parameters = [shape(p) for p in pieces(real[1])]
+        if result[0] == real_result[0] and [a[0] for a in arguments] == [p[0] for p in parameters]:
+            return m[0]
+        kinds = [a[0] for a in arguments] + [p[0] for p in parameters]
+        if any(k not in BITS for k in kinds) or any(k != "void" and k not in BITS for k in (result[0], real_result[0])):
+            unknown.add(name)
+            return m[0]
+        key = (name, result[:2], tuple(arguments))
+        if key not in wrappers:
+            alias = "%s.as.%d" % (name, len(wrappers))
+            lines = ["define internal %s @%s(%s) {" % (" ".join(filter(None, (result[1], result[0]))), alias, ", ".join(
+                "%s %%a%d" % (" ".join(filter(None, (a[0], a[1], a[2]))), i) for i, a in enumerate(arguments)))]
+            passed = []
+            for i, (kind, extension, by_value) in enumerate(parameters):
+                if i < len(arguments):
+                    value = convert(lines, "%%a%d" % i, arguments[i][0], kind, arguments[i][1] == "signext")
+                    by_value = arguments[i][2] if by_value and kind == arguments[i][0] else ""
+                else:
+                    value, by_value = "null" if kind == "ptr" else "0", ""
+                passed.append("%s %s" % (" ".join(filter(None, (kind, extension, by_value))), value))
+            call = "call %s @%s(%s)" % (" ".join(filter(None, (real_result[1], real_result[0]))), name, ", ".join(passed))
+            if real_result[0] == "void":
+                lines.append("  " + call)
+                value = "null" if result[0] == "ptr" else "0"
+            else:
+                lines.append("  %r = " + call)
+                value = "%r" if result[0] == "void" else convert(lines, "%r", real_result[0], result[0], real_result[1] == "signext")
+            lines += ["  ret void" if result[0] == "void" else "  ret %s %s" % (result[0], value), "}"]
+            wrappers[key] = (alias, "\n".join(lines))
+        return "%s%s@%s(" % (m[1], m[2], wrappers[key][0])
+
+    new = CALL.sub(redirect, text)
+    if wrappers:
+        new = new.rstrip("\n") + "\n\n" + "\n\n".join(body for _, body in wrappers.values()) + "\n"
+    return new, len(wrappers), unknown
 
 
 def main():
@@ -61,6 +167,11 @@ def main():
         if not needed.exists():
             sys.exit("missing: %s" % needed)
     env = dict(os.environ)          # emcc finds its own configuration next to itself
+    # Emscripten empties its library cache when the spelling of its own path changes, and that spelling depends
+    # on which Python runs it (MSYS2's writes "/", the others "\"): always its own
+    pythons = sorted((emsdk / "python").glob("*/python.exe"))
+    if pythons and "EMSDK_PYTHON" not in env:
+        env["EMSDK_PYTHON"] = str(pythons[-1])
     out = ROOT / "build/web" / args.game
     for sub in ("ir", "obj"):
         (out / sub).mkdir(parents=True, exist_ok=True)
@@ -99,7 +210,8 @@ def main():
     signatures = {}
     for text in texts.values():
         for m in DEFINE.finditer(text):
-            signatures[m[2]] = (m[1].strip(), plain(m[3]))
+            if not m[0].startswith(("define internal ", "define private ")):        # a module's own: no one else calls it
+                signatures[m[2]] = (m[1].strip(), plain(m[3]))
     # the C library's own, which some modules declare as returning nothing
     signatures["memcpy"] = ("ptr", "ptr, ptr, i32")
     signatures["memset"] = ("ptr", "ptr, i32, i32")
@@ -112,7 +224,14 @@ def main():
         return named.get(name)
 
     # 3. rewrite and compile
-    counts = {"addresses": 0, "divisions": 0, "declarations": 0}
+    counts = {"addresses": 0, "divisions": 0, "declarations": 0, "kinds": 0, "calls": 0}
+    unadapted = set()
+    # the opposite case has no automatic answer: say so here, the linker would only crash
+    variables = {m[1] if m[1] is not None else m[2] for text in texts.values() for m in VARIABLE.finditer(text)}
+    confused = sorted(variables & set(signatures))
+    confused += sorted(m[2] for text in texts.values() for m in DECLARE.finditer(text) if m[2] in variables and m[2] not in signatures)
+    if confused:
+        sys.exit("defined as a variable in one module and used as a function in another: " + ", ".join(sorted(set(confused))))
 
     def finish(unit):
         path = unit[0]
@@ -130,6 +249,22 @@ def main():
             # the struct's type may not exist in this module; each call says itself what it passes by value
             return "declare %s @%s(%s)" % (real[0], m[2], re.sub(r'\s*byval\(%[^)]*\)', "", real[1]))
         text = DECLARE.sub(redeclare, text)
+
+        # a function whose address is taken through a variable's declaration (`extern u32 sub_0805990C;`): a
+        # WebAssembly function is not data, and the linker crashes on a name that is one here and the other there
+        def as_function(m):
+            name = m[1] if m[1] is not None else m[2]
+            real = signatures.get(name)
+            if not real:
+                return m[0]
+            counts["kinds"] += 1
+            if re.search(r'^declare [^\n]*@%s\(' % re.escape(name), text, re.M):
+                return ""
+            return "declare %s @%s(%s)" % (real[0], name, re.sub(r'\s*byval\(%[^)]*\)', "", real[1]))
+        text = absolute_ir.DECLARATION.sub(as_function, text)
+        text, n, unknown = adapt_calls(text, signatures)
+        counts["calls"] += n
+        unadapted.update(unknown)
         ir = out / "ir" / (path.stem + ".ll")
         ir.write_text(text, encoding="utf-8")
         level = "-O1" if unit[2] else "-O2"
@@ -144,6 +279,11 @@ def main():
     # 4. what the game still needs: stubs for functions nobody implements, the code-pointer table
     listing = lambda flags: subprocess.run([str(nm), *flags, *map(str, objects)], capture_output=True, text=True).stdout.splitlines()
     defined = {l.split()[-1] for l in listing(["--defined-only"]) if len(l.split()) == 3}
+    # the compiler's own name for a call it could not reconcile with the function: such a call stops the program
+    traps = sorted({n.split("_bitcast_invalid")[0].removeprefix(".L") for n in defined if "_bitcast_invalid" in n} | unadapted)
+    if traps:
+        print("warning: calls with a signature that is not the function's remain (they stop the program when reached): "
+              + ", ".join(traps[:20]) + (" and %d more" % (len(traps) - 20) if len(traps) > 20 else ""))
     undefined = {l.split()[-1] for l in listing(["--undefined-only"]) if len(l.split()) == 2 and l.split()[0] == "U"}
     functions = link.function_names(args.game)
     stubs = sorted(n for n in undefined - defined if n in functions or re.fullmatch(r"sub_08[0-9A-F]{6}", n))
@@ -186,8 +326,11 @@ def main():
         lines = [l for l in error.splitlines() if "error" in l or "mismatch" in l or "undefined" in l]
         print("\n".join(l[-160:] for l in lines[:25]))
         sys.exit("link failed (full output in %s)" % (out / "link.log").relative_to(ROOT))
-    print("%s: %d fixed addresses as constants, %d divisions guarded, %d declarations given the real signature, %d functions still stubbed"
-          % ((out / "index.html").relative_to(ROOT), counts["addresses"], counts["divisions"], counts["declarations"], len(stubs)))
+    (out / "link.log").unlink(missing_ok=True)
+    print("%s: %d fixed addresses as constants, %d divisions guarded, %d declarations given the real signature "
+          "(%d of a function declared as a variable), %d kinds of call adapted to it, %d functions still stubbed"
+          % ((out / "index.html").relative_to(ROOT), counts["addresses"], counts["divisions"], counts["declarations"] + counts["kinds"],
+             counts["kinds"], counts["calls"], len(stubs)))
     return 0
 
 
