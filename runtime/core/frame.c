@@ -28,6 +28,9 @@
  *                   compares the files of the players of one session.
  *   SS_SCENE_LOG=file  the same moments: the map the game is on and the tokens its barrier holds of each player
  *                   (games/ss2). tools/net_outage_report.py compares the files of the players of one session.
+ *   SS_WHERE_LOG=file  every tenth frame: map, area or room of the town, where this player's character stands, its
+ *                   flags and the scene's (games/ss2). tools/town_report.py reads it for the town tests.
+ *   SS_TEST_WARP=F:M:A  at frame F this player's game changes to area A of map set M (games/ss2; 0:0 is the town)
  *   SS_PACE_FAST=F:K  with SS_PACE: the first F frames at K times the speed.
  *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
  *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
@@ -543,6 +546,108 @@ static void enemy_log(void)
                     health, state);
         }
     fprintf(file, "%c", 10);
+    fflush(file);
+}
+
+/* SS_TEST_WARP=F:MAP:AREA (tests, games/ss2): at frame F this player's game leaves its map for area AREA of map
+ * set MAP, with the game's own steps for a change of map (what its "everybody changes map" message does on
+ * every machine: sub_0800D12C, sub_08056FB8, sub_08057170). A single-player test reaches the town with it
+ * (map set 0; area 0 is the square behind the gate) without playing the first field to its end; online the
+ * message itself is used (SS_NET_TEST_MSG). It runs as a task of the game, because the steps wait. */
+void sub_0800D12C(void);
+void sub_08056FB8(uint16_t map, uint16_t area);
+void sub_08057170(void);
+uint32_t sub_08000274(uint32_t, uint32_t, uint32_t);    /* start a task */
+static uint16_t warp_map, warp_area;
+
+static void test_warp_task(void)
+{
+    sub_0800D12C();
+    sub_08056FB8(warp_map, warp_area);
+    sub_08057170();
+}
+
+static void test_warp(void)
+{
+    static long at = -1;
+    static uint32_t record[10];
+    if (at < 0) {
+        const char *text = getenv("SS_TEST_WARP");
+        char *end;
+        at = 0;
+        if (text) {
+            at = (long)strtoul(text, &end, 10);
+            warp_map = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
+            warp_area = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
+        }
+    }
+    if (at && frame_count == (unsigned long)at) {
+        memset(record, 0, sizeof record);
+        record[2] = 0x50;
+        record[3] = (uint32_t)(uintptr_t)test_warp_task;
+        fprintf(stderr, "warp test: map %u area %u asked at frame %lu, result %u%c", warp_map, warp_area, frame_count,
+                (unsigned)sub_08000274((uint32_t)(uintptr_t)record, 0, 0), 10);
+    }
+}
+
+/* SS_WHERE_LOG=file (tests, games/ss2): every tenth frame one line: the frame, the scene's map set and area
+ * (in the town, map set 0, the room the player is in, which the scene keeps at +2), this player's seat, where
+ * its character stands (pixels) and its flags, the scene's flags (bit 11: an event holds the player), then
+ * the bag: how many of its records are used and the money in it. A route written as buttons is checked
+ * against it: did the walk reach the room and the counter, did a sale or a purchase change the bag, and did
+ * the player get the control back. Offsets as for SS_SCENE_LOG; the players' records are 0x14C bytes each at
+ * gUnk_03003CE0 (position at +0x8C/+0x90 in 1/256 pixel, flags at +0x30); the bag is 25 records of 16
+ * bytes at +0x150 of the character's shared block *gUnk_030034E0 (u16 kind, 10 is money; u32 amount at +4). */
+uint32_t sub_080020F4(void);            /* which seat is this machine's */
+
+static void where_log(void)
+{
+    static FILE *file;
+    static int asked;
+    uint32_t scene, area, seat, shared, used = 0, purse = 0;
+    const uint8_t *player;
+    uint16_t map;
+    int32_t x, y;
+    uint32_t flags;
+
+    if (!asked) {
+        asked = 1;
+        if (getenv("SS_WHERE_LOG"))
+            file = fopen(getenv("SS_WHERE_LOG"), "w");
+    }
+    if (!file || frame_count % 10)
+        return;
+    scene = *(const uint32_t *)(uintptr_t)0x03005CF4u;
+    if (scene < SS_EWRAM || scene >= SS_EWRAM + 0x40000 - 0x44)
+        return;                         /* no scene yet */
+    memcpy(&map, (const uint8_t *)(uintptr_t)scene, 2);
+    memcpy(&area, (const uint8_t *)(uintptr_t)(scene + 0x40), 4);
+    if (map == 0) {                     /* the town's rooms are numbered at +2 */
+        uint16_t room;
+        memcpy(&room, (const uint8_t *)(uintptr_t)(scene + 2), 2);
+        area = room;
+    }
+    seat = sub_080020F4() & 3;
+    player = (const uint8_t *)(uintptr_t)(0x03003CE0u + seat * 0x14C);
+    memcpy(&x, player + 0x8C, 4);
+    memcpy(&y, player + 0x90, 4);
+    memcpy(&flags, player + 0x30, 4);
+    shared = *(const uint32_t *)(uintptr_t)0x030034E0u;
+    if (shared >= SS_EWRAM && shared <= SS_EWRAM + 0x40000 - 0xCA4) {
+        int i;
+        for (i = 0; i < 25; i++) {
+            const uint8_t *record = (const uint8_t *)(uintptr_t)(shared + 0x150 + (uint32_t)i * 16);
+            uint16_t kind;
+            uint32_t amount;
+            memcpy(&kind, record, 2);
+            memcpy(&amount, record + 4, 4);
+            used += kind != 0;
+            if (kind == 10)
+                purse += amount;
+        }
+    }
+    fprintf(file, "%lu %u %u %u %d %d %X %X %u %u%c", frame_count, map, (unsigned)area, (unsigned)seat, (int)(x >> 8), (int)(y >> 8),
+            (unsigned)flags, (unsigned)*(const uint32_t *)(uintptr_t)0x03003478u, (unsigned)used, (unsigned)purse, 10);
     fflush(file);
 }
 
@@ -1102,6 +1207,8 @@ void VBlankIntrWait(void)
             fprintf(stderr, "shop test: kind %d started, result %u%c", kind, (unsigned)sub_08000274((uint32_t)(uintptr_t)record, (uint32_t)kind, 0), 10);
         }
     }
+    test_warp();
+    where_log();
     {                                   /* (after the blanking flag is cleared: the game waits for that before it writes) SS_TEST_SAVE=N: at frame N make the game save the current character, report its answer */
         static long save_at = -1;
         unsigned int sub_0807A124(void);        /* SaveCurrentCharacterSlot: 0 means written and verified */
