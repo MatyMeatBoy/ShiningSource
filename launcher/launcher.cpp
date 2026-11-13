@@ -293,24 +293,73 @@ static void play(const Game &game)
 
 /* ---- interface ---- */
 
+/* The launcher wears the port's own "Soul" look, the same as the classic mode's border: a deep blue-green field
+ * with points of light, gold frames and jewels, in the spirit of the game's menus. Everything is drawn here; no
+ * artwork of the game is in the program. */
 static void style()
 {
     ImGuiStyle &s = ImGui::GetStyle();
+    const ImVec4 gold(0.91f, 0.66f, 0.22f, 1), pale(1.0f, 0.89f, 0.54f, 1), teal(0.31f, 0.55f, 0.59f, 1);
     ImGui::StyleColorsDark();
     s.WindowRounding = 0;
-    s.FrameRounding = 4;
-    s.GrabRounding = 4;
-    s.FramePadding = ImVec2(10, 7);
+    s.ChildRounding = 0;
+    s.FrameRounding = 2;
+    s.GrabRounding = 2;
+    s.WindowBorderSize = 0;
+    s.ChildBorderSize = 2;
+    s.FrameBorderSize = 1;
+    s.FramePadding = ImVec2(12, 8);
     s.ItemSpacing = ImVec2(10, 10);
-    s.Colors[ImGuiCol_WindowBg] = ImVec4(0.07f, 0.09f, 0.14f, 1);
-    s.Colors[ImGuiCol_Button] = ImVec4(0.16f, 0.30f, 0.55f, 1);
-    s.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.22f, 0.40f, 0.70f, 1);
-    s.Colors[ImGuiCol_ButtonActive] = ImVec4(0.84f, 0.66f, 0.29f, 1);
-    s.Colors[ImGuiCol_Header] = ImVec4(0.16f, 0.30f, 0.55f, 1);
-    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.22f, 0.40f, 0.70f, 1);
-    s.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.16f, 0.24f, 1);
-    s.Colors[ImGuiCol_CheckMark] = ImVec4(0.84f, 0.66f, 0.29f, 1);
-    s.Colors[ImGuiCol_SliderGrab] = ImVec4(0.84f, 0.66f, 0.29f, 1);
+    s.WindowPadding = ImVec2(18, 14);
+    s.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);                   /* the field is drawn behind everything */
+    s.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.14f, 0.18f, 0.88f);
+    s.Colors[ImGuiCol_Border] = gold;
+    s.Colors[ImGuiCol_Text] = ImVec4(0.96f, 0.96f, 0.92f, 1);
+    s.Colors[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.66f, 0.68f, 1);
+    s.Colors[ImGuiCol_Button] = ImVec4(0.20f, 0.40f, 0.45f, 1);
+    s.Colors[ImGuiCol_ButtonHovered] = teal;
+    s.Colors[ImGuiCol_ButtonActive] = gold;
+    s.Colors[ImGuiCol_Header] = ImVec4(0.72f, 0.48f, 0.12f, 1);        /* the selected entry: gold, as the game's cursor */
+    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.48f, 0.52f, 1);
+    s.Colors[ImGuiCol_HeaderActive] = gold;
+    s.Colors[ImGuiCol_FrameBg] = ImVec4(0.08f, 0.22f, 0.27f, 1);
+    s.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.12f, 0.30f, 0.35f, 1);
+    s.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.16f, 0.36f, 0.41f, 1);
+    s.Colors[ImGuiCol_CheckMark] = pale;
+    s.Colors[ImGuiCol_SliderGrab] = gold;
+    s.Colors[ImGuiCol_SliderGrabActive] = pale;
+    s.Colors[ImGuiCol_PopupBg] = ImVec4(0.05f, 0.14f, 0.18f, 0.98f);
+    s.Colors[ImGuiCol_TableHeaderBg] = ImVec4(0.10f, 0.26f, 0.31f, 1);
+    s.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.25f);
+    s.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.72f, 0.48f, 0.12f, 1);
+    s.Colors[ImGuiCol_Separator] = gold;
+}
+
+static void jewel(ImDrawList *draw, ImVec2 centre, float size, ImU32 colour)
+{
+    draw->AddQuadFilled(ImVec2(centre.x, centre.y - size), ImVec2(centre.x + size, centre.y), ImVec2(centre.x, centre.y + size),
+                        ImVec2(centre.x - size, centre.y), colour);
+    draw->AddLine(ImVec2(centre.x - size * 0.45f, centre.y - size * 0.35f), ImVec2(centre.x, centre.y - size * 0.8f), IM_COL32(255, 250, 220, 255), 1.5f);
+}
+
+/* The field behind the whole window, and the frame around it. */
+static void backdrop()
+{
+    ImDrawList *draw = ImGui::GetBackgroundDrawList();
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const ImU32 gold = IM_COL32(232, 168, 56, 255), cyan = IM_COL32(92, 214, 226, 255);
+    draw->AddRectFilledMultiColor(ImVec2(0, 0), size, IM_COL32(20, 62, 74, 255), IM_COL32(20, 62, 74, 255), IM_COL32(8, 24, 34, 255), IM_COL32(8, 24, 34, 255));
+    for (int y = 9; y < (int)size.y; y += 21)
+        for (int x = 9 + (y * 5) % 33; x < (int)size.x; x += 39) {
+            int k = (x * 31 + y * 17) % 5;
+            draw->AddRectFilled(ImVec2((float)x, (float)y), ImVec2((float)x + 2, (float)y + 2), IM_COL32(60 + k * 22, 120 + k * 20, 130 + k * 20, 255));
+        }
+    draw->AddRect(ImVec2(5, 5), ImVec2(size.x - 5, size.y - 5), IM_COL32(96, 58, 16, 255), 0, 0, 5);
+    draw->AddRect(ImVec2(5, 5), ImVec2(size.x - 5, size.y - 5), gold, 0, 0, 3);
+    draw->AddRect(ImVec2(6, 6), ImVec2(size.x - 6, size.y - 6), IM_COL32(255, 226, 138, 255), 0, 0, 1);
+    jewel(draw, ImVec2(6, 6), 9, gold); jewel(draw, ImVec2(size.x - 6, 6), 9, gold);
+    jewel(draw, ImVec2(6, size.y - 6), 9, gold); jewel(draw, ImVec2(size.x - 6, size.y - 6), 9, gold);
+    jewel(draw, ImVec2(size.x / 2, 6), 8, cyan); jewel(draw, ImVec2(size.x / 2, size.y - 6), 8, cyan);
 }
 
 static void interface_frame(bool &running)
@@ -323,6 +372,7 @@ static void interface_frame(bool &running)
     const Game &game = games[selected];
     const ImVec4 gold(0.84f, 0.66f, 0.29f, 1), red(0.95f, 0.45f, 0.40f, 1), green(0.45f, 0.85f, 0.50f, 1), dim(0.6f, 0.65f, 0.75f, 1);
 
+    backdrop();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
     ImGui::Begin("ShiningSource", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
@@ -638,6 +688,8 @@ int main(int, char **)
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
             capture_event(event);
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && capture_key < 0)
+                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
             if (event.type == SDL_EVENT_QUIT)
                 running = false;
         }
