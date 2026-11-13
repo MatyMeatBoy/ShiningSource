@@ -459,6 +459,43 @@ static void status(int waiting_for)
  * the driver's error bit. The game's link task then runs into its own link error handling.
  *
  * `may_return`: it fell silent without a goodbye, so it may be a connection that comes back. */
+/* The block the game is given for a player that is gone: the one it was last seen with (gone_block). For a
+ * player that left for good (it said goodbye, the game went on behind a barrier without it, or it stayed away
+ * longer than SS_NET_AWAY: ss_net_msg_left) the state in the low four bits of the first byte is set to 11,
+ * which is what a player's own game writes there while its character is being defeated (games/ss2:
+ * sub_0800D368 packs state, x, y into the block's first word).
+ *
+ * Why: the enemies choose whom to go for from these blocks and the players' records (sub_08016B30: the
+ * nearest player, passing over one whose record is flagged as defeated, 0x2000, or whose block says state
+ * 11). A standing character nobody plays was hunted and guarded by them for the rest of the level (measured,
+ * tools/net_exit_test.sh: an enemy beside it at 72 of 74 samples). With state 11 the game's own code for
+ * another player's character runs the defeat on every machine: about two seconds later its record is flagged
+ * as defeated there (seen in SS_STATE_LOG), and from then on the game treats it as it treats a player that is
+ * down: not a target, drawn as a defeated player is. The counts of "everybody is down" and "everybody is at
+ * the exit" already pass over a gone player (games/<game>/port/patches.json, ss_net_msg_gone), so nothing
+ * changes there.
+ *
+ * Why not for a player that may still come back (given up for silence, see "a connection that was gone"): the
+ * flag in its record is only ever taken back by that player's own message (0x8C, sent when its flags change).
+ * A player that returned after an outage would stay "defeated" on the others' machines although it plays.
+ * So such a character stands as it was, as up to 0.8, until it is certain that it will not return.
+ *
+ * Decided alike on every machine from what each knows about the player (left, passed, away), as for
+ * everything else about a player that is gone; the enemies are the host's. SS_NET_GONE_STANDS=1 (tests) hands
+ * every block over unmarked, as up to 0.8. */
+static const uint8_t *gone_given(int who)
+{
+    static uint8_t given[SEATS][BLOCK];
+    static int plain = -1;
+    if (plain < 0)
+        plain = getenv("SS_NET_GONE_STANDS") != NULL;
+    if (plain || away[who].epoch)
+        return gone_block[who];
+    memcpy(given[who], gone_block[who], BLOCK);
+    given[who][0] = (uint8_t)((given[who][0] & 0xF0) | 11);
+    return given[who];
+}
+
 static void drop(int who, const char *why, int may_return)
 {
     struct stream *s = &streams[who];
@@ -1726,7 +1763,7 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
         if ((candidate | grow_pending) >> i & 1)
             block = NULL;       /* it wants to join the game in progress: the game does not know it yet */
         if (gone >> i & 1) {
-            block = gone_block[i];
+            block = gone_given(i);
             /* A player that is itself cut off waits SS_NET_AWAY for its connection and then gives the session
              * up. One that has been silent for that long after it was given up here will not come back. */
             /* `since` is read from the clock in drop(), which this same pass may just have called: it can be a
@@ -2000,7 +2037,7 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
         if (i == seat)
             block = target >= own_first ? own[target % RING] : sendp;
         else if (gone >> i & 1)
-            block = gone_block[i];
+            block = gone_given(i);
         else if (due(i, target))
             block = streams[i].block[target % RING];
         if (block) {

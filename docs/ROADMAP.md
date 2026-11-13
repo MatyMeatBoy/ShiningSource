@@ -455,6 +455,18 @@ What each added is in `docs/RELEASE_*.md`. In short:
       others back, untested), a real network (the tests cut the relay's
       forwarding on one machine), a host away for more than a minute (the
       session still ends).
+- [x] After 0.8.1, on main: a dungeon level online by script
+      (: three players fight, enemies fall, items drop
+      and are taken, the exit is passed together). With it: the others pass
+      the exit when a player's program was ended in the fight; a player cut
+      off 30 seconds during fights is whole again with the same enemies. A
+      player that left for good is handed to the game as a defeated one, so
+      the enemies no longer go for its standing character (an enemy stood
+      beside it at 72 of 74 samples before); one that may still return stands
+      as before until the party passes the next barrier.
+- [ ] The party's defeat online: with one seat gone and the two others down,
+      the level did not end in a scripted run; there is no baseline without a
+      gone seat yet, so the cause is not known.
 - [ ] Joining a game in progress with a freshly started program. Prototype
       behind `SS_NET_JOIN=1` (off by default; `docs/JOIN_IN_PROGRESS.md`): the
       newcomer's game is taken through a lobby this layer plays, waits at its

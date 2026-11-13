@@ -33,10 +33,13 @@ No ROM, BIOS or game data is included: you supply your own cartridge dump
   how the fault was found. With the corrected line the outage case was run on
   ARM64 there: whole again.
 
+- After the release, the 0.8.1 Linux x64 package as published, in a Debian 12
+  virtual machine (no window): the play-through gives the same hash and the
+  same sound, a two-player session runs to its end, and a player cut off for
+  30 seconds is taken in again, twice out of two runs.
+
 ## Not checked
 
-- The 0.8.1 Linux x64 package itself had not been run when this was
-  published; the result is added here when it is in.
 - Everything listed as not checked in 0.8.
 
 ## Install

@@ -14,13 +14,16 @@
  *                   N, so the players do not all press the same buttons and stand on one spot)
  *   SS_INPUT_HUNT=F  from frame F on, while an enemy lives, the script's buttons are replaced: walk to the nearest
  *                   enemy and strike it (games/ss2; online tests, so that enemies die and come back). The
- *                   player's seat varies the rhythm, so the players do not act as one.
+ *                   player's seat varies the rhythm, so the players do not act as one. SS_INPUT_HUNT_UNTIL=F
+ *                   ends it at frame F.
  *   SS_INPUT_EXIT=F  from frame F on, once no enemy lives and the map's exit is open, the script's buttons are
  *                   replaced: walk to the nearest exit (games/ss2; online tests of a change of map; with
  *                   SS_INPUT_HUNT the players first clear the map).
  *   SS_INPUT_GOTO=F:X:Y[:T]  from frame F on (up to frame T), while no enemy lives, the script's direction buttons
  *                   are replaced: walk to the point X,Y of the map (pixels), first across, then along
  *                   (games/ss2; online tests).
+ *   SS_INPUT_PATH=1  the three above find their way round the walls: the shortest way over the free cells of the
+ *                   map's collision grid (games/ss2), instead of a straight line. For maps with corridors.
  *   SS_STATE_LOG=file  where the game is (mode, scene flags, map, area, seats, the players' states), a line per
  *                   change: see state_log below.
  *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
@@ -294,6 +297,99 @@ enum { EXITS = 8 };
 static int exit_known[EXITS];
 static long exit_at[EXITS][2];      /* SS_INPUT_EXIT: the exits of the current map, in pixels */
 
+/* SS_INPUT_PATH=1 (tests, games/ss2): the buttons that take a character from x,y towards to_x,to_y (pixels)
+ * round the walls, -1 when there is no way or it stands in the target's cell, -2 when the map has no grid or
+ * the setting is off. The map's collision grid is the one
+ * the game's own movement asks (sub_0800B118): 16-bit cells of 8 pixels at gUnk_03003170 + 0x68, width and
+ * height at + 0x78 and + 0x7A, bits 8 to 11 of a cell say what stands there (0: free; the game looks the cell
+ * of x, y + 2 up). A breadth-first search from the character over the free cells; the way to the reachable
+ * cell nearest to the target is walked from cell centre to cell centre. */
+enum { PATH_W = 128, PATH_H = 128 };
+static int path_buttons(long x, long y, long to_x, long to_y)
+{
+    static int asked = -1;
+    static uint16_t from[PATH_W * PATH_H], queue[PATH_W * PATH_H];
+    static const int step[8][2] = { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 }, { 1, 1 }, { 1, -1 }, { -1, 1 }, { -1, -1 } };
+    uint32_t cells = *(const uint32_t *)(uintptr_t)(0x03003170u + 0x68);
+    int width = *(const uint16_t *)(uintptr_t)(0x03003170u + 0x78), height = *(const uint16_t *)(uintptr_t)(0x03003170u + 0x7A);
+    int head = 0, tail = 0, start, goal, best, at, i, held = 0;
+    long best_far, dx, dy;
+    const uint16_t *grid;
+
+    if (asked < 0)
+        asked = getenv("SS_INPUT_PATH") != NULL;
+    if (!asked || width < 3 || height < 3 || width > PATH_W || height > PATH_H)
+        return -2;
+    if (!((cells >= SS_EWRAM && cells < SS_EWRAM + 0x40000 - (uint32_t)(width * height * 2))
+          || (cells >= SS_ROM && cells < SS_ROM + 0x02000000u)))
+        return -2;
+    grid = (const uint16_t *)(uintptr_t)cells;
+    y += 2;
+    to_y += 2;
+    if (x < 0 || y < 0 || x >> 3 >= width || y >> 3 >= height)
+        return -1;
+    start = (int)(x >> 3) + (int)(y >> 3) * width;
+    goal = (to_x < 0 ? 0 : to_x >> 3 >= width ? width - 1 : (int)(to_x >> 3))
+         + (to_y < 0 ? 0 : to_y >> 3 >= height ? height - 1 : (int)(to_y >> 3)) * width;
+    if (start == goal)
+        return -1;                      /* in the target's cell: the straight line */
+    memset(from, 0xFF, sizeof from);
+    from[start] = (uint16_t)start;
+    queue[tail++] = (uint16_t)start;
+    best = start;
+    best_far = 0x7FFFFFFF;
+    while (head < tail) {
+        int cx, cy;
+        long far;
+        at = queue[head++];
+        cx = at % width;
+        cy = at / width;
+        dx = cx - goal % width;
+        dy = cy - goal / width;
+        far = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
+        if (far < best_far) {
+            best_far = far;
+            best = at;
+        }
+        if (at == goal)
+            break;
+        for (i = 0; i < 8; i++) {
+            int nx = cx + step[i][0], ny = cy + step[i][1], next = nx + ny * width;
+            if (nx <= 0 || ny <= 0 || nx >= width || ny >= height || from[next] != 0xFFFF || (grid[next] >> 8 & 15))
+                continue;
+            /* across a corner only when both cells beside it are free */
+            if (i >= 4 && ((grid[cx + ny * width] >> 8 & 15) || (grid[nx + cy * width] >> 8 & 15)))
+                continue;
+            from[next] = (uint16_t)at;
+            queue[tail++] = (uint16_t)next;
+        }
+    }
+    if (best == start)
+        return -1;
+    for (at = best; from[at] != start; at = from[at])
+        ;
+    dx = at % width * 8 + 4 - x;
+    dy = at / width * 8 + 4 - y;
+    if (dx > 1) held |= 0x10;
+    if (dx < -1) held |= 0x20;
+    if (dy > 1) held |= 0x80;
+    if (dy < -1) held |= 0x40;
+    return held;
+}
+
+/* SS_INPUT_PATH: can a character stand at x,y (pixels)? 1 too when the setting is off or the map has no grid. */
+static int path_free(long x, long y)
+{
+    uint32_t cells = *(const uint32_t *)(uintptr_t)(0x03003170u + 0x68);
+    int width = *(const uint16_t *)(uintptr_t)(0x03003170u + 0x78), height = *(const uint16_t *)(uintptr_t)(0x03003170u + 0x7A);
+    if (path_buttons(-1, -1, 0, 0) == -2)
+        return 1;
+    y += 2;
+    if (x < 8 || y < 8 || x >> 3 >= width || y >> 3 >= height)
+        return 0;
+    return !(((const uint16_t *)(uintptr_t)cells)[(x >> 3) + (y >> 3) * width] >> 8 & 15);
+}
+
 static void scripted_input(void)
 {
     static unsigned long shift_from = ~0ul, shift_by;
@@ -321,10 +417,13 @@ static void scripted_input(void)
     {   /* SS_INPUT_HUNT=F, see the top of this file. Positions are those of games/ss2: the players' records at
          * gUnk_03003CE0 (0x14C bytes each, x and y at 0x8C and 0x90), the enemies' at gUnk_030056F4 (0x2E0 bytes
          * each, x and y at 0x14 and 0x18, live ones in the mask gUnk_030056FC), all in 1/256 pixel. */
-        static unsigned long hunt_from = ~0ul;
-        if (hunt_from == ~0ul)
+        static unsigned long hunt_from = ~0ul, hunt_until = ~0ul;
+        if (hunt_from == ~0ul) {
             hunt_from = getenv("SS_INPUT_HUNT") ? strtoul(getenv("SS_INPUT_HUNT"), NULL, 10) : 0;
-        if (hunt_from && frame_count >= hunt_from) {
+            if (getenv("SS_INPUT_HUNT_UNTIL"))  /* the frame the hunt ends at */
+                hunt_until = strtoul(getenv("SS_INPUT_HUNT_UNTIL"), NULL, 10);
+        }
+        if (hunt_from && frame_count >= hunt_from && frame_count < hunt_until) {
             uint32_t records = *(const uint32_t *)(uintptr_t)0x030056F4u, mask = *(const uint32_t *)(uintptr_t)0x030056FCu & 31;
             int me = REG16(0x128) >> 4 & 3, i, best = -1;
             int32_t mine[2], theirs[2], dx = 0, dy = 0;
@@ -351,18 +450,32 @@ static void scripted_input(void)
                 unsigned long beat = (frame_count + (unsigned long)me * 7) % (unsigned long)(20 + me * 3);
                 /* stand beside it, on the left or the right by seat, turn to it, strike */
                 static int reach = -1;  /* SS_INPUT_HUNT_REACH=pixels: how far beside the enemy to stand (20) */
-                int side;
+                int side, below = 0;
                 if (reach < 0)
                     reach = getenv("SS_INPUT_HUNT_REACH") ? (int)strtoul(getenv("SS_INPUT_HUNT_REACH"), NULL, 10) : 20;
+                int round;
                 side = me & 1 ? reach : -reach;
+                if (!path_free((mine[0] >> 8) + dx + side, (mine[1] >> 8) + dy)) {
+                    /* (SS_INPUT_PATH) a wall on its side of the enemy: the other side, or below it, or above */
+                    if (path_free((mine[0] >> 8) + dx - side, (mine[1] >> 8) + dy))
+                        side = -side;
+                    else if (path_free((mine[0] >> 8) + dx, (mine[1] >> 8) + dy + reach))
+                        below = reach, side = 0;
+                    else if (path_free((mine[0] >> 8) + dx, (mine[1] >> 8) + dy - reach))
+                        below = -reach, side = 0;
+                }
+                round = path_buttons(mine[0] >> 8, mine[1] >> 8, (mine[0] >> 8) + dx, (mine[1] >> 8) + dy);
                 dx += side;
+                dy += below;
                 held = 0;
                 if (dx > 4) held |= 0x10;               /* right */
                 if (dx < -4) held |= 0x20;              /* left */
                 if (dy > 4) held |= 0x80;               /* down */
                 if (dy < -4) held |= 0x40;              /* up */
+                if (round >= 0 && nearest > 40)
+                    held = (uint16_t)round;             /* (SS_INPUT_PATH) far from it: round the walls */
                 if (!held && beat < 3)
-                    held = side < 0 ? 0x10 : 0x20;      /* in place: face it */
+                    held = side < 0 ? 0x10 : side > 0 ? 0x20 : below > 0 ? 0x40 : 0x80;     /* in place: face it */
                 else if (beat >= 6 && beat < 10)
                     held = (uint16_t)((held & 0xF0) | 1);       /* a strike; it also moves on the talk some
                                                                  * enemies start with */
@@ -401,12 +514,15 @@ static void scripted_input(void)
                 long dx = exit_at[best][0] - (mine[0] >> 8), dy = exit_at[best][1] - (mine[1] >> 8);
                 /* a step aside now and then: the way is not always free */
                 unsigned long beat = frame_count % 240;
+                int round = path_buttons(mine[0] >> 8, mine[1] >> 8, exit_at[best][0], exit_at[best][1]);
                 held = 0;
                 if (dx > 3) held |= 0x10;
                 if (dx < -3) held |= 0x20;
                 if (dy > 3) held |= 0x80;
                 if (dy < -3) held |= 0x40;
-                if (held && beat >= 200)
+                if (round >= 0)
+                    held = (uint16_t)round;             /* (SS_INPUT_PATH) */
+                else if (held && beat >= 200)
                     held = (uint16_t)(beat < 220 ? 0x40 : 0x10);
             }
         }
@@ -427,12 +543,15 @@ static void scripted_input(void)
             int me = REG16(0x128) >> 4 & 3;
             int32_t mine[2];
             long dx, dy;
+            int round;
             memcpy(mine, (const uint8_t *)(uintptr_t)(0x03003CE0u + (uint32_t)me * 0x14C + 0x8C), 8);
             dx = goto_x - (mine[0] >> 8);
             dy = goto_y - (mine[1] >> 8);
+            round = path_buttons(mine[0] >> 8, mine[1] >> 8, goto_x, goto_y);
             held &= 0x030F;             /* the script's other buttons stay (A moves a dialogue on) */
             /* across first, then along: the ways of a map are not straight lines */
-            if (dx > 3) held |= 0x10;
+            if (round >= 0) held |= (uint16_t)round;    /* (SS_INPUT_PATH) */
+            else if (dx > 3) held |= 0x10;
             else if (dx < -3) held |= 0x20;
             else if (dy > 3) held |= 0x80;
             else if (dy < -3) held |= 0x40;
