@@ -28,7 +28,7 @@ on the named machine and say nothing about other devices.
 | Hangs | none detected | a watchdog reports where the game's thread is after 10 s without a frame or a network wait, once per hang, and lets it continue | `SS_TEST_FAULT=hang`: report written after 10 s. Waiting for an online player counts as alive, so it is not reported. |
 | Save file | written to a temporary file, old save deleted, then renamed; a failed write was not noticed | the write is checked; the replaced save is kept as `.bak`; a missing or short save loads the backup; a write that fails leaves the save alone | `tools/tests/run_save_test.sh`: 8 checks pass (complete write, replacement, cut-short file, missing file, unwritable folder). |
 | Identical results on ARM64 | first difference at frame 2,702 | 0 of 32,000 frames differ | Debian 12 ARM64 under QEMU, `SS_HASH_ALL=1` compared line by line with x86-64. Three causes, all in how arguments cross calls (docs/ROADMAP.md, M5). |
-| Division that traps | quotient 0 and remainder 0 on x86, processor's own result on ARM64 | one rule everywhere (ARM64's) | Workload A hash unchanged on x86; ARM64 identical. |
+| Division by zero | quotient 0 and remainder 0 on x86, the dividend as remainder on ARM64 | the cartridge's rule everywhere (0 and 0), by fault handler on x86 and by rewriting the IR on ARM64 | Read from the ROM's division routines; Workload A hash unchanged on x86 and ARM64. A first attempt unified on ARM64's own result, which is not the cartridge's; corrected. |
 | Long test scripts | passed in an environment variable, silently dropped above about 32 KiB by the test script | `SS_INPUT_FILE` | A 40 KiB script now reaches four players; before, two runs were judged on stale logs. |
 
 ## Open

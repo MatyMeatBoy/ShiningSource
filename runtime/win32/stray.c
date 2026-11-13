@@ -196,11 +196,12 @@ int ss_stray_access(void *context, uint32_t address, int is_write)
     return 1;
 }
 
-/* Division that traps on a PC: by zero, or the most negative number by -1. The cartridge divides with a library
- * routine that returns instead of trapping. Every build must give the same numbers (online play compares them),
- * so the result is the one an ARM64 processor gives, where division never traps: by zero the quotient is 0 and
- * the remainder is the dividend; the overflow keeps the dividend as quotient with remainder 0. Returns 1 if
- * handled. */
+/* Division that traps on a PC: by zero, or the most negative number by -1. The cartridge divides with the
+ * compiler's library routines, which return instead of trapping; their results (read from the ROM's own
+ * routines) are quotient 0 and remainder 0 for a zero divisor, and the dividend with remainder 0 for the
+ * overflow. Every build must give those numbers: here by continuing after the instruction with them, on
+ * processors that do not trap by rewriting the division before it is compiled (tools/division_ir.py).
+ * Returns 1 if handled. */
 int ss_divide_by_zero(void *context)
 {
     CONTEXT *c = context;
@@ -219,9 +220,6 @@ int ss_divide_by_zero(void *context)
         length = 1;                         /* register operand */
     if (wide && ((p[1] >> 3) & 7) == 7 && (p[1] >> 6) == 3 && *reg32(c, p[1] & 7) == 0xFFFFFFFFu) {
         c->Edx = 0;                         /* overflow: the quotient register already holds the dividend */
-    } else if (wide) {
-        c->Edx = c->Eax;
-        c->Eax = 0;
     } else {
         c->Eax = 0;
         c->Edx = 0;

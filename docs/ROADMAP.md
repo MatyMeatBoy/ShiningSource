@@ -189,9 +189,11 @@ Open:
       `arm64-v8a` and `x86_64`. On the x86_64 emulator (API 34) the play-through
       ends with hash 5711719E, the picture and the controls show, and a session
       with a Windows player through the public relay stays consistent.
-- [x] Trapping divisions give the same numbers everywhere: by zero the quotient
-      is 0 and the remainder the dividend, `INT_MIN / -1` keeps the dividend
-      (what ARM64 does without trapping; the x86 handlers now do the same).
+- [x] Divisions give the cartridge's numbers everywhere: by zero the quotient
+      and the remainder are 0, `INT_MIN / -1` keeps the dividend (read from
+      the ROM's own division routines). x86 traps and its handlers return
+      them; for ARM64 the remainders are guarded in the LLVM IR before
+      optimisation (`tools/division_ir.py`, 75 places).
 - [x] ARM64 identical to x86-64 (2026-11-12): all 32,000 frames of the
       play-through have the same hash on Debian 12 ARM64 (QEMU). The method was
       the one of the 64-bit work, one step longer: per-frame hashes gave the
@@ -247,11 +249,19 @@ Open:
       controller button in the launcher's Controls page (`SS_KEYS`, `SS_PAD`).
 - [ ] Launcher: save-file management,
       Linux and Android versions of the launcher.
-- [ ] Achievements. rcheevos needs a client (login, HTTP, the game's memory
-      exposed in RetroAchievements' GBA layout) and a decision the owner has to
-      make: RetroAchievements only accepts approved emulators for official
-      unlocks, so ReKHCoM shows the official set as a catalogue and keeps its own
-      port achievements. The same policy is assumed here until said otherwise.
+- [ ] Achievements (owner's decision, 2026-11-12): two lists. The normal one is
+      the game's RetroAchievements set, evaluated by rcheevos against the
+      game's memory. **Rebel mode** is a second, separate record of the same
+      achievements for sessions that use cheats or an edited save: nothing
+      earned with cheats goes to the normal list. ReKHCoM has both (its
+      achievements page and `.rebel` save marks) and is the reference. Needs
+      the rcheevos runtime, the set's definitions supplied by the user or
+      fetched with their account, the game's memory exposed in
+      RetroAchievements' GBA layout, and the cheats themselves, which do not
+      exist yet.
+- [ ] Screen modes chosen on first start (owner's decision, 2026-11-12):
+      classic (the console's picture at a whole scale inside an adjustable
+      border) and enhanced (the picture adapts to the window).
 
 ## M7. Online (working through the public relay, 2026-11-12)
 

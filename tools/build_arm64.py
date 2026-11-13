@@ -54,10 +54,23 @@ def main():
     replaced = build.port_config(args.game)["runtime"]
     sources = [p for p in sorted((gen / "src").glob("*.c")) if p.stem not in replaced]
 
+    # ARM64 does not trap on a division by zero and its remainder then is the dividend; the cartridge's is 0.
+    # Each module goes to LLVM IR before any optimisation, the remainders are guarded there, then it is compiled.
+    import division_ir
+    (out / "ir").mkdir(exist_ok=True)
+
     def compile_game(path):
         target = out / "obj" / (path.stem + ".o")
+        ir = out / "ir" / (path.stem + ".ll")
         done = subprocess.run([cc, *game_flags, "-iquote", str(gen / "include"), "-I", str(gen / "include"),
-                               "-c", str(path), "-o", str(target)], capture_output=True, text=True, cwd=gen)
+                               "-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm", str(path), "-o", str(ir)],
+                              capture_output=True, text=True, cwd=gen)
+        if done.returncode:
+            return path.stem, done.returncode, done.stderr
+        text, guarded = division_ir.lower(ir.read_text(encoding="utf-8"), "rem")
+        ir.write_text(text, encoding="utf-8")
+        optimisation = [f for f in game_flags if f.startswith("-O") or f.startswith("--target") or f.startswith("-mcpu")]
+        done = subprocess.run([cc, *optimisation, "-w", "-c", str(ir), "-o", str(target)], capture_output=True, text=True)
         return path.stem, done.returncode, done.stderr
     failed = []
     with concurrent.futures.ThreadPoolExecutor(args.j) as pool:
