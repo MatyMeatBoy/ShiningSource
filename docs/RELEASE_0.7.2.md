@@ -4,6 +4,9 @@ Native port of Shining Soul II (Europe) for Windows x64 and Android. No ROM,
 BIOS or game data is included: you supply your own cartridge dump (SHA-1
 `aa1288be9257337abdfe3034898cf6c7aa778fbc`).
 
+**Superseded by 0.7.3**: on a slow device this version leaves out three of
+four pictures. Use 0.7.3.
+
 Online, 0.7.2 plays with 0.7 and 0.7.1: nothing in the link changed.
 
 A release for slower machines, phones above all. Nothing else changed since
