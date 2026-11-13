@@ -1,8 +1,15 @@
 # ShiningSource
 
-A native port of the Game Boy Advance *Shining Soul* games, built from their
-matching decompilations: the original game logic compiled for today's machines,
-not emulated and not statically recompiled.
+**Shining Soul II as a native program**: widescreen, online for 2 to 4
+players, achievements, on Windows, Linux and Android.
+
+ShiningSource is a port of the Game Boy Advance *Shining Soul* games built from
+their matching decompilations. The game's own code is compiled for today's
+machines; nothing is emulated and nothing is statically recompiled.
+
+![Shining Soul II in the port's wide view](docs/img/game-wide.png)
+
+*The wide view: the same moment shows more of the map than the console did.*
 
 | Game | Source | Status |
 |---|---|---|
@@ -16,15 +23,17 @@ from it when you play.
 
 ![The launcher](docs/img/launcher-play.png)
 
-*The launcher, drawn in the port's own "Soul" look. No screenshots of the game
-are stored in this repository: they are the game's artwork.*
+*The launcher, drawn in the port's own "Soul" look.*
 
 ## Download
 
 [Releases](https://github.com/MatyMeatBoy/ShiningSource/releases): Windows x64
-(`.zip`, unpack and start `ShiningSource.exe`) and Android (`.apk`, arm64-v8a
-and x86_64, Android 5 or later). They are pre-releases: each one's notes list
-what was checked and, just as carefully, what was not.
+(`.zip`: unpack it and start `ShiningSource.exe`) and Android (`.apk`,
+arm64-v8a and x86_64, Android 5 or later). The launcher asks for your ROM the
+first time and checks it.
+
+They are pre-releases. Each one's notes say what was checked and, just as
+plainly, what was not.
 
 ## What it does
 
@@ -56,6 +65,17 @@ what was checked and, just as carefully, what was not.
 - Where a map ends beside the view, the picture fades into black; around a
   dark screen (a fade, a loading screen) the sides darken with it.
 - VSync, variable refresh (G-Sync / FreeSync) or neither.
+- A machine that cannot draw every picture in time leaves pictures out, never
+  game time: the game and its sound keep their speed.
+
+| Classic (the console's 240 columns) | Enhanced (here 427 columns) |
+|---|---|
+| ![Classic picture](docs/img/game-classic.png) | ![Wide picture](docs/img/game-wide.png) |
+
+![The status page in wide view](docs/img/game-status.png)
+
+*Full-screen pages keep their composition in the middle; the HP, SP and Soul
+display stays at the left edge.*
 
 ![Video settings](docs/img/launcher-video.png)
 
@@ -130,8 +150,9 @@ memory, frame pacing and crash handling in [docs/OPTIPORT.md](docs/OPTIPORT.md).
 ## Controls
 
 Keyboard: arrows, `X` = A, `Z` = B, `C` = L, `V` = R, `Enter` = Start, right
-`Shift` = Select, `F11` full screen. A controller works when plugged in. All of
-it can be changed in the launcher.
+`Shift` = Select, `F11` full screen, `Escape` (or Select + Start) opens the
+port's options in the game. A controller works when plugged in. All of it can
+be changed in the launcher.
 
 ## Building (developers)
 
@@ -181,4 +202,5 @@ and [GBANoCable](https://github.com/MatyMeatBoy/GBANoCable).
 
 The port's code is MIT ([LICENSE](LICENSE)); SDL3, Dear ImGui and rcheevos keep
 their own licenses. The games belong to their owners. This project distributes
-none of their data: without your own cartridge dump it does nothing.
+none of their data: without your own cartridge dump it does nothing. The
+pictures of the game on this page are there to show what the port does.
