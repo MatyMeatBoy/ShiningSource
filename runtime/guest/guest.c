@@ -125,6 +125,8 @@ int ss_plat_net_recv(void *data, int capacity) { return SS_HOST(SS_B_NET_RECV, i
 void ss_plat_net_wait(int milliseconds) { SS_HOST(SS_B_NET_WAIT, void (*)(int))(milliseconds); }
 void ss_plat_net_farewell(const void *data, int size) { SS_HOST(SS_B_NET_FAREWELL, void (*)(uint32_t, int))((uint32_t)(uintptr_t)data, size); }
 uint32_t ss_plat_ticks_ms(void) { return SS_HOST(SS_B_TICKS, uint32_t (*)(void))(); }
+/* the host evaluates the achievements: it sees the same memory (a host without them serves an empty function) */
+static void host_achievements(int run_flags) { SS_HOST(SS_B_ACHIEVEMENTS, void (*)(int))(run_flags); }
 
 /* ---- entry: called by the host on a low stack, with the GBA memory mapped and the ROM loaded ---- */
 
@@ -137,6 +139,8 @@ void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_h
     main_coroutine.stack_high = stack_high;
     fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());
     fprintf(stderr, "game image %p-%p entered; running the game's AgbMain\n", (void *)__image_start, (void *)__image_end);
+    ss_rebel_set_host(host_achievements);
+    ss_rebel_start();                   /* before the game reads its save: a Rebel run has its own file */
     AgbMain();
     exit(0);
 }

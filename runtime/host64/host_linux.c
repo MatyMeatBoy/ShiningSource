@@ -178,6 +178,9 @@ static int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR
 static void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
 static void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
+/* Achievements are evaluated by the Windows host only so far (runtime/achievements); here the frame's call does
+ * nothing. Cheats still work: they are in the game image (core/rebel.c). */
+static void b_achievements(int run_flags) { (void)run_flags; }
 
 static uint64_t bridge[SS_B_COUNT];
 #define ENTRY(index, function) bridge[index] = (uint64_t)(uintptr_t)(function)
@@ -625,6 +628,7 @@ int main(int argc, char **argv)
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_POW, b_pow); ENTRY(SS_B_SIN, b_sin); ENTRY(SS_B_COS, b_cos); ENTRY(SS_B_FMOD, b_fmod);
     ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
     ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status); ENTRY(SS_B_OVERLAY, b_overlay);
+    ENTRY(SS_B_ACHIEVEMENTS, b_achievements);
     table = (uintptr_t)low_bridge(bridge, SS_B_COUNT);
     if (!table) {
         fprintf(stderr, "the address range for the service jumps is not free\n");

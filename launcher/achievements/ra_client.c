@@ -366,10 +366,72 @@ done:
 #endif
 }
 
+/* The game's set as the site answered it is kept in ra_set_<hash>.json next to the sign-in: a Rebel run (cheats on)
+ * evaluates the same achievements from that file and never connects (runtime/achievements/ach_host.c). The answer
+ * holds the set only; the request, with the account's token, is not written anywhere. */
+typedef struct KhRaSetRequest {
+    KhRa* ra;
+    char hash[33];
+    rc_client_server_callback_t callback;
+    void* callback_data;
+} KhRaSetRequest;
+
+static int Contains(const char* body, size_t size, const char* word) {
+    size_t length = strlen(word), i;
+    for (i = 0; i + length <= size; ++i) if (!memcmp(body + i, word, length)) return 1;
+    return 0;
+}
+
+static void SetResponse(const rc_api_server_response_t* response, void* userdata) {
+    KhRaSetRequest* request = (KhRaSetRequest*)userdata;
+    if (response->http_status_code == 200 && response->body &&
+        Contains(response->body, response->body_length, "\"Success\":true") &&
+        Contains(response->body, response->body_length, "\"Sets\"")) {
+        char name[64];
+        FILE* file;
+        snprintf(name, sizeof(name), "ra_set_%s.json", request->hash);
+        file = DataFile(request->ra, name, RA_MODE("wb"));
+        if (file) { fwrite(response->body, 1, response->body_length, file); fclose(file); }
+    }
+    request->callback(response, request->callback_data);
+    free(request);
+}
+
+/* 1 when the request asks for the set of a ROM hash ("r=achievementsets" with "m=<32 hex digits>") */
+static int SetRequestHash(const char* post, char hash[33]) {
+    const char* at = post;
+    int found = 0, i;
+    hash[0] = 0;
+    while (at && *at) {
+        const char* end = strchr(at, '&');
+        size_t length = end ? (size_t)(end - at) : strlen(at);
+        if (length == 17 && !memcmp(at, "r=achievementsets", 17)) found = 1;
+        if (length == 34 && at[0] == 'm' && at[1] == '=') {
+            for (i = 0; i < 32; ++i) {
+                char c = at[2 + i];
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) break;
+                hash[i] = c;
+            }
+            hash[i == 32 ? 32 : 0] = 0;
+        }
+        at = end ? end + 1 : NULL;
+    }
+    return found && hash[0];
+}
+
 static void ServerCall(const rc_api_request_t* request, rc_client_server_callback_t callback,
                        void* callback_data, rc_client_t* client) {
     KhRa* ra = (KhRa*)rc_client_get_userdata(client);
     KhRaJob *job, **tail;
+    char hash[33];
+    if (request->post_data && SetRequestHash(request->post_data, hash)) {
+        KhRaSetRequest* set = (KhRaSetRequest*)calloc(1, sizeof(*set));
+        if (set) {              /* the answer passes through SetResponse on its way to rcheevos */
+            set->ra = ra; set->callback = callback; set->callback_data = callback_data;
+            memcpy(set->hash, hash, sizeof(hash));
+            callback = SetResponse; callback_data = set;
+        }
+    }
     if (ra->transport && !ra->closing) { ra->transport(request, callback, callback_data); return; }
     job = ra->closing ? NULL : (KhRaJob*)calloc(1, sizeof(*job));
     if (!job) {
@@ -579,10 +641,51 @@ static void RestrictOfficial(KhRa* ra) {
     }
 }
 
+/* The badge of every achievement of the set is kept as badge_<name>.png next to the set: the game shows it in the
+ * unlock notice, also in runs that never connect (no account, Rebel). Public images, fetched once, on the same
+ * queue as everything else. */
+typedef struct KhRaBadge { KhRa* ra; char name[32]; } KhRaBadge;
+
+static void BadgeFetched(const uint8_t* bytes, size_t size, int status, void* userdata) {
+    KhRaBadge* badge = (KhRaBadge*)userdata;
+    if (status == 200 && size > 8 && !memcmp(bytes, "\x89PNG\r\n\x1a\n", 8)) {
+        FILE* file = DataFile(badge->ra, badge->name, RA_MODE("wb"));
+        if (file) { fwrite(bytes, 1, size, file); fclose(file); }
+    }
+    free(badge);
+}
+
+static void KeepBadges(KhRa* ra) {
+    rc_client_game_info_t* game = ra->client->game;
+    rc_client_subset_info_t* subset;
+    if (!game) return;
+    for (subset = game->subsets; subset; subset = subset->next) {
+        rc_client_achievement_info_t* a = subset->achievements;
+        rc_client_achievement_info_t* end = a + subset->public_.num_achievements;
+        for (; a < end; ++a) {
+            char url[512];
+            const char* c;
+            KhRaBadge* badge;
+            FILE* have;
+            for (c = a->public_.badge_name; *c; ++c)
+                if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_')) break;
+            if (*c || !a->public_.badge_name[0]) continue;      /* the name becomes part of a file name */
+            badge = (KhRaBadge*)calloc(1, sizeof(*badge));
+            if (!badge) return;
+            badge->ra = ra;
+            snprintf(badge->name, sizeof(badge->name), "badge_%s.png", a->public_.badge_name);
+            have = DataFile(ra, badge->name, RA_MODE("rb"));
+            if (have) { fclose(have); free(badge); continue; }
+            if (rc_client_achievement_get_image_url(&a->public_, RC_CLIENT_ACHIEVEMENT_STATE_UNLOCKED, url, sizeof(url)) != RC_OK ||
+                !KhRaFetchImage(ra, url, BadgeFetched, badge)) free(badge);
+        }
+    }
+}
+
 static void Loaded(int result, const char* error, rc_client_t* client, void* userdata) {
     KhRa* ra = (KhRa*)userdata;
     ra->busy = 0;
-    if (result == RC_OK) RestrictOfficial(ra);
+    if (result == RC_OK) { RestrictOfficial(ra); KeepBadges(ra); }
     SetStatus(ra, result == RC_OK ? "Catalog loaded. Validation mode: online awards disabled." : error,
               result != RC_OK);
     if (result == RC_OK && !ra->closing) {
@@ -605,10 +708,7 @@ static void Loaded(int result, const char* error, rc_client_t* client, void* use
 
 static void LoadGame(KhRa* ra) {
     if (!ra->enabled || !rc_client_get_user_info(ra->client) || !ra->hash[0] || ra->invalidated) return;
-    if (strcmp(ra->hash, "d369f791d86a969778d2c3a5278d544c") != 0) {
-        SetStatus(ra, "This ROM is not supported by the official set. Local achievements remain available.", 0);
-        return;
-    }
+    /* the site decides whether it knows this ROM: an unknown hash comes back as "Unknown game" */
     ra->busy = 1;
     SetStatus(ra, "Loading official catalog...", 0);
     rc_client_begin_load_game(ra->client, ra->hash, Loaded, ra);

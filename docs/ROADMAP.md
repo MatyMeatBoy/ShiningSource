@@ -258,12 +258,26 @@ Open:
             retroachievements.org; the session token stays on the PC, protected
             for the Windows user. Built and shown; signing in needs the owner's
             account and has not been tried.
-      - [ ] The game evaluating the set while it runs (the host reads the game's
-            memory in RetroAchievements' layout), notices on screen, and what is
-            sent to the site. RetroAchievements counts official unlocks only
-            from approved emulators, so a port keeps its own record unless the
-            site agrees otherwise.
-      - [ ] Rebel mode, and the cheats that would lead to it.
+      - [x] The game evaluates while it runs (Windows host,
+            `runtime/achievements/ach_host.c`; the frame's call comes from
+            `runtime/core/rebel.c` through the bridge, version 6). Signed in:
+            the account's set through rcheevos' client, unlocks submitted
+            softcore. Always: a local evaluation that needs no account, of the
+            set the site once answered (`ra_set_<hash>.json`, kept with the
+            badge images whenever a signed-in launcher or game receives it) and
+            of the port's own list of twelve (`port_list.h`), written to
+            `local_record.txt`. Notices over the top of the picture with the
+            achievement's badge. Checked with a pretend server
+            (`SS_RA_TEST_SERVER`); **not checked with a real account**: whether
+            the site knows the European ROM's hash and takes softcore unlocks
+            from this client is unknown.
+      - [x] Rebel mode: a switch and four cheats in the launcher (health,
+            energy, no defeat, gold; `SS_CHEATS`). A run started with a cheat
+            never connects, records in `rebel_record.txt`, and saves to
+            `shiningsource_rebel.sav`. Cheats stop while an online session is
+            active. Not found in the decompilation's notes: the Soul gauge.
+      - [ ] Achievements on the Linux and Android hosts (the frame's call is
+            served by an empty function there; cheats already work).
 - [x] Screen modes chosen on first start: classic (the console's picture at a
       whole scale inside an adjustable border, the port's own Soul frame) and
       enhanced (the picture adapts to the window, the Soul field beside it).

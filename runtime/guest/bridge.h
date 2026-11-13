@@ -35,9 +35,10 @@ enum {
     SS_B_TICKS,             /* u32 (void)                                        milliseconds */
     SS_B_STATUS,            /* void (u32 text) */
     SS_B_OVERLAY,           /* void (int darkness, u32 text) */
+    SS_B_ACHIEVEMENTS,      /* void (int run_flags)                              once per frame; SS_RUN_* of runtime.h */
     SS_B_COUNT
 };
-#define SS_BRIDGE_VERSION 5u
+#define SS_BRIDGE_VERSION 6u
 
 extern const uint32_t *ss_bridge;
 #define SS_HOST(index, type) ((type)(uintptr_t)ss_bridge[index])

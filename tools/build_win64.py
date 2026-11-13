@@ -130,9 +130,27 @@ def main():
     if sdl is None:
         sys.exit("SDL3 development files not found: set SHININGSOURCE_SDL3")
     host = out / ("%s_win64.exe" % args.game)
+    # achievements: rcheevos (third_party, MIT) and the client the launcher also uses, compiled once and kept in ra/;
+    # the host's own part is runtime/achievements
+    rc = ROOT / "third_party/rcheevos"
+    (out / "ra").mkdir(exist_ok=True)
+    ra_sources = sorted((rc / "src/rcheevos").glob("*.c")) + sorted((rc / "src/rapi").glob("*.c")) + sorted((rc / "src/rhash").glob("*.c"))
+    ra_sources += [rc / "src" / n for n in ("rc_client.c", "rc_compat.c", "rc_util.c", "rc_version.c")]
+    ra_sources += [ROOT / "launcher/achievements/ra_client.c", ROOT / "runtime/achievements/ach_host.c"]
+    ra_flags = ["--target=x86_64-w64-mingw32", "-O2", "-g", "-DRC_CLIENT_SUPPORTS_HASH", "-I", str(rc / "include"), "-I", str(rc / "src"),
+                "-I", str(sdl / "include"), "-I", str(ROOT / "launcher/achievements"), "-I", str(ROOT / "runtime/include")]
+    ra_objects = []
+    for source in ra_sources:
+        target = out / "ra" / (source.parent.name + "_" + source.stem + ".o")
+        ours = ROOT / "third_party" not in source.parents
+        newest = max(p.stat().st_mtime for p in [source, *source.parent.glob("*.h")] + ([ROOT / "launcher/achievements/ra_client.h"] if ours else []))
+        if not target.exists() or target.stat().st_mtime < newest:
+            run([cc, *ra_flags, "-Wall" if ours else "-w", "-c", str(source), "-o", str(target)], source.name)
+        ra_objects.append(str(target))
     run([cc, "--target=x86_64-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(sdl / "include"),
-         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), "-o", str(host),
-         "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32", "-lws2_32",
+         str(ROOT / "runtime/host64/host_main.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), *ra_objects, "-o", str(host),
+         "-L", str(sdl / "lib"), "-lSDL3", "-lcomdlg32", "-lws2_32", "-lwinhttp", "-lcrypt32",
+         "-Wl,-Bstatic", "-lwinpthread", "-Wl,-Bdynamic",      # rcheevos' clock; static, so no extra DLL ships
          # host code must be callable through 32-bit addresses
          "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x800000",
          # the arena is read-only until a range is handed out, so Windows does not charge memory for all of it

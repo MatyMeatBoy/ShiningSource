@@ -227,6 +227,7 @@ void VBlankIntrWait(void)
         ss_raise_interrupt(0x0001);
     walk_lines();
     frame_count++;
+    ss_rebel_frame();                   /* cheats of a Rebel run, then the platform's achievements (core/rebel.c) */
     if (dump_at && frame_count == dump_at)
         dump_video();
     if (frame_limit) {

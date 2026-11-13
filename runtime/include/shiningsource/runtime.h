@@ -75,6 +75,21 @@ unsigned long ss_net_label(void);
  * (capital letters, digits and ? = / : . only). */
 void ss_plat_overlay(int darkness, const char *text);
 
+/* A notice over the top of the picture for a few seconds: a heading and one line (an achievement's title, UTF-8,
+ * shown as capitals) and, if given, a square icon of `icon_size` x `icon_size` ARGB pixels (at most 128; it is
+ * copied). `rebel` gives it the Rebel record's colours. Up to four wait their turn. */
+void ss_plat_notice(const char *heading, const char *text, int rebel, const uint32_t *icon, int icon_size);
+
+/* Rebel mode (core/rebel.c). A run started with cheats (SS_CHEATS) is a Rebel run until the program ends: it
+ * keeps its own save file, and its achievements go to a local record and never to RetroAchievements.
+ * ss_rebel_start is called before the game's main (it chooses the save file); ss_rebel_frame once per frame: it
+ * applies the cheats, never while an online session is active, and hands the frame to the achievements of the
+ * platform, if it registered any (runtime/achievements). */
+enum { SS_RUN_REBEL = 1, SS_RUN_CHEATING = 2, SS_RUN_ONLINE = 4 };
+void ss_rebel_start(void);
+void ss_rebel_frame(void);
+void ss_rebel_set_host(void (*frame)(int run_flags));
+
 /* Handle window events without showing a frame (used while a frame waits for the network). */
 void ss_plat_pump(void);
 /* One line about what the program is doing, shown in the window title (NULL or "" clears it). */

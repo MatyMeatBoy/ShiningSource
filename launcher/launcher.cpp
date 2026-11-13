@@ -23,13 +23,16 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <map>
 #include <string>
 #include <vector>
 
 #include "imgui.h"
 #include "achievements/ra_client.h"
+#include "../runtime/achievements/port_list.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
 
@@ -145,6 +148,39 @@ static void check_rom(const Game &game)
     rom_status = digest.empty() ? "missing" : digest == game.sha1 ? "ok" : "wrong";
 }
 
+/* A ROM beside the program is recognised without asking: when no ROM is set for the game, or the file that was
+ * set is gone, the .gba files in the launcher's folder and in the one above it are checked the same way as a
+ * chosen one (SHA-1), and the first that is the supported version is taken. Choosing by hand stays as it was. */
+static bool rom_found_beside;
+
+static void find_rom_beside(const Game &game)
+{
+    std::string key = std::string("rom_") + game.id, current = setting(key.c_str());
+    if (!current.empty() && GetFileAttributesA(current.c_str()) != INVALID_FILE_ATTRIBUTES)
+        return;
+    size_t cut = folder.size() > 1 ? folder.find_last_of("\\/", folder.size() - 2) : std::string::npos;
+    std::string places[2] = { folder, cut == std::string::npos ? "" : folder.substr(0, cut + 1) };
+    for (const std::string &place : places) {
+        WIN32_FIND_DATAA found;
+        HANDLE search = place.empty() ? INVALID_HANDLE_VALUE : FindFirstFileA((place + "*.gba").c_str(), &found);
+        if (search == INVALID_HANDLE_VALUE)
+            continue;
+        do {
+            /* a cartridge of this console is at most 32 MiB: nothing larger is read */
+            if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.nFileSizeHigh || found.nFileSizeLow > 32u * 1024 * 1024)
+                continue;
+            if (sha1_of(place + found.cFileName) == game.sha1) {
+                settings[key] = place + found.cFileName;
+                save_settings();
+                rom_found_beside = true;
+                FindClose(search);
+                return;
+            }
+        } while (FindNextFileA(search, &found));
+        FindClose(search);
+    }
+}
+
 /* ---- the game's own picture, made from the user's ROM ----
  * The program carries no artwork of the game. Once a ROM is chosen the launcher runs the game itself without a
  * window up to its title screen, lets it write that frame, and shows it. The file stays in the folder "cache"
@@ -197,6 +233,8 @@ static void make_title(const Game &game)
         SetEnvironmentVariableA("SS_INPUT", "420:0001,430:0000");
         SetEnvironmentVariableA("SS_SKIP", "0");
         SetEnvironmentVariableA("SS_NET", nullptr);
+        SetEnvironmentVariableA("SS_RA_DIR", nullptr);      /* not a game anyone plays: no achievements, no cheats */
+        SetEnvironmentVariableA("SS_CHEATS", nullptr);
         if (CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, cache.c_str(), &startup, &process)) {
             WaitForSingleObject(process.hProcess, 20000);
             CloseHandle(process.hThread);
@@ -333,7 +371,216 @@ static void capture_event(const SDL_Event &event)
 static KhRa *ra;
 static std::string ra_rom;          /* the ROM the list was asked for */
 
+/* ---- Rebel mode and the records the game keeps on this PC ----
+ * The game evaluates achievements itself (runtime/achievements/ach_host.c). Besides what goes to the account it
+ * keeps two records next to the launcher, one line per unlock ("id <tab> unix time <tab> title"):
+ * local_record.txt for normal runs and rebel_record.txt for runs with cheats. An id from SS_PORT_ID up is one of
+ * the port's own achievements (port_list.h), any other a RetroAchievements one. */
+struct Cheat { const char *id, *english, *spanish; };
+static const Cheat cheats[] = {
+    { "hp", "Health never runs out", "La vida no se agota" },
+    { "sp", "SP never runs out (the energy for skills and magic)", "Los SP no se agotan (la energ\xC3\xAD" "a de t\xC3\xA9" "cnicas y magia)" },
+    { "nodeath", "Cannot be defeated: damage counts, but health stops at 1", "No puedes caer: el da\xC3\xB1o cuenta, pero la vida se detiene en 1" },
+    { "gold", "Full purse: 100,000 gold in the bag at all times", "Bolsa llena: 100.000 de oro en la bolsa en todo momento" },
+};
+
+/* What the game is given in SS_CHEATS: empty unless Rebel mode is on and at least one cheat is ticked. */
+static std::string cheat_list()
+{
+    std::string list;
+    if (setting("rebel", "0") != "1")
+        return list;
+    for (const Cheat &cheat : cheats)
+        if (setting((std::string("cheat_") + cheat.id).c_str(), "0") == "1")
+            list += (list.empty() ? "" : ",") + std::string(cheat.id);
+    return list;
+}
+
+struct Unlock { uint32_t id; long long when; std::string title; };
+
+static std::vector<Unlock> read_record(const char *name)
+{
+    std::vector<Unlock> record;
+    char line[512];
+    if (FILE *file = fopen((folder + name).c_str(), "r")) {
+        while (fgets(line, sizeof line, file)) {
+            Unlock unlock;
+            char *end, *tab;
+            unlock.id = (uint32_t)strtoul(line, &end, 10);
+            unlock.when = strtoll(end, &tab, 10);
+            if (!unlock.id || *tab != '\t')
+                continue;
+            unlock.title = tab + 1;
+            while (!unlock.title.empty() && (unlock.title.back() == '\n' || unlock.title.back() == '\r'))
+                unlock.title.pop_back();
+            record.push_back(unlock);
+        }
+        fclose(file);
+    }
+    return record;
+}
+
+static const Unlock *in_record(const std::vector<Unlock> &record, uint32_t id)
+{
+    for (const Unlock &unlock : record)
+        if (unlock.id == id)
+            return &unlock;
+    return nullptr;
+}
+
+static std::string day_of(long long when)
+{
+    char day[32] = "";
+    time_t seconds = (time_t)when;
+    if (struct tm *local = localtime(&seconds))
+        strftime(day, sizeof day, "%Y-%m-%d", local);
+    return day;
+}
+
+/* The RetroAchievements entries of a record (the port's own are shown in their section). */
+static void record_list(const std::vector<Unlock> &record, const ImVec4 &colour, const ImVec4 &dim)
+{
+    int shown = 0;
+    for (const Unlock &unlock : record)
+        if (unlock.id < SS_PORT_ID) {
+            ImGui::TextColored(colour, "* %s", unlock.title.c_str());
+            ImGui::SameLine();
+            ImGui::TextColored(dim, "%s", day_of(unlock.when).c_str());
+            shown++;
+        }
+    if (!shown)
+        ImGui::TextColored(dim, "%s", text("(nothing yet)", "(nada todav\xC3\xAD" "a)"));
+}
+
+/* The port's own list, with what each record holds of it. */
+static void port_section(const std::vector<Unlock> &local, const std::vector<Unlock> &rebel, const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &pink)
+{
+    unsigned earned = 0;
+    for (uint32_t i = 0; i < SS_PORT_COUNT; i++)
+        earned += in_record(local, SS_PORT_ID + i) != nullptr;
+    ImGui::TextWrapped("%s", text("The port's own achievements. They need no account and no connection: the game checks them while you play and keeps them on this PC.",
+                                  "Los logros propios del port. No necesitan cuenta ni conexi\xC3\xB3n: el juego los comprueba mientras juegas y los guarda en este PC."));
+    ImGui::Text(text("%u of %u earned", "%u de %u conseguidos"), earned, (unsigned)SS_PORT_COUNT);
+    ImGui::BeginChild("port", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    for (uint32_t i = 0; i < SS_PORT_COUNT; i++) {
+        const ss_port_achievement &a = ss_port_list[i];
+        const Unlock *normal = in_record(local, SS_PORT_ID + i), *cheated = in_record(rebel, SS_PORT_ID + i);
+        ImVec2 at = ImGui::GetCursorScreenPos();
+        float size = ImGui::GetTextLineHeight();
+        ImU32 colour = normal ? IM_COL32(a.red, a.green, a.blue, 255) : IM_COL32(a.red / 3, a.green / 3, a.blue / 3, 255);
+        ImDrawList *draw = ImGui::GetWindowDrawList();
+        ImVec2 centre(at.x + size / 2, at.y + size / 2);
+        /* the same jewel the game shows in its notice, in this achievement's colour (dark until earned) */
+        draw->AddQuadFilled(ImVec2(centre.x, centre.y - size / 2), ImVec2(centre.x + size / 2, centre.y), ImVec2(centre.x, centre.y + size / 2),
+                            ImVec2(centre.x - size / 2, centre.y), colour);
+        draw->AddQuad(ImVec2(centre.x, centre.y - size / 2), ImVec2(centre.x + size / 2, centre.y), ImVec2(centre.x, centre.y + size / 2),
+                      ImVec2(centre.x - size / 2, centre.y), IM_COL32(232, 168, 56, 255));
+        ImGui::Dummy(ImVec2(size, size));
+        ImGui::SameLine();
+        ImGui::TextColored(normal ? gold : ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s", language ? a.title_es : a.title_en);
+        if (normal) {
+            ImGui::SameLine();
+            ImGui::TextColored(dim, "%s", day_of(normal->when).c_str());
+        }
+        if (cheated) {
+            ImGui::SameLine();
+            ImGui::TextColored(pink, text("Rebel %s", "Rebelde %s"), day_of(cheated->when).c_str());
+        }
+        ImGui::TextColored(dim, "      %s", language ? a.text_es : a.text_en);
+    }
+    ImGui::EndChild();
+}
+
+static void rebel_section(const std::vector<Unlock> &rebel, const ImVec4 &dim, const ImVec4 &pink)
+{
+    bool on = setting("rebel", "0") == "1";
+    unsigned own = 0;
+    ImGui::TextWrapped("%s", text("Rebel mode is for playing with cheats. A game started with a cheat on is a Rebel run until it closes: nothing is sent to RetroAchievements, "
+                                  "the same achievements are checked on this PC and kept in the Rebel record below, apart from everything else, and the game saves to its own file "
+                                  "(shiningsource_rebel.sav, which starts as a copy of your normal save), so nothing a cheat gave reaches your normal game. Cheats pause while an online session is active.",
+                                  "El modo rebelde es para jugar con trucos. Una partida iniciada con un truco activo es rebelde hasta que se cierra: no se env\xC3\xAD" "a nada a RetroAchievements, "
+                                  "los mismos logros se comprueban en este PC y se guardan en el registro rebelde de abajo, aparte de todo lo dem\xC3\xA1s, y el juego guarda en su propio archivo "
+                                  "(shiningsource_rebel.sav, que empieza como copia de tu partida normal), as\xC3\xAD nada de lo que dio un truco llega a tu partida normal. Los trucos se pausan durante una sesi\xC3\xB3n en l\xC3\xADnea."));
+    if (ImGui::Checkbox(text("Rebel mode: enable cheats", "Modo rebelde: activar trucos"), &on)) {
+        settings["rebel"] = on ? "1" : "0";
+        save_settings();
+    }
+    ImGui::BeginDisabled(!on);
+    ImGui::Indent();
+    for (const Cheat &cheat : cheats) {
+        std::string key = std::string("cheat_") + cheat.id;
+        bool ticked = setting(key.c_str(), "0") == "1";
+        if (ImGui::Checkbox(language ? cheat.spanish : cheat.english, &ticked)) {
+            settings[key] = ticked ? "1" : "0";
+            save_settings();
+        }
+    }
+    ImGui::Unindent();
+    ImGui::EndDisabled();
+    if (on && cheat_list().empty())
+        ImGui::TextColored(dim, "%s", text("No cheat is ticked: the next game is a normal one.", "No hay ning\xC3\xBAn truco marcado: la pr\xC3\xB3xima partida es normal."));
+    else if (on)
+        ImGui::TextColored(pink, "%s", text("The next game is a Rebel run.", "La pr\xC3\xB3xima partida es rebelde."));
+    ImGui::Separator();
+    for (const Unlock &unlock : rebel)
+        own += unlock.id >= SS_PORT_ID;
+    ImGui::TextColored(pink, text("Rebel record: %u RetroAchievements, %u of the port's own", "Registro rebelde: %u de RetroAchievements, %u propios del port"),
+                       (unsigned)rebel.size() - own, own);
+    ImGui::BeginChild("rebel", ImVec2(0, 0), ImGuiChildFlags_Borders);
+    record_list(rebel, pink, dim);
+    for (const Unlock &unlock : rebel)
+        if (unlock.id >= SS_PORT_ID && unlock.id - SS_PORT_ID < SS_PORT_COUNT) {
+            ImGui::TextColored(pink, "* %s", language ? ss_port_list[unlock.id - SS_PORT_ID].title_es : ss_port_list[unlock.id - SS_PORT_ID].title_en);
+            ImGui::SameLine();
+            ImGui::TextColored(dim, "%s  (port)", day_of(unlock.when).c_str());
+        }
+    ImGui::EndChild();
+}
+
+static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green);
+
 static void achievements_page(const Game &game, const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green)
+{
+    static std::vector<Unlock> local, rebel;
+    static int age;
+    static int open_tab = getenv("SS_LAUNCHER_TAB") ? atoi(getenv("SS_LAUNCHER_TAB")) : -1;     /* tests: open on a given tab */
+    auto chosen = [](int tab) { return open_tab == tab ? ImGuiTabItemFlags_SetSelected : ImGuiTabItemFlags_None; };
+    const ImVec4 pink(1.0f, 0.42f, 0.62f, 1);
+    if (age++ % 60 == 0) {              /* the game may be writing them right now */
+        local = read_record("local_record.txt");
+        rebel = read_record("rebel_record.txt");
+    }
+    ImGui::TextColored(gold, "%s", text("Achievements", "Logros"));
+    if (!ImGui::BeginTabBar("achievements"))
+        return;
+    if (ImGui::BeginTabItem(text("RetroAchievements account", "Cuenta de RetroAchievements"), nullptr, chosen(0))) {
+        account_section(game, gold, dim, red, green);
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(text("Without an account", "Sin cuenta"), nullptr, chosen(1))) {
+        ImGui::TextWrapped("%s", text("Once this game's list has been downloaded (sign in once), the game also checks it when you play without an account or without a connection, "
+                                      "and keeps what you earn here, on this PC. This local record is never uploaded: RetroAchievements only counts what is earned while signed in.",
+                                      "Una vez descargada la lista de este juego (inicia sesi\xC3\xB3n una vez), el juego tambi\xC3\xA9n la comprueba cuando juegas sin cuenta o sin conexi\xC3\xB3n, "
+                                      "y guarda lo que consigues aqu\xC3\xAD, en este PC. Este registro local nunca se sube: RetroAchievements solo cuenta lo conseguido con la sesi\xC3\xB3n iniciada."));
+        ImGui::BeginChild("local", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        record_list(local, gold, dim);
+        ImGui::EndChild();
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(text("The port's own", "Propios del port"), nullptr, chosen(2))) {
+        port_section(local, rebel, gold, dim, pink);
+        ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem(text("Rebel mode", "Modo rebelde"), nullptr, chosen(3))) {
+        rebel_section(rebel, dim, pink);
+        ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
+    if (age > 2)
+        open_tab = -1;                  /* from then on the user chooses */
+}
+
+static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green)
 {
     static char username[64], password[128];
     static bool remember = true;
@@ -341,7 +588,6 @@ static void achievements_page(const Game &game, const ImVec4 &gold, const ImVec4
     const rc_client_user_t *user = client ? rc_client_get_user_info(client) : nullptr;
     std::string rom = setting((std::string("rom_") + game.id).c_str());
 
-    ImGui::TextColored(gold, "%s", text("Achievements (RetroAchievements)", "Logros (RetroAchievements)"));
     if (!ra) {
         ImGui::TextColored(red, "%s", text("The achievements client could not be started.", "No se pudo iniciar el cliente de logros."));
         return;
@@ -395,8 +641,8 @@ static void achievements_page(const Game &game, const ImVec4 &gold, const ImVec4
                 unlocked += a->unlocked != 0;
             }
         ImGui::Text(text("%u of %u unlocked on your account, %u points in the set", "%u de %u desbloqueados en tu cuenta, %u puntos en el conjunto"), unlocked, total, points);
-        ImGui::TextColored(dim, "%s", text("Normal list: earned by playing without cheats. Rebel mode (sessions with cheats) keeps its own record and never touches this one.",
-                                           "Lista normal: se gana jugando sin trucos. El modo rebelde (sesiones con trucos) lleva su propio registro y nunca toca este."));
+        ImGui::TextColored(dim, "%s", text("Earned on your account by playing signed in and without cheats. What you earn without an account, and Rebel mode, are kept apart and never touch this.",
+                                           "Se ganan en tu cuenta jugando con la sesi\xC3\xB3n iniciada y sin trucos. Lo que consigues sin cuenta, y el modo rebelde, van aparte y nunca tocan esto."));
         ImGui::BeginChild("list", ImVec2(0, 0), ImGuiChildFlags_Borders);
         for (uint32_t b = 0; b < list->num_buckets; b++)
             for (uint32_t i = 0; i < list->buckets[b].num_achievements; i++) {
@@ -438,6 +684,10 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_DELAY", online && setting("delay_auto", "1") == "0" ? setting("delay", "6").c_str() : nullptr);
+    /* achievements: where the remembered sign-in, the game's list and the records are (never a password), and
+     * the cheats of a Rebel run */
+    SetEnvironmentVariableA("SS_RA_DIR", folder.substr(0, folder.size() - 1).c_str());
+    SetEnvironmentVariableA("SS_CHEATS", cheat_list().empty() ? nullptr : cheat_list().c_str());
     startup.cb = sizeof startup;
     launch_error.clear();
     if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process)) {
@@ -594,7 +844,9 @@ static void interface_frame(bool &running)
         ImGui::TextUnformatted(text("Your cartridge dump (the game is not included):", "Tu volcado del cartucho (el juego no viene incluido):"));
         ImGui::TextWrapped("%s", rom.empty() ? text("(none chosen)", "(ninguno elegido)") : rom.c_str());
         if (rom_status == "ok")
-            ImGui::TextColored(green, "%s", text("Verified: this is the supported version.", "Verificado: es la versi\xC3\xB3n compatible."));
+            ImGui::TextColored(green, "%s", rom_found_beside ? text("Found beside the program and verified: this is the supported version.",
+                                                                    "Encontrado junto al programa y verificado: es la versi\xC3\xB3n compatible.")
+                                                             : text("Verified: this is the supported version.", "Verificado: es la versi\xC3\xB3n compatible."));
         else if (rom_status == "wrong")
             ImGui::TextColored(red, "%s", text("This file is not the supported version (its SHA-1 differs). The game may not work.",
                                                "Este archivo no es la versi\xC3\xB3n compatible (su SHA-1 es distinto). Puede que el juego no funcione."));
@@ -624,6 +876,12 @@ static void interface_frame(bool &running)
             ImGui::EndDisabled();
             ImGui::SameLine();
             ImGui::TextColored(dim, "%s", setting("mode") == "classic" ? text("Classic mode", "Modo cl\xC3\xA1sico") : text("Enhanced mode", "Modo mejorado"));
+            if (!cheat_list().empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.42f, 0.62f, 1));
+                ImGui::TextWrapped("%s", text("Rebel mode: cheats are on. This game counts for the Rebel record only and uses its own save.",
+                                                                             "Modo rebelde: hay trucos activos. Esta partida solo cuenta para el registro rebelde y usa su propia partida guardada."));
+                ImGui::PopStyleColor();
+            }
         }
         if (!launch_error.empty())
             ImGui::TextColored(red, "%s", launch_error.c_str());
@@ -832,6 +1090,7 @@ int main(int, char **)
     folder.erase(folder.find_last_of("\\/") + 1);
     load_settings();
     language = setting("language", "en") == "es";
+    find_rom_beside(games[0]);
     check_rom(games[0]);
 
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -848,7 +1107,15 @@ int main(int, char **)
     }
     SDL_GL_SetSwapInterval(1);
     IMGUI_CHECKVERSION();
-    ra = KhRaCreate(folder.c_str(), nullptr, nullptr, nullptr);     /* a remembered session signs in by itself */
+    {                                   /* the client takes its folder as UTF-8; a remembered session signs in by itself */
+        wchar_t wide[MAX_PATH];
+        char utf8[MAX_PATH * 3];
+        GetModuleFileNameW(nullptr, wide, MAX_PATH);
+        if (wchar_t *slash = wcsrchr(wide, L'\\'))
+            *slash = 0;
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, sizeof utf8, nullptr, nullptr);
+        ra = KhRaCreate(utf8, nullptr, nullptr, nullptr);
+    }
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::GetIO().FontGlobalScale = 1.25f;

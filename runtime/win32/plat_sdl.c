@@ -395,16 +395,54 @@ static const uint8_t *glyph(char c)
     static const uint8_t question[7] = {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}, equals[7] = {0x00,0x00,0x1F,0x00,0x1F,0x00,0x00},
                          slash[7] = {0x01,0x01,0x02,0x04,0x08,0x10,0x10}, colon[7] = {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00},
                          dot[7] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}, blank[7] = {0};
+    /* the rest of what an achievement's title may hold */
+    static const uint8_t bang[7] = {0x04,0x04,0x04,0x04,0x04,0x00,0x04}, quote[7] = {0x04,0x04,0x08,0x00,0x00,0x00,0x00},
+                         comma[7] = {0x00,0x00,0x00,0x00,0x0C,0x04,0x08}, dash[7] = {0x00,0x00,0x00,0x1F,0x00,0x00,0x00},
+                         paren_l[7] = {0x02,0x04,0x08,0x08,0x08,0x04,0x02}, paren_r[7] = {0x08,0x04,0x02,0x02,0x02,0x04,0x08},
+                         plus[7] = {0x00,0x04,0x04,0x1F,0x04,0x04,0x00}, percent[7] = {0x18,0x19,0x02,0x04,0x08,0x13,0x03},
+                         amp[7] = {0x0C,0x12,0x14,0x08,0x15,0x12,0x0D};
     if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
     if (c >= '0' && c <= '9') return digits[c - '0'];
-    return c == '?' ? question : c == '=' ? equals : c == '/' ? slash : c == ':' ? colon : c == '.' ? dot : blank;
+    switch (c) {
+    case '?': return question;
+    case '=': return equals;
+    case '/': return slash;
+    case ':': return colon;
+    case '.': return dot;
+    case '!': return bang;
+    case '\'': return quote;
+    case ',': return comma;
+    case '-': return dash;
+    case '(': return paren_l;
+    case ')': return paren_r;
+    case '+': return plus;
+    case '%': return percent;
+    case '&': return amp;
+    }
+    return blank;
+}
+
+/* One line of 5 x 7 text in the current draw colour. */
+static void draw_text(const char *text, int length, int x, int y)
+{
+    SDL_FRect box;
+    int i, row, column;
+    for (i = 0; i < length; i++) {
+        const uint8_t *rows = glyph(text[i]);
+        for (row = 0; row < 7; row++)
+            for (column = 0; column < 5; column++)
+                if (rows[row] & (0x10 >> column)) {
+                    box = (SDL_FRect){ (float)(x + i * 6 + column), (float)(y + row), 1, 1 };
+                    SDL_RenderFillRect(renderer, &box);
+                }
+    }
 }
 
 /* Draw the overlay over a picture `width` x `height` units big (the current logical size). */
 static void draw_overlay(int width, int height)
 {
     SDL_FRect box;
-    int length = (int)SDL_strlen(overlay_text), x, y, i, row, column;
+    int length = (int)SDL_strlen(overlay_text), x, y;
     if (overlay_darkness > 0) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)overlay_darkness);
@@ -420,14 +458,114 @@ static void draw_overlay(int width, int height)
     box = (SDL_FRect){ (float)x - 4, (float)y - 3, (float)(length * 6 + 7), 13 };
     SDL_RenderFillRect(renderer, &box);
     SDL_SetRenderDrawColor(renderer, 255, 232, 150, 255);
-    for (i = 0; i < length; i++) {
-        const uint8_t *rows = glyph(overlay_text[i]);
-        for (row = 0; row < 7; row++)
-            for (column = 0; column < 5; column++)
-                if (rows[row] & (0x10 >> column)) {
-                    box = (SDL_FRect){ (float)(x + i * 6 + column), (float)(y + row), 1, 1 };
-                    SDL_RenderFillRect(renderer, &box);
-                }
+    draw_text(overlay_text, length, x, y);
+}
+
+/* ---- notices: a heading and one line, over the top of the picture for a few seconds ----
+ * Used for achievements (runtime/achievements). They wait in a short queue, so two unlocked in the same frame are
+ * both read. Time is counted in frames shown. A line longer than the picture slides to its end while it shows. */
+enum { NOTICE_FRAMES = 300, NOTICE_FADE = 20, NOTICE_QUEUE = 4, NOTICE_ICON = 20, NOTICE_ICON_MAX = 128 };
+struct notice { char heading[48], text[96]; int rebel, icon_size; uint32_t *icon; };    /* icon: square, ARGB, own copy */
+static struct notice notices[NOTICE_QUEUE];
+static int notice_count, notice_age;
+static SDL_Texture *notice_texture;         /* the icon of the notice being shown */
+
+/* Capitals only (the 5 x 7 set has no accents): the accented letters of Latin-1 lose the accent, and any other
+ * character outside ASCII becomes one '?'. The text is UTF-8. */
+static void notice_copy(char *out, size_t capacity, const char *text)
+{
+    /* U+00C0..U+00FF without the bit that tells capitals from small letters */
+    static const char plain[33] = "AAAAAA?CEEEEIIII?NOOOOO?OUUUUY??";
+    size_t n = 0;
+    for (; text && *text && n + 1 < capacity; text++) {
+        unsigned char c = (unsigned char)*text, next = (unsigned char)text[1];
+        if ((c & 0xC0) == 0x80)
+            continue;                               /* the tail of a character already shown */
+        if (c == 0xC3 && next >= 0x80 && next < 0xC0)
+            out[n++] = plain[next & 0x1F];
+        else
+            out[n++] = c >= 0x80 ? '?' : c >= 'a' && c <= 'z' ? (char)(c - 32) : c < 32 ? ' ' : (char)c;
+    }
+    out[n] = 0;
+}
+
+void ss_plat_notice(const char *heading, const char *text, int rebel, const uint32_t *icon, int icon_size)
+{
+    struct notice *notice;
+    if (notice_count == NOTICE_QUEUE)
+        return;
+    notice = &notices[notice_count++];
+    notice_copy(notice->heading, sizeof notice->heading, heading);
+    notice_copy(notice->text, sizeof notice->text, text);
+    notice->rebel = rebel;
+    notice->icon = NULL;
+    notice->icon_size = 0;
+    if (icon && icon_size > 0 && icon_size <= NOTICE_ICON_MAX && (notice->icon = malloc((size_t)icon_size * icon_size * 4)) != NULL) {
+        memcpy(notice->icon, icon, (size_t)icon_size * icon_size * 4);
+        notice->icon_size = icon_size;
+    }
+}
+
+/* Draw the notice whose turn it is, centred at the top of the picture: `width` columns from (left, top). */
+static void draw_notice(int left, int top, int width)
+{
+    const struct notice *notice = &notices[0];
+    int heading, length, fit, first = 0, shown, columns, x, alpha = 255, icon;
+    SDL_FRect box;
+
+    if (!notice_count)
+        return;
+    if (notice->icon && !notice_texture && !notice_age) {
+        notice_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, notice->icon_size, notice->icon_size);
+        if (notice_texture) {
+            SDL_UpdateTexture(notice_texture, NULL, notice->icon, notice->icon_size * 4);
+            SDL_SetTextureBlendMode(notice_texture, SDL_BLENDMODE_BLEND);
+            SDL_SetTextureScaleMode(notice_texture, SDL_SCALEMODE_LINEAR);
+        }
+    }
+    icon = notice_texture ? NOTICE_ICON + 4 : 0;    /* room at the left of the text */
+    fit = (width - 16 - icon) / 6;
+    heading = (int)SDL_strlen(notice->heading);
+    length = (int)SDL_strlen(notice->text);
+    if (notice_age < NOTICE_FADE)
+        alpha = 255 * (notice_age + 1) / NOTICE_FADE;
+    if (notice_age >= NOTICE_FRAMES - NOTICE_FADE)
+        alpha = 255 * (NOTICE_FRAMES - notice_age) / NOTICE_FADE;
+    if (heading > fit)
+        heading = fit;
+    shown = length > fit ? fit : length;
+    if (length > fit) {                             /* slide: a second still, then a character every eight frames */
+        first = (notice_age - 60) / 8;
+        if (first < 0) first = 0;
+        if (first > length - fit) first = length - fit;
+    }
+    columns = shown > heading ? shown : heading;
+    x = left + (width - columns * 6 - icon) / 2 + icon;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(alpha * 190 / 255));
+    box = (SDL_FRect){ (float)(x - 5 - icon), (float)top + 2, (float)(columns * 6 + 9 + icon), 24 };
+    SDL_RenderFillRect(renderer, &box);
+    if (notice->rebel)
+        SDL_SetRenderDrawColor(renderer, 255, 96, 150, (Uint8)alpha);
+    else
+        SDL_SetRenderDrawColor(renderer, 232, 168, 56, (Uint8)alpha);
+    SDL_RenderRect(renderer, &box);
+    draw_text(notice->heading, heading, x + (columns - heading) * 3, top + 5);
+    SDL_SetRenderDrawColor(renderer, 255, 244, 214, (Uint8)alpha);
+    draw_text(notice->text + first, shown, x + (columns - shown) * 3, top + 15);
+    if (notice_texture) {
+        box = (SDL_FRect){ (float)(x - 2 - icon), (float)top + 4, NOTICE_ICON, NOTICE_ICON };
+        SDL_SetTextureAlphaMod(notice_texture, (Uint8)alpha);
+        SDL_RenderTexture(renderer, notice_texture, NULL, &box);
+    }
+    if (++notice_age >= NOTICE_FRAMES) {
+        if (notice_texture)
+            SDL_DestroyTexture(notice_texture);
+        notice_texture = NULL;
+        free(notices[0].icon);
+        notice_age = 0;
+        notice_count--;
+        memmove(&notices[0], &notices[1], (size_t)notice_count * sizeof notices[0]);
     }
 }
 
@@ -564,6 +702,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         draw_border();
         SDL_RenderTexture(renderer, texture, &source, &inside);
         draw_overlay(width + 2 * border, SS_SCREEN_H + 2 * border);
+        draw_notice(border, border, width);
         held |= touch_buttons(width + 2 * border);
     } else {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -574,6 +713,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
             draw_field(width, SS_SCREEN_H, 0, 0, 0, 0);
         SDL_RenderTexture(renderer, texture, &source, NULL);
         draw_overlay(width, SS_SCREEN_H);
+        draw_notice(0, 0, width);
         held |= touch_buttons(width);
     }
     {                                   /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N */
