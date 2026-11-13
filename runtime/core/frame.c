@@ -173,6 +173,8 @@ void VBlankIntrWait(void)
         }
         text = getenv("SS_VIEW");             /* SS_VIEW=284 forces the picture width; SS_VIEW=240 turns wide view off */
         forced_width = text ? (int)strtoul(text, NULL, 10) : 0;
+        text = getenv("SS_MODE");             /* classic: the console's picture, whatever the window */
+        if (text && !memcmp(text, "classic", 8)) forced_width = SS_SCREEN_W;
         if (forced_width && forced_width < SS_SCREEN_W) forced_width = SS_SCREEN_W;
         if (forced_width > SS_MAX_VIEW_W) forced_width = SS_MAX_VIEW_W;
         REG_KEYINPUT = 0x03FF;          /* no button held */

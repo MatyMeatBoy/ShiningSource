@@ -13,6 +13,8 @@ import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
@@ -40,7 +42,8 @@ public class MainActivity extends Activity {
     private TextView romStatus;
     private Button play;
     private CheckBox online;
-    private EditText room, delay, server;
+    private EditText room, delay, server, border;
+    private RadioButton classic, enhanced;
 
     private String text(String english, String other) {
         return spanish ? other : english;
@@ -83,6 +86,28 @@ public class MainActivity extends Activity {
             }
         });
         page.addView(choose);
+
+        // the two ways to see the game; nothing is chosen on the first start, and Play waits for the choice
+        page.addView(label(text("How do you want to see the game?", "¿Cómo quieres ver el juego?")));
+        RadioGroup modes = new RadioGroup(this);
+        classic = new RadioButton(this);
+        classic.setText(text("Classic: the console's picture at a whole scale, inside a border", "Clásico: la imagen de la consola a escala entera, dentro de un borde"));
+        classic.setTextColor(Color.WHITE);
+        enhanced = new RadioButton(this);
+        enhanced.setText(text("Enhanced: the picture adapts to the screen and shows more of the map", "Mejorado: la imagen se adapta a la pantalla y muestra más mapa"));
+        enhanced.setTextColor(Color.WHITE);
+        modes.addView(classic);
+        modes.addView(enhanced);
+        String mode = saved.getString("mode", "");
+        classic.setChecked(mode.equals("classic"));
+        enhanced.setChecked(mode.equals("enhanced"));
+        modes.setOnCheckedChangeListener(new RadioGroup.OnCheckedChangeListener() {
+            public void onCheckedChanged(RadioGroup group, int id) {
+                showRom(null);
+            }
+        });
+        page.addView(modes);
+        border = field(text("Border thickness in classic mode (0 to 64)", "Grosor del borde en modo clásico (0 a 64)"), saved.getString("border", "16"), true, page);
 
         online = new CheckBox(this);
         online.setText(text("Play online (2 to 4 players)", "Jugar en línea (2 a 4 jugadores)"));
@@ -147,7 +172,7 @@ public class MainActivity extends Activity {
                                    "Este archivo no es la versión compatible (su SHA-1 es distinto). Puede que el juego no funcione."));
             romStatus.setTextColor(Color.rgb(242, 115, 102));
         }
-        play.setEnabled(file.exists());
+        play.setEnabled(file.exists() && (classic.isChecked() || enhanced.isChecked()));
     }
 
     @Override
@@ -189,11 +214,18 @@ public class MainActivity extends Activity {
     }
 
     private void start() {
+        getPreferences(MODE_PRIVATE).edit().putString("mode", classic.isChecked() ? "classic" : "enhanced")
+                .putString("border", border.getText().toString()).apply();
         getPreferences(MODE_PRIVATE).edit().putBoolean("online", online.isChecked()).putString("room", room.getText().toString())
                 .putString("delay", delay.getText().toString()).putString("server", server.getText().toString()).apply();
         try {
             // settings of this run; a file named shiningsource.test.env next to it adds test settings
             PrintWriter env = new PrintWriter(new File(getExternalFilesDir(null), "shiningsource.env"), "UTF-8");
+            if (classic.isChecked()) {
+                env.println("SS_MODE=classic");
+                env.println("SS_BORDER=" + border.getText().toString().trim());
+                env.println("SS_BORDER_STYLE=4");
+            }
             if (online.isChecked()) {
                 env.println("SS_NET=" + server.getText().toString().trim());
                 env.println("SS_NET_ROOM=" + room.getText().toString().trim());

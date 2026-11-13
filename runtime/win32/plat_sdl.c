@@ -157,9 +157,130 @@ void ss_plat_audio(const int16_t *samples, int frames)
 
 /* The picture keeps a whole-number scale (the largest that fits the height of the window) and takes as many
  * columns as the width then allows, so a 16:9 window shows 284 columns and an ultrawide one up to 480. */
+/* ---- screen modes ----
+ * Enhanced (the default): the picture takes the width the window allows, see ss_plat_view_width.
+ * Classic (SS_MODE=classic): the console's 240 x 160 picture at the largest whole-number scale that fits, inside
+ * a border. SS_BORDER is its thickness in console pixels (0 to 64) and SS_BORDER_STYLE its look (0 black,
+ * 1 graphite, 2 indigo, 3 silver, 4 "Soul", the default). The border is drawn here, with no artwork of any game
+ * or console. */
+static int classic = -1, border, border_style;
+
+static void read_mode(void)
+{
+    const char *text = getenv("SS_MODE");
+    classic = text && !strcmp(text, "classic");
+    border = getenv("SS_BORDER") ? atoi(getenv("SS_BORDER")) : 16;
+    if (border < 0) border = 0;
+    if (border > 64) border = 64;
+    border_style = getenv("SS_BORDER_STYLE") ? atoi(getenv("SS_BORDER_STYLE")) : 4;
+    if (border_style < 0 || border_style > 4) border_style = 4;
+}
+
+static void fill(float x, float y, float w, float h, int r, int g, int b)
+{
+    SDL_FRect box = { x, y, w, h };
+    SDL_SetRenderDrawColor(renderer, (Uint8)r, (Uint8)g, (Uint8)b, 255);
+    SDL_RenderFillRect(renderer, &box);
+}
+
+/* A small jewel: a diamond of `size` rows with a light facet. */
+static void jewel(int cx, int cy, int size, int r, int g, int b)
+{
+    int row;
+    for (row = -size; row <= size; row++) {
+        int half = size - (row < 0 ? -row : row);
+        fill((float)(cx - half), (float)(cy + row), (float)(2 * half + 1), 1, r, g, b);
+    }
+    fill((float)(cx - size / 2), (float)(cy - size / 2), (float)(size / 2 + 1), 1, 255, 250, 220);
+}
+
+/* Style 4, "Soul": the port's own frame in the spirit of the game's menus. A deep blue-green field that darkens
+ * towards the bottom, faint lattice of light points like a night sky, a gold frame with a bright and a dark
+ * line, and jewels at the corners and the middles of the sides. Everything is computed; nothing is copied from
+ * the cartridge. All measures follow the border's thickness, so it holds from 4 pixels up. */
+static void draw_soul_border(void)
+{
+    const int w = SS_SCREEN_W + 2 * border, h = SS_SCREEN_H + 2 * border;
+    const int left = border, top = border, right = border + SS_SCREEN_W, bottom = border + SS_SCREEN_H;
+    int y, x, k, size = border >= 20 ? 4 : border >= 12 ? 3 : 2;
+
+    for (y = 0; y < h; y++) {                       /* the field, darker towards the bottom */
+        int t = y * 255 / (h > 1 ? h - 1 : 1);
+        fill(0, (float)y, (float)w, 1, 20 - t * 10 / 255, 62 - t * 34 / 255, 74 - t * 36 / 255);
+    }
+    for (y = 3; y < h; y += 7)                       /* points of light, a fixed pattern */
+        for (x = 3 + (y * 5) % 11; x < w; x += 13) {
+            if (x >= left - 3 && x < right + 3 && y >= top - 3 && y < bottom + 3)
+                continue;
+            k = (x * 31 + y * 17) % 5;
+            fill((float)x, (float)y, 1, 1, 60 + k * 22, 120 + k * 20, 130 + k * 20);
+        }
+    if (border < 4) {
+        fill((float)left - 1, (float)top - 1, SS_SCREEN_W + 2, SS_SCREEN_H + 2, 232, 168, 56);
+        return;
+    }
+    /* outer rim of the whole border */
+    fill(0, 0, (float)w, 1, 232, 168, 56); fill(0, (float)h - 1, (float)w, 1, 150, 96, 24);
+    fill(0, 0, 1, (float)h, 232, 168, 56); fill((float)w - 1, 0, 1, (float)h, 150, 96, 24);
+    /* the frame around the picture: dark seat, gold, bright line, gold */
+    fill((float)left - 4, (float)top - 4, SS_SCREEN_W + 8, SS_SCREEN_H + 8, 96, 58, 16);
+    fill((float)left - 3, (float)top - 3, SS_SCREEN_W + 6, SS_SCREEN_H + 6, 232, 168, 56);
+    fill((float)left - 2, (float)top - 2, SS_SCREEN_W + 4, SS_SCREEN_H + 4, 255, 226, 138);
+    fill((float)left - 1, (float)top - 1, SS_SCREEN_W + 2, SS_SCREEN_H + 2, 40, 24, 8);
+    if (border >= 8) {
+        const int reach = border / 2 > 5 ? border / 2 : 5;          /* how far the jewels sit from the picture */
+        const int px[3] = { left - 3, (left + right) / 2, right + 2 }, py[3] = { top - 3, (top + bottom) / 2, bottom + 2 };
+        (void)reach;
+        for (k = 0; k < 3; k++) {
+            jewel(px[k], top - 3, size, k == 1 ? 92 : 232, k == 1 ? 214 : 168, k == 1 ? 226 : 56);
+            jewel(px[k], bottom + 2, size, k == 1 ? 92 : 232, k == 1 ? 214 : 168, k == 1 ? 226 : 56);
+        }
+        jewel(left - 3, py[1], size, 92, 214, 226);
+        jewel(right + 2, py[1], size, 92, 214, 226);
+    }
+    if (border >= 14) {                               /* a second, thin gold line half way out */
+        const int out = border / 2;
+        fill((float)left - out, (float)top - out, (float)(SS_SCREEN_W + 2 * out), 1, 170, 118, 40);
+        fill((float)left - out, (float)bottom + out - 1, (float)(SS_SCREEN_W + 2 * out), 1, 170, 118, 40);
+        fill((float)left - out, (float)top - out, 1, (float)(SS_SCREEN_H + 2 * out), 170, 118, 40);
+        fill((float)right + out - 1, (float)top - out, 1, (float)(SS_SCREEN_H + 2 * out), 170, 118, 40);
+    }
+}
+
+static void draw_border(void)
+{
+    static const uint8_t body[4][3] = { { 0, 0, 0 }, { 44, 46, 52 }, { 62, 52, 128 }, { 176, 180, 190 } };
+    const uint8_t *c = body[border_style & 3];
+    SDL_FRect box;
+    int i;
+    if (border_style == 4) {
+        SDL_SetRenderDrawColor(renderer, 10, 28, 38, 255);      /* what shows outside the whole-number scale */
+        SDL_RenderClear(renderer);
+        draw_soul_border();
+        return;
+    }
+    SDL_SetRenderDrawColor(renderer, c[0], c[1], c[2], 255);
+    SDL_RenderClear(renderer);
+    if (!border || !border_style)
+        return;
+    for (i = 0; i < 2 && i < border; i++) {         /* a lighter edge outside, a dark seat around the picture */
+        box = (SDL_FRect){ (float)i, (float)i, (float)(SS_SCREEN_W + 2 * border - 2 * i), (float)(SS_SCREEN_H + 2 * border - 2 * i) };
+        SDL_SetRenderDrawColor(renderer, (Uint8)(c[0] + (255 - c[0]) / (3 + i)), (Uint8)(c[1] + (255 - c[1]) / (3 + i)),
+                               (Uint8)(c[2] + (255 - c[2]) / (3 + i)), 255);
+        SDL_RenderRect(renderer, &box);
+    }
+    box = (SDL_FRect){ (float)border - 2, (float)border - 2, SS_SCREEN_W + 4, SS_SCREEN_H + 4 };
+    SDL_SetRenderDrawColor(renderer, (Uint8)(c[0] / 3), (Uint8)(c[1] / 3), (Uint8)(c[2] / 3), 255);
+    SDL_RenderFillRect(renderer, &box);
+}
+
 int ss_plat_view_width(void)
 {
     int w = 0, h = 0, scale, width;
+    if (classic < 0)
+        read_mode();
+    if (classic)
+        return SS_SCREEN_W;
     if (!window || !SDL_GetWindowSizeInPixels(window, &w, &h) || h < SS_SCREEN_H)
         return SS_SCREEN_W;
     scale = h / SS_SCREEN_H;
@@ -320,15 +441,39 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
     if ((held & 0xC0) == 0xC0) held &= ~0xC0;
 
+    if (classic < 0)
+        read_mode();
     if (width != shown_width) {
-        SDL_SetRenderLogicalPresentation(renderer, width, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        if (classic)
+            SDL_SetRenderLogicalPresentation(renderer, width + 2 * border, SS_SCREEN_H + 2 * border, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        else
+            SDL_SetRenderLogicalPresentation(renderer, width, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
         shown_width = width;
     }
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
-    SDL_RenderTexture(renderer, texture, &source, NULL);
-    held |= touch_buttons(width);
+    if (classic) {
+        SDL_FRect inside = { (float)border, (float)border, (float)width, SS_SCREEN_H };
+        draw_border();
+        SDL_RenderTexture(renderer, texture, &source, &inside);
+        held |= touch_buttons(width + 2 * border);
+    } else {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+        SDL_RenderTexture(renderer, texture, &source, NULL);
+        held |= touch_buttons(width);
+    }
+    {                                   /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N */
+        static long shot_at = -1, presented;
+        if (shot_at < 0)
+            shot_at = getenv("SS_WINDOW_SHOT") ? atol(getenv("SS_WINDOW_SHOT")) : 0;
+        if (shot_at && ++presented == shot_at) {
+            SDL_Surface *surface = SDL_RenderReadPixels(renderer, NULL);
+            if (surface) {
+                SDL_SaveBMP(surface, "ss_window.bmp");
+                SDL_DestroySurface(surface);
+            }
+        }
+    }
     SDL_RenderPresent(renderer);
 
     /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */

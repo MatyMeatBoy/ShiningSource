@@ -265,7 +265,11 @@ static void play(const Game &game)
     PROCESS_INFORMATION process = {};
     std::string view = setting("view", "auto");
 
-    SetEnvironmentVariableA("SS_VIEW", view == "auto" ? nullptr : view.c_str());
+    bool classic = setting("mode", "enhanced") == "classic";
+    SetEnvironmentVariableA("SS_MODE", classic ? "classic" : nullptr);
+    SetEnvironmentVariableA("SS_BORDER", classic ? setting("border", "16").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_BORDER_STYLE", classic ? setting("border_style", "4").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_VIEW", view == "auto" || classic ? nullptr : view.c_str());
     SetEnvironmentVariableA("SS_FULLSCREEN", setting("fullscreen", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
@@ -373,10 +377,28 @@ static void interface_frame(bool &running)
         if (ImGui::Button(text("Choose ROM...", "Elegir ROM...")))
             choose_rom(game);
         ImGui::Spacing();
-        ImGui::BeginDisabled(rom.empty() || rom_status == "missing");
-        if (ImGui::Button(text("PLAY", "JUGAR"), ImVec2(220, 54)))
-            play(game);
-        ImGui::EndDisabled();
+        if (setting("mode").empty()) {
+            /* first start: the two ways to see the game */
+            ImGui::TextColored(gold, "%s", text("How do you want to see the game?", "\xC2\xBF" "C\xC3\xB3mo quieres ver el juego?"));
+            if (ImGui::Button(text("Classic", "Cl\xC3\xA1sico"), ImVec2(220, 54))) {
+                settings["mode"] = "classic";
+                save_settings();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button(text("Enhanced", "Mejorado"), ImVec2(220, 54))) {
+                settings["mode"] = "enhanced";
+                save_settings();
+            }
+            ImGui::TextWrapped("%s", text("Classic: the console's picture, as an emulator shows it, at a whole scale inside a border you can adjust. Enhanced: the picture adapts to the window and shows more of the map. You can change it later in Video.",
+                                          "Cl\xC3\xA1sico: la imagen de la consola, como la muestra un emulador, a escala entera dentro de un borde que puedes ajustar. Mejorado: la imagen se adapta a la ventana y muestra m\xC3\xA1s mapa. Puedes cambiarlo luego en V\xC3\xAD" "deo."));
+        } else {
+            ImGui::BeginDisabled(rom.empty() || rom_status == "missing");
+            if (ImGui::Button(text("PLAY", "JUGAR"), ImVec2(220, 54)))
+                play(game);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextColored(dim, "%s", setting("mode") == "classic" ? text("Classic mode", "Modo cl\xC3\xA1sico") : text("Enhanced mode", "Modo mejorado"));
+        }
         if (!launch_error.empty())
             ImGui::TextColored(red, "%s", launch_error.c_str());
         ImGui::Spacing();
@@ -387,7 +409,35 @@ static void interface_frame(bool &running)
         const char *labels_es[] = { "Autom\xC3\xA1tico: llenar la ventana", "Original 3:2 (240 columnas)", "16:9 (284 columnas)", "M\xC3\xA1s ancho (320 columnas)", "M\xC3\xA1ximo (480 columnas)" };
         std::string view = setting("view", "auto");
         bool fullscreen = setting("fullscreen", "0") == "1";
-        ImGui::TextColored(gold, "%s", text("Picture", "Imagen"));
+        bool classic = setting("mode", "enhanced") == "classic";
+        ImGui::TextColored(gold, "%s", text("Screen mode", "Modo de pantalla"));
+        if (ImGui::RadioButton(text("Classic: the console's picture at a whole scale, with a border", "Cl\xC3\xA1sico: la imagen de la consola a escala entera, con borde"), classic)) {
+            settings["mode"] = "classic";
+            save_settings();
+        }
+        if (ImGui::RadioButton(text("Enhanced: the picture adapts to the window", "Mejorado: la imagen se adapta a la ventana"), !classic)) {
+            settings["mode"] = "enhanced";
+            save_settings();
+        }
+        ImGui::Spacing();
+        if (classic) {
+            int size = atoi(setting("border", "16").c_str()), look = atoi(setting("border_style", "4").c_str());
+            ImGui::TextColored(gold, "%s", text("Border", "Borde"));
+            ImGui::SetNextItemWidth(260);
+            if (ImGui::SliderInt(text("Thickness", "Grosor"), &size, 0, 64, text("%d pixels", "%d p\xC3\xADxeles"))) {
+                settings["border"] = std::to_string(size);
+                save_settings();
+            }
+            ImGui::SetNextItemWidth(260);
+            if (ImGui::Combo(text("Look", "Aspecto"), &look, language ? "Negro\0Grafito\0\xC3\x8Dndigo\0Plata\0Soul (el del port)\0" : "Black\0Graphite\0Indigo\0Silver\0Soul (the port's own)\0")) {
+                settings["border_style"] = std::to_string(look);
+                save_settings();
+            }
+            ImGui::TextWrapped("%s", text("A thicker border leaves a smaller picture: the scale is always a whole number, so every pixel stays square and sharp.",
+                                          "Un borde m\xC3\xA1s grueso deja una imagen m\xC3\xA1s peque\xC3\xB1" "a: la escala siempre es un n\xC3\xBAmero entero, as\xC3\xAD cada p\xC3\xADxel queda cuadrado y n\xC3\xADtido."));
+        }
+        ImGui::BeginDisabled(classic);
+        ImGui::TextColored(gold, "%s", text("Picture (enhanced mode)", "Imagen (modo mejorado)"));
         for (int i = 0; i < 5; i++) {
             if (ImGui::RadioButton(language ? labels_es[i] : labels_en[i], view == values[i])) {
                 settings["view"] = values[i];
@@ -396,6 +446,7 @@ static void interface_frame(bool &running)
         }
         ImGui::TextWrapped("%s", text("In field scenes the extra columns show more of the real map; menus and story scenes keep the original picture, centred. Nothing is stretched.",
                                       "En las escenas de campo las columnas extra muestran m\xC3\xA1s del mapa real; los men\xC3\xBAs y escenas de historia conservan la imagen original, centrada. Nada se estira."));
+        ImGui::EndDisabled();
         if (ImGui::Checkbox(text("Start in full screen (F11 switches while playing)", "Empezar en pantalla completa (F11 cambia durante el juego)"), &fullscreen)) {
             settings["fullscreen"] = fullscreen ? "1" : "0";
             save_settings();
