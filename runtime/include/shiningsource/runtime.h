@@ -78,6 +78,7 @@ unsigned long ss_net_label(void);
  * Called from the game's own sender and receivers through games/<game>/port/patches.json. */
 int ss_net_msg_online(void);
 int ss_net_msg_send(const void *data, int size);
+int ss_net_msg_next(int *who, void *data, int capacity);
 int ss_net_msg_recv(int who, void *data, int capacity);
 int ss_net_msg_gone(int who);
 void ss_net_flush(void);       /* end of a game frame: send this frame's block now */

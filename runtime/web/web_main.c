@@ -118,6 +118,7 @@ void ss_net_flush(void) {}
 int ss_net_msg_online(void) { return 0; }
 int ss_net_msg_send(const void *data, int size) { (void)data; (void)size; return 0; }
 int ss_net_msg_recv(int who, void *data, int capacity) { (void)who; (void)data; (void)capacity; return 0; }
+int ss_net_msg_next(int *who, void *data, int capacity) { (void)who; (void)data; (void)capacity; return 0; }
 int ss_net_msg_gone(int who) { (void)who; return 0; }
 void ss_plat_net_wait(int milliseconds) { emscripten_sleep((unsigned)milliseconds); }
 uint32_t ss_plat_ticks_ms(void) { return (uint32_t)emscripten_get_now(); }

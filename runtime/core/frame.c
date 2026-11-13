@@ -10,6 +10,14 @@
  *   SS_DUMP=N       at frame N write ss_video_dump.bin (registers, palette, VRAM, OAM) and ss_frame.raw (rendered)
  *   SS_INPUT=...    scripted buttons (SS_INPUT_FILE=path reads the script from a file): "300:0001,310:0000,..." = from frame 300 hold mask 0x0001 (A), then release.
  *                   Mask bits: A B Select Start Right Left Up Down R L.
+ *   SS_INPUT_SHIFT=F:N  from frame F on, the script is read N frames ahead (online tests: every player gets its own
+ *                   N, so the players do not all press the same buttons and stand on one spot)
+ *   SS_INPUT_HUNT=F  from frame F on, while an enemy lives, the script's buttons are replaced: walk to the nearest
+ *                   enemy and strike it (games/ss2; online tests, so that enemies die and come back). The
+ *                   player's seat varies the rhythm, so the players do not act as one.
+ *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
+ *                   every live enemy (games/ss2: the five records at gUnk_030056F4). tools/enemy_compare.py
+ *                   compares the files of the players of one session.
  */
 #include "shiningsource/runtime.h"
 
@@ -113,19 +121,119 @@ void ss_audio_report(void)
 
 static void scripted_input(void)
 {
+    static unsigned long shift_from = ~0ul, shift_by;
     const char *cursor = input_script;
+    unsigned long at = frame_count;
     uint16_t held = 0;
+    if (shift_from == ~0ul) {           /* SS_INPUT_SHIFT=F:N, see the top of this file */
+        const char *text = getenv("SS_INPUT_SHIFT");
+        char *end = NULL;
+        shift_from = text ? strtoul(text, &end, 10) : 0;
+        shift_by = end && *end == ':' ? strtoul(end + 1, NULL, 10) : 0;
+    }
+    if (shift_by && at >= shift_from)
+        at += shift_by;
     while (cursor && *cursor) {
         char *end;
         unsigned long from = strtoul(cursor, &end, 10), mask;
         if (*end != ':')
             break;
         mask = strtoul(end + 1, &end, 16);
-        if (from <= frame_count)
+        if (from <= at)
             held = (uint16_t)mask;
         cursor = *end == ',' ? end + 1 : NULL;
     }
+    {   /* SS_INPUT_HUNT=F, see the top of this file. Positions are those of games/ss2: the players' records at
+         * gUnk_03003CE0 (0x14C bytes each, x and y at 0x8C and 0x90), the enemies' at gUnk_030056F4 (0x2E0 bytes
+         * each, x and y at 0x14 and 0x18, live ones in the mask gUnk_030056FC), all in 1/256 pixel. */
+        static unsigned long hunt_from = ~0ul;
+        if (hunt_from == ~0ul)
+            hunt_from = getenv("SS_INPUT_HUNT") ? strtoul(getenv("SS_INPUT_HUNT"), NULL, 10) : 0;
+        if (hunt_from && frame_count >= hunt_from) {
+            uint32_t records = *(const uint32_t *)(uintptr_t)0x030056F4u, mask = *(const uint32_t *)(uintptr_t)0x030056FCu & 31;
+            int me = REG16(0x128) >> 4 & 3, i, best = -1;
+            int32_t mine[2], theirs[2], dx = 0, dy = 0;
+            long nearest = 0;
+            memcpy(mine, (const uint8_t *)(uintptr_t)(0x03003CE0u + (uint32_t)me * 0x14C + 0x8C), 8);
+            if (records < SS_EWRAM || records >= SS_EWRAM + 0x40000 - 5 * 0x2E0)
+                mask = 0;
+            for (i = 0; i < 5; i++)
+                if (mask >> i & 1) {
+                    long far;
+                    memcpy(theirs, (const uint8_t *)(uintptr_t)(records + (uint32_t)i * 0x2E0 + 0x14), 8);
+                    far = labs((long)(theirs[0] - mine[0]) >> 8) + labs((long)(theirs[1] - mine[1]) >> 8);
+                    if (best < 0 || far < nearest) {
+                        best = i;
+                        nearest = far;
+                        dx = (theirs[0] - mine[0]) >> 8;
+                        dy = (theirs[1] - mine[1]) >> 8;
+                    }
+                }
+            if (best >= 0) {
+                unsigned long beat = (frame_count + (unsigned long)me * 7) % (unsigned long)(20 + me * 3);
+                /* stand beside it, on the left or the right by seat, turn to it, strike */
+                int side = me & 1 ? 20 : -20;
+                dx += side;
+                held = 0;
+                if (dx > 4) held |= 0x10;               /* right */
+                if (dx < -4) held |= 0x20;              /* left */
+                if (dy > 4) held |= 0x80;               /* down */
+                if (dy < -4) held |= 0x40;              /* up */
+                if (!held && beat < 3)
+                    held = side < 0 ? 0x10 : 0x20;      /* in place: face it */
+                else if (beat >= 6 && beat < 10)
+                    held = (uint16_t)((held & 0xF0) | 1);       /* a strike; it also moves on the talk some
+                                                                 * enemies start with */
+            }
+        }
+    }
     REG_KEYINPUT = (uint16_t)(~held & 0x03FF);
+}
+
+/* SS_ENEMY_LOG (tests): the live enemies as this machine has them, sampled when the clock passes a quarter of a
+ * second, so the players of a session on one computer sample within a frame of each other. One line per
+ * sample: the quarter's number, the frame, the mask of live records and of spawn requests under way, then per
+ * live enemy its record, the identifier its spawn gave it, its kind (index of its definition in the ROM's
+ * table), position in pixels, health and state. Offsets are those of games/ss2 (sub_0801641C fills them). */
+static void enemy_log(void)
+{
+    static FILE *file;
+    static int asked;
+    static uint32_t last_quarter;
+    uint32_t quarter = ss_plat_ticks_ms() / 250, records, mask;
+    int i;
+
+    if (!asked) {
+        asked = 1;
+        if (getenv("SS_ENEMY_LOG"))
+            file = fopen(getenv("SS_ENEMY_LOG"), "w");
+    }
+    if (!file || quarter == last_quarter)
+        return;
+    last_quarter = quarter;
+    records = *(const uint32_t *)(uintptr_t)0x030056F4u;
+    mask = *(const uint32_t *)(uintptr_t)0x030056FCu & 31;
+    if (records < SS_EWRAM || records >= SS_EWRAM + 0x40000 - 5 * 0x2E0)
+        return;                         /* no enemy records yet */
+    fprintf(file, "%u %lu %X %X", (unsigned)quarter, frame_count, (unsigned)mask,
+            (unsigned)(*(const uint16_t *)(uintptr_t)0x03005724u & 3));
+    for (i = 0; i < 5; i++)
+        if (mask >> i & 1) {
+            const uint8_t *e = (const uint8_t *)(uintptr_t)(records + (uint32_t)i * 0x2E0);
+            uint32_t definition;
+            int32_t x, y;
+            uint16_t id, state, health;
+            memcpy(&id, e + 2, 2);
+            memcpy(&state, e + 0xC, 2);
+            memcpy(&x, e + 0x14, 4);
+            memcpy(&y, e + 0x18, 4);
+            memcpy(&health, e + 0x5C, 2);
+            memcpy(&definition, e + 0x2DC, 4);
+            fprintf(file, " | %d %u %d %d %d %u %u", i, id, (int)((definition - 0x0847AD3Cu) / 0xD8), (int)(x >> 8), (int)(y >> 8),
+                    health, state);
+        }
+    fputc('\n', file);
+    fflush(file);
 }
 
 static void dump_video(void)
@@ -287,6 +395,7 @@ void VBlankIntrWait(void)
         ss_raise_interrupt(0x0001);
     walk_lines();
     frame_count++;
+    enemy_log();
     ss_rebel_frame();                   /* cheats of a Rebel run, then the platform's achievements (core/rebel.c) */
     if (dump_at && frame_count == dump_at)
         dump_video();
