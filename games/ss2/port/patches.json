@@ -108,14 +108,19 @@
    "replace": "    ss_net_sent:\n        gUnk_03006338--;\n        if ((s32)gUnk_03006338 < 0)\n            gUnk_03006338 = 0;\n        q = (u8 *)gUnk_03006300;"
   },
   {
-   "why": "Online: the receiver task of each player (sub_0806690C) takes that player's next whole message from the network layer's message channel, one a frame at most, and puts it where the original assembles the pieces; the dispatch below is the original's. While it waits its acknowledgement byte says idle, as in the original's wait for an announce. Over a cable the original code runs.",
+   "why": "Online: the receiver task of each player (sub_0806690C) takes that player's next whole message from the network layer's message channel, and puts it where the original assembles the pieces; the dispatch below is the original's. While it waits its acknowledgement byte says idle, as in the original's wait for an announce. Over a cable the original code runs.",
    "find": "restart:\n    {\n        /* phase A: wait for an announce */\n        j = 1;",
-   "replace": "restart:\n    {\n        if ((gUnk_030027D0 & 2) && ss_net_msg_online()) {\n            u8 whole[2 + 0x80];\n            s32 size;\n            do {\n                sub_080003F0();\n                *ack = 0x80;\n                size = ss_net_msg_recv(peer, whole, sizeof whole);\n            } while (size < 2);\n            tag = whole[0];\n            chunks = whole[1];\n            if (chunks > (u32)(size - 2) / 8)\n                chunks = (u32)(size - 2) / 8;\n            memcpy(d, whole + 2, chunks * 8);\n            goto ss_net_dispatch;\n        }\n        /* phase A: wait for an announce */\n        j = 1;"
+   "replace": "restart:\n    {\n        if ((gUnk_030027D0 & 2) && ss_net_msg_online()) {\n            u8 whole[2 + 0x80];\n            s32 size;\n            for (;;) {      /* every message that is here is acted on in this frame; the wait is only for the next */\n                *ack = 0x80;\n                size = ss_net_msg_recv(peer, whole, sizeof whole);\n                if (size >= 2)\n                    break;\n                sub_080003F0();\n            }\n            tag = whole[0];\n            chunks = whole[1];\n            if (chunks > (u32)(size - 2) / 8)\n                chunks = (u32)(size - 2) / 8;\n            memcpy(d, whole + 2, chunks * 8);\n            goto ss_net_dispatch;\n        }\n        /* phase A: wait for an announce */\n        j = 1;"
   },
   {
    "why": "Online: where the patched receiver above rejoins the original to act on the message.",
    "find": "        *ack = blk[2];\n        sub_0800224C();\n        switch (tag - 0x81) {",
    "replace": "        *ack = blk[2];\n        sub_0800224C();\n    ss_net_dispatch:\n        switch (tag - 0x81) {"
+  },
+  {
+   "why": "Online: the task that starts the sender for the first waiting message (one message, then a frame, then the next) hands every waiting message to the network layer's channel at once instead, so a burst (a map entry, several enemies acting) leaves in the frame it was made. The queue is popped as sub_08066720 pops it.",
+   "find": "    for (;;) {\n        q = (u8 *)gUnk_03006300;\n        msg = (*(u32 *)(q + 4) == 1) ? q : 0;",
+   "replace": "    for (;;) {\n        if ((gUnk_030027D0 & 2) && ss_net_msg_online() && sub_08000470(gUnk_03006368) == 0) {\n            while (gUnk_03006338 > 0 && *(u32 *)((u8 *)gUnk_03006300 + 4) == 1) {\n                u8 *head = (u8 *)gUnk_03006300;\n                u8 whole[2 + 0x80];\n                u32 pieces = head[1] > 0x10 ? 0x10 : head[1];\n                u32 k;\n                whole[0] = head[0];\n                whole[1] = pieces;\n                memcpy(whole + 2, head + 8, pieces * 8);\n                if (!ss_net_msg_send(whole, 2 + pieces * 8))\n                    break;          /* the channel is full: the rest waits a frame */\n                gUnk_03006338--;\n                for (k = 0; k < gUnk_03006338; k++)\n                    memcpy(head + k * 0x88, head + (k + 1) * 0x88, 0x88);\n                *(u32 *)(head + k * 0x88 + 4) = 0;\n            }\n        }\n        q = (u8 *)gUnk_03006300;\n        msg = (*(u32 *)(q + 4) == 1) ? q : 0;"
   }
  ],
  "code_08067B4C.c": [

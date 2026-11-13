@@ -158,6 +158,13 @@ static void b_exit(int code)
 {
     if (ss_tolerated)
         fprintf(stderr, "%lu stray accesses were tolerated\n", ss_tolerated);
+#ifdef __ANDROID__
+    /* On Android this is the game's thread, and SDL's other threads are still running: exit() tears down what
+     * they hold (a destroyed mutex is then locked and the process aborts on its way out). Everything of ours is
+     * flushed here and the process ends at once. */
+    fflush(NULL);
+    _exit(code == SS_EXIT_RESTART ? 0 : code);
+#endif
     exit(code);
 }
 static uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
