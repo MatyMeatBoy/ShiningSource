@@ -54,6 +54,10 @@ struct stream {                 /* the blocks of one seat, by label */
     int vote;                   /* that player wants to skip the scene */
     int raise, raise_seen;      /* how often it asked for a longer delay, and how much of that the host has answered */
     uint32_t skip_at;           /* the host's: label at which everybody skips, 0 if none */
+    /* direct mode (see deliver_direct) */
+    uint32_t cursor;            /* next label to hand to the game */
+    uint8_t last[BLOCK];        /* the block handed over last, repeated while nothing newer has come */
+    int has_last, repeats;
 };
 
 static int configured = -1, gather, seat = -1, synced, delay = 4, timeout_ms = 15000;
@@ -68,6 +72,8 @@ static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_dela
 static uint32_t change_at, change_done, last_target;
 static uint32_t skip_at, skip_done;
 enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
+enum { DIRECT_HOLD = 30 };
+static int direct = 1;          /* the default transport; a fixed SS_NET_DELAY selects the stepped one */
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static void wr32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
@@ -98,6 +104,7 @@ static int configure(void)
         snprintf(room_name, sizeof room_name, "%s", getenv("SS_NET_ROOM"));
     delay = getenv("SS_NET_DELAY") ? (int)strtoul(getenv("SS_NET_DELAY"), NULL, 10) : 0;
     auto_delay = delay <= 0;
+    direct = auto_delay;
     if (auto_delay) delay = 2;
     if (delay > 30) delay = 30;
     if (getenv("SS_NET_TIMEOUT"))
@@ -111,9 +118,10 @@ static int configure(void)
         /* Players only meet if they run the same game and the same rules: the room is the name together with
          * the cartridge's contents and the version of this protocol. Another version of the port or another
          * ROM lands in another room instead of producing a session that drifts apart. */
-        static const uint32_t rules = 2;        /* raise when the transport or anything the players must agree on changes */
+        static const uint32_t rules = 3;        /* raise when the transport or anything the players must agree on changes */
         room = fnv(room, (const void *)(uintptr_t)SS_ROM, 0x1000000);
         room = fnv(room, &rules, sizeof rules);
+        room = fnv(room, &direct, sizeof direct);      /* the two transports do not mix */
     }
     token = getenv("SS_NET_TOKEN") ? (uint32_t)strtoul(getenv("SS_NET_TOKEN"), NULL, 10)
                                    : fnv(ss_plat_ticks_ms() * 2654435761u, &text, sizeof text) | 1;
@@ -259,6 +267,8 @@ static void receive(void)
             if (synced && frame_label - delay > s->floor)
                 s->floor = frame_label - delay;                 /* it was here before me, or I before it */
             s->next = s->floor;
+            s->cursor = 0;
+            s->has_last = s->repeats = 0;
             fprintf(stderr, "net: player %d connected\n", from + 1);
         }
         s->heard = ss_plat_ticks_ms();
@@ -405,6 +415,63 @@ void ss_net_leave(void)
     leave();
 }
 
+/* ---- direct mode ----
+ * The game is not a simulation every machine must step in unison: each machine decides for its own character
+ * and tells the others (bytes 0..7 of the block: position, facing, animation, rewritten every frame), and
+ * everything that happens once (an enemy appears, an item is dropped or taken, a hit, a change of map) is a
+ * message passed step by step in bytes 8..23, each step repeated until every player's block answers it
+ * (games/ss2: sub_08066720 and sub_0806690C). So nothing has to arrive on a particular frame, and the cable
+ * never promised that either. What matters is how long one question and its answer take, because every step
+ * of every message costs exactly that: with a shared timeline it was twice the delay plus two frames; here it
+ * is the network's own round trip and nothing more. No player waits for another.
+ *
+ * Per player the blocks are handed over in order, one a frame, the moment they are here. The message steps
+ * must all be seen in order (the end of one message is told from the start of the next by one of them), so a
+ * block is never skipped for being late: it is asked for again (the acknowledgements in every packet do
+ * that). When several are waiting because they came in a burst, the ones that only repeat the message bytes
+ * of the block before them are dropped, which is how the game catches up without missing a step. When nothing
+ * new has come the last block is given again, as the unchanged state it is, for up to DIRECT_HOLD frames
+ * before the game is told that player is silent. A player's own block is in its own place at once. */
+static uint32_t deliver_direct(void *sendp, void *recvp)
+{
+    uint32_t received = 0, now = ss_plat_ticks_ms();
+    int i;
+    for (i = 0; i < SEATS; i++) {
+        struct stream *s = &streams[i];
+        const uint8_t *block = NULL;
+        if (i == seat) {
+            block = sendp;
+        } else if (s->known) {
+            if (s->cursor < s->floor) s->cursor = s->floor;
+            /* catch up: a waiting block that says nothing new in its message bytes, with a newer one behind it */
+            while (s->has_last && s->next > s->cursor + 1
+                   && !memcmp(s->block[s->cursor % RING] + 8, s->last + 8, BLOCK - 8))
+                s->cursor++;
+            if (s->cursor < s->next) {
+                memcpy(s->last, s->block[s->cursor % RING], BLOCK);
+                s->cursor++;
+                s->has_last = 1;
+                s->repeats = 0;
+                block = s->last;
+            } else if (s->has_last && s->repeats < DIRECT_HOLD) {
+                s->repeats++;
+                block = s->last;
+            }
+            if (now - s->heard > (uint32_t)timeout_ms)
+                drop(i, "timed out");
+        }
+        if (block) {
+            memcpy((uint8_t *)recvp + i * BLOCK, block, BLOCK);
+            received |= 1u << i;
+        }
+    }
+    frame_label++;
+    connected |= received;
+    if (connected && available < 8)
+        available++;
+    return received | (seat == 0 ? 0x80 : 0) | connected << 8 | (available >> 3) << 15;
+}
+
 /* MultiSioMain: one block out, the blocks of frame F - delay in. */
 uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
 {
@@ -453,6 +520,8 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
     }
     memcpy(own[frame_label % RING], sendp, BLOCK);
     send_data();
+    if (direct)
+        return deliver_direct(sendp, recvp);
     /* a longer delay, decided by the host, takes effect at the announced frame on every player */
     if (seat == 0 && auto_delay && !change_at && delay < 12) {      /* 12 frames cover 200 ms each way */
         int asked = raise_request != raise_seen_own;
