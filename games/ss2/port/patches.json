@@ -19,5 +19,71 @@
    "find": "    sub_08001A64();\n    gLinkFlags = 0x80000000;",
    "replace": "    sub_08001A64();\n    ss_net_leave();\n    gLinkFlags = 0x80000000;"
   }
+ ],
+ "code_08006D24.c": [
+  {
+   "why": "Wide picture: sub_080072A0 hides sprite parts left of -64 or right of 240. Keep parts from -128 to 367 (the 9-bit OAM x the renderer shows beside the console's columns). Drawing only.",
+   "find": "if ((u32)(objX + 64) > 304)",
+   "replace": "if ((u32)(objX + 128) > 495)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_080076C4 (sequential tiles). Vertical limits unchanged. Drawing only.",
+   "find": "            objY = src->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "            objY = src->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_08007AA4, the renderer of the queued draw requests (players, enemies, scene objects, exit markers, field items). Drawing only.",
+   "find": "        objX += context->x;\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        objX += context->x;\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_08007CF0 (direct draws: name glyphs, overlays, numbers, effects). Drawing only.",
+   "find": "        objY = ((struct Root4CopySpriteOam *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        objY = ((struct Root4CopySpriteOam *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_08007F0C (scaled sprites). Drawing only.",
+   "find": "        } while (0);\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        } while (0);\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_080081D4 (sprites with frame matrices). Drawing only.",
+   "find": "        dest->objMode = mode;\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        dest->objMode = mode;\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_08008500 (sprites with embedded matrices). Drawing only.",
+   "find": "            objY = obj->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "            objY = obj->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_080087AC (sprites with an object mode). Drawing only.",
+   "find": "        objY = ((struct Root4ModeSpriteOam *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        objY = ((struct Root4ModeSpriteOam *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  },
+  {
+   "why": "Wide picture: same horizontal limit in sub_080089DC (sprites with mosaic). Drawing only.",
+   "find": "        objY = ((struct SourceOamCopy005 *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 64) > 304 || objY > 160 || objY < -64)",
+   "replace": "        objY = ((struct SourceOamCopy005 *)dest)->y;\n        objY += y;\n        objX += x;\n        if ((u32)(objX + 128) > 495 || objY > 160 || objY < -64)"
+  }
+ ],
+ "code_0805FB7C.c": [
+  {
+   "why": "Wide picture: sub_0805FC80 does not queue a field item's icon outside x -16..248. Queue it from -128 to 367; the sprite renderer still hides each part. Vertical limits unchanged. Drawing only.",
+   "find": "if (((u32)(screenX + 16) << 16) > 0x1080000 || screenY < -16 || screenY > 168)",
+   "replace": "if (((u32)(screenX + 128) << 16) > 0x1EF0000 || screenY < -16 || screenY > 168)"
+  },
+  {
+   "why": "Wide picture: sub_0806171C keeps the screen x of the experience number unsigned, so a number left of the console's first column is never drawn. Signed x lets it show in the left margin. Drawing only.",
+   "find": "    u16 screenX,screenY;\n    u32 second;",
+   "replace": "    s16 screenX; u16 screenY;\n    u32 second;"
+  }
+ ],
+ "code_08017F7C.c": [
+  {
+   "why": "Wide picture: sub_0801A764 takes the x of a sprite text (the name above a player) as u16, so glyphs left of the console's first column are never drawn. Pass it signed. Drawing only.",
+   "find": "sub_08065230(gUnk_03005C60, x, y, 0, count);",
+   "replace": "sub_08065230(gUnk_03005C60, (s16)x, y, 0, count);"
+  }
  ]
 }

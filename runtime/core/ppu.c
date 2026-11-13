@@ -38,6 +38,7 @@ static uint16_t line_ghost[MAXW];
 static uint8_t line_ghost_prio[MAXW], line_ghost_index[MAXW];
 
 static struct ss_view view;
+static int page_shown;          /* a full-screen page over the field, in a wide view */
 static int hud_at_edges;        /* this frame the field's status display goes to the edges of a wide view */
 
 /* A page that fills the screen (status, items, the Start menu) is one composition with the status display and
@@ -289,6 +290,8 @@ static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghos
         int sx = x0 + x + place, tx, ty, number, index;
         if (sx < 0 || sx >= view.width)
             continue;
+        if (page_shown && (sx < view.shift || sx >= view.shift + W))
+            continue;                   /* a page is the console's picture: nothing of it belongs beside it */
         if (affine) {
             int dx = x - box_w / 2, dy = row - box_h / 2;
             tx = ((pa * dx + pb * dy) >> 8) + width / 2;
@@ -397,7 +400,8 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     find_flicker();
     edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
-    hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_open();
+    page_shown = view.world && view.width > W && (IO16(0) & 7) == 0 && page_open();
+    hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_shown;
     for (y = 0; y < H; y++) {
         uint32_t *out = pixels + y * pitch_pixels;
         if (per_line)

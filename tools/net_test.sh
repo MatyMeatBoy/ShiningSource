@@ -9,6 +9,8 @@ EXE=$ROOT/build/dev32/ss2/ss2_dev32.exe
 [ "${10:-}" = pace ] && export SS_PACE=1
 [ "${9:-}" = win64 ] && EXE=$ROOT/build/win64/ss2/ss2_win64.exe
 ROM=${SS_ROM_PATH:-D:/01Claude/GBA/ss2-nov03-w6/baserom.gba}
+# more settings for the players, one "export NAME=value" per line (variables set by the caller do not always arrive)
+[ -f "$ROOT/build/net_env.sh" ] && . "$ROOT/build/net_env.sh"
 PLAYERS=$1
 FRAMES=$2
 PORT=47955

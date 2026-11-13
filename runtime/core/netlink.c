@@ -64,7 +64,7 @@ static uint8_t own[RING][BLOCK];
 static char room_name[32] = "default", status_line[96];
 static FILE *log_file;
 static int my_vote;
-static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_delay;
+static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_delay, quiet_windows;
 static uint32_t change_at, change_done, last_target;
 static uint32_t skip_at, skip_done;
 enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
@@ -486,9 +486,15 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
          * time, because each frame has to wait for blocks that cannot have arrived yet. So: the last 120 frames
          * took over 4% longer than they should, and at least 40 ms of that was spent waiting. */
         static uint32_t window_started;
+        static int history;                 /* the last three windows, newest in bit 0: 1 = too slow */
         uint32_t elapsed = now - window_started;
-        if (window_started && elapsed > 2090 && elapsed < 6000 && stall_frames >= 40)
+        int slow = window_started && elapsed > 2090 && elapsed < 6000 && stall_frames >= 40;
+        history = ((history << 1) | slow) & 7;
+        /* one slow window is a hiccup of the connection (Wi-Fi does that) and passes by itself; a longer delay
+         * is for good, so it takes two slow windows out of three to ask for one */
+        if (slow && (history & 6))
             raise_request = (raise_request + 1) & 255;
+        quiet_windows = slow ? 0 : quiet_windows + 1;
         window_started = now;
         stall_frames = 0;
     }
