@@ -380,10 +380,27 @@ What each added is in `docs/RELEASE_*.md`. In short:
       message it missed, in order; the host is waited for a minute instead of
       15 seconds. Two and three players, a player or the host cut off for 3, 10
       and 30 seconds: 60 of 60 sessions whole again (before: 0 of 36).
-- [ ] After a return: a change of map while a player was away (the others pass
-      the game's barrier without it; untested), a real network (the tests cut
-      the relay's forwarding on one machine), a host away for more than a
-      minute (the session still ends).
+- [x] The same with four players, with two outages in one session and with a
+      change of map (`tools/net_outage_map.sh`: the host hands over the game's
+      own "everybody changes map", the script walks onto the world map and
+      chooses the first dungeon; `SS_NET_TEST_MSG`, `SS_SCENE_LOG`). Found and
+      changed: a player that came back after the others had started the
+      dungeon stayed on the world map for the rest of the session with their
+      tokens piling up in its barrier (the start is a state in the host's
+      block, not a message); now the host keeps a player out that was given up
+      when a barrier was passed, and it is told the session is over. A player
+      that left for good held the others on the world map for ever (the game
+      waits for every player's choice); it is passed over now, one that may
+      still come back is waited for. On the stepped transport a returning
+      player's program stood still for as long as the host's session lasted;
+      it is told the session is over after five seconds.
+- [ ] After a return: fights during an outage (the scripted players reach the
+      first dungeon, where the opening scene and a palisade keep them from the
+      enemies), a level exit with a departed player (the exit asks every
+      player to stand at it: by the code a standing character holds the
+      others back, untested), a real network (the tests cut the relay's
+      forwarding on one machine), a host away for more than a minute (the
+      session still ends).
 - [ ] Joining a game in progress with a freshly started program.
 - [x] The renderer on a slow device (0.7.2): `ss_ppu_render` costs a third less
       (0.9 ms classic, 1.4 ms at 480 columns on the development PC), and a

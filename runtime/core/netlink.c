@@ -31,7 +31,8 @@
  * SS_NET_LOG=file (one line
  * per delivered frame: label, players, hash of the blocks; identical on every player), SS_NET_PLAYERS=n (tests:
  * wait at the start of the session until n players are in the room), SS_NET_MSG_LOG=file (the message channel,
- * see "messages" below: one line per message handed over and per message dispatched).
+ * see "messages" below: one line per message handed over and per message dispatched), SS_NET_TEST_CHATTER and
+ * SS_NET_TEST_MSG (tests: messages of the test's own, see test_chatter and test_message).
  */
 #include "shiningsource/runtime.h"
 
@@ -172,6 +173,7 @@ static int host_knew;           /* the host has acknowledged this player's curre
 static uint32_t disowned_since; /* since when the host's packets leave this player's stream out, 0 if they do not */
 static struct {                 /* what is kept of a player given up for silence, so that it can come back */
     uint32_t epoch;             /* the stream it had; 0: it cannot come back */
+    uint32_t since;             /* when it was given up */
     uint32_t msg_start, msg_acked, in_next;
     int in_valid;
 } away[SEATS];
@@ -434,6 +436,7 @@ static void drop(int who, const char *why, int may_return)
          * stood with it. Only the direct transport can take a player in again: on the stepped one it stood
          * still on the timeline while the others went on. */
         away[who].epoch = may_return && direct ? s->epoch : 0;
+        away[who].since = ss_plat_ticks_ms();
         away[who].msg_start = s->msg_start;
         away[who].msg_acked = s->msg_acked;
         away[who].in_valid = s->in_valid;
@@ -488,6 +491,19 @@ static void drop(int who, const char *why, int may_return)
  *     longer name its stream and, after DISOWNED_AFTER, is told what it is told when the host leaves: the
  *     session is over for it. It says goodbye, so that it stands for every player and not only for the host.
  *     The same happens with a host that runs an older version and never takes anybody in again.
+ *   - The same again when the game passed one of its barriers while the player was given up (ss_net_msg_passed,
+ *     called from the game's "does everybody hold this token", games/<game>/port/patches.json). What the
+ *     game does at a barrier is not all in the messages: on the world map the host starts the dungeon by a
+ *     state in its block, which is seen for as long as the barrier stands and never again. A player that
+ *     came back after it was given every message and stayed on the world map for the rest of the session,
+ *     with the others' tokens piling up in its rings, while the others played the dungeon
+ *     (tools/net_outage_map.sh, "chosen"). And had it followed, its own tokens for the barriers the others
+ *     had long passed would have stayed in their rings and made every later barrier count it as ready
+ *     before it was. A player that comes back while the barrier still stands (the others wait there for its
+ *     token until it is given up) is taken in as before and goes on with them.
+ *   - A player given up for silence is expected back for as long as it waits itself (SS_NET_AWAY after it
+ *     was given up); then it counts as having left for good (ss_net_msg_left). The world map needs every
+ *     player's choice: there one that may come back is waited for, one that left for good is passed over.
  *   - The host is waited for longer (SS_NET_HOST_TIMEOUT, a minute): giving a player up costs the others
  *     nothing, giving the host up ends the session for everybody. While the host is away nobody's messages
  *     get their place in the order, so the players walk about and nothing else happens until it is back or
@@ -625,6 +641,48 @@ static void test_chatter(void)
     }
 }
 
+/* SS_NET_TEST_MSG=F:HEX[,F:HEX ...] (tests): at frame F of this program (or the first one after it at which a
+ * session is being played) this player hands over the message whose bytes are HEX: the tag, the number of
+ * 8-byte pieces, the pieces. A scripted session can then hold what the buttons alone do not reach. For
+ * games/ss2, "9F010100000000000000" is the game's own "everybody changes map" (tag 0x9F, one piece): every
+ * player's game leaves the map for the one its character is bound for, from the first field to the castle
+ * gate. tools/net_outage_map.sh starts its change of map while a player is away with that. */
+static void test_message(void)
+{
+    static const char *cursor;
+    static int asked;
+    uint8_t message[MSG_BYTES];
+    unsigned long at;
+    char *end;
+    int size = 0;
+
+    if (!asked) {
+        asked = 1;
+        cursor = getenv("SS_NET_TEST_MSG");
+    }
+    if (!cursor || !*cursor || !in_play)
+        return;
+    at = strtoul(cursor, &end, 10);
+    if (*end != ':') {
+        cursor = NULL;
+        return;
+    }
+    if (ss_frame_number() < at)
+        return;
+    for (end++; size < MSG_BYTES; end += 2, size++) {
+        int high = end[0] <= '9' ? end[0] - '0' : (end[0] | 32) - 'a' + 10, low;
+        if (high < 0 || high > 15)
+            break;
+        low = end[1] <= '9' ? end[1] - '0' : (end[1] | 32) - 'a' + 10;
+        if (low < 0 || low > 15)
+            break;
+        message[size] = (uint8_t)(high << 4 | low);
+    }
+    if (size >= 2 && !ss_net_msg_send(message, size))
+        return;                 /* no room: again next frame */
+    cursor = *end == ',' ? end + 1 : NULL;
+}
+
 /* A new stream of mine: its entries are numbered from 1 and nobody has any, and what the others sent to the
  * old one is forgotten (they start again where they tell me to). */
 static void msg_reset(void)
@@ -702,6 +760,33 @@ int ss_net_msg_online(void)
 int ss_net_msg_gone(int who)
 {
     return configured == 1 && who >= 0 && who < SEATS && (gone >> who & 1);
+}
+
+/* Did that player leave for good? Its character stays, and it cannot come back: it said goodbye, its program
+ * ended, or it has been silent for longer than a player waits for its own connection. A player that was only
+ * given up for silence may still come back (see "a connection that was gone"): where the game needs every
+ * player's choice (the world map, games/<game>/port/patches.json) it is waited for, as the game waits for
+ * anybody; one that left for good is passed over, or the others would wait for the rest of the session. */
+int ss_net_msg_left(int who)
+{
+    return ss_net_msg_gone(who) && !away[who].epoch;
+}
+
+/* The game has just passed one of its barriers without the players in `seats` (a bit per seat): they left or
+ * were given up, so ss_net_msg_gone counted them as ready. A barrier stands where everybody has to be at the
+ * same point before the game goes on: the start of a dungeon from the world map, a change of level. A player
+ * that was not there cannot be taken in again afterwards (see "a connection that was gone"); the host decides
+ * that, as it decides everything about who is in the session. */
+void ss_net_msg_passed(unsigned seats)
+{
+    int i;
+    if (configured != 1 || seat != 0)
+        return;
+    for (i = 1; i < SEATS; i++)
+        if ((seats >> i & 1) && (gone >> i & 1) && away[i].epoch) {
+            away[i].epoch = 0;
+            net_say("net: player %d was away when the game went on behind a barrier; it cannot come back\n", i + 1);
+        }
 }
 
 /* One whole message of this player, for everybody. 0 if there is no room: the caller tries again next frame. */
@@ -1131,8 +1216,16 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
             if (!offline_since && now - s->heard > patience(i))
                 drop(i, "timed out", 1);
         }
-        if (gone >> i & 1)
+        if (gone >> i & 1) {
             block = gone_block[i];
+            /* A player that is itself cut off waits SS_NET_AWAY for its connection and then gives the session
+             * up. One that has been silent for that long after it was given up here will not come back. */
+            if (away[i].epoch && now - away[i].since > (uint32_t)away_ms) {
+                away[i].epoch = 0;
+                net_say("net: player %d has been away for %u seconds; it is not expected back\n", i + 1,
+                        (unsigned)((now - away[i].since + patience(i)) / 1000));
+            }
+        }
         if (block) {
             memcpy((uint8_t *)recvp + i * BLOCK, block, BLOCK);
             received |= 1u << i;
@@ -1176,6 +1269,25 @@ static void keep_in_touch(uint32_t now)
     connection_check(now);
 }
 
+/* The host's packets arrive and have left this player's stream out for seconds: it gave this player up and
+ * cannot or will not take it in again (see "a connection that was gone"). The game is told what it is told when
+ * the host leaves. Called every frame, and while a frame waits for blocks: on the stepped transport a player
+ * that comes back waits for a block of the host that will never come (the host went on without it), and
+ * waited there, the program standing still, for as long as the host's session lasted. */
+static void disowned_check(uint32_t now)
+{
+    uint8_t packet[HEADER];
+    if (seat <= 0 || !synced || !in_play || !disowned_since || (int32_t)(now - disowned_since) <= DISOWNED_AFTER)
+        return;
+    disowned_since = 0;
+    /* The other players may have taken this one in again (they need nothing from the host for that): they
+     * are told that it leaves after all, so its character stands for them as it does for the host. */
+    header(packet, T_END, 0, 0);
+    ss_plat_net_send(packet, HEADER);
+    ss_plat_net_send(packet, HEADER);
+    drop(0, "has given this player up (it was away for too long); the session is over here", 0);
+}
+
 /* MultiSioMain: one block out, the blocks of frame F - delay in. */
 static uint32_t multi_sio_main(void *sendp, void *recvp);
 uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
@@ -1211,19 +1323,7 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
     receive();
     now = ss_plat_ticks_ms();   /* not the moment before receive(): what was just heard must not lie in the future */
     keep_in_touch(now);
-    if (seat > 0 && synced && in_play && disowned_since && (int32_t)(now - disowned_since) > DISOWNED_AFTER) {
-        /* The host's packets arrive and have left this player's stream out for seconds: it gave this player
-         * up and cannot or will not take it in again (see "a connection that was gone"). The game is told what
-         * it is told when the host leaves. */
-        uint8_t packet[HEADER];
-        disowned_since = 0;
-        /* The other players may have taken this one in again (they need nothing from the host for that): they
-         * are told that it leaves after all, so its character stands for them as it does for the host. */
-        header(packet, T_END, 0, 0);
-        ss_plat_net_send(packet, HEADER);
-        ss_plat_net_send(packet, HEADER);
-        drop(0, "has given this player up (it was away for too long); the session is over here", 0);
-    }
+    disowned_check(now);
     if (relay_fresh) {
         /* A player's message has just been given its place in the order. The block of this frame went out at
          * the end of the last one (ss_net_flush), so nothing would be sent until the end of this one: say it
@@ -1276,6 +1376,7 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
     }
     last_sendp = sendp;
     test_chatter();
+    test_message();
     if (flushed_label != frame_label) {         /* not already sent at the end of the frame that wrote it */
         memcpy(own[frame_label % RING], sendp, BLOCK);
         send_data();
@@ -1349,6 +1450,9 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
             status(missing);
         }
         keep_in_touch(now);
+        disowned_check(now);
+        if (!synced)
+            return 0;
         for (i = 0; i < SEATS; i++)
             if (!offline_since && streams[i].known && now - streams[i].heard > patience(i))
                 drop(i, "timed out", 1);

@@ -89,6 +89,8 @@ int ss_net_msg_send(const void *data, int size);
 int ss_net_msg_next(int *who, void *data, int capacity);
 int ss_net_msg_recv(int who, void *data, int capacity);
 int ss_net_msg_gone(int who);
+int ss_net_msg_left(int who);                  /* gone, and it cannot come back */
+void ss_net_msg_passed(unsigned seats);        /* the game passed a barrier without these seats (a bit each) */
 void ss_net_flush(void);       /* end of a game frame: send this frame's block now */
 /* What the next presented frame carries over the picture: black of the given strength and one line of text
  * (UTF-8; written with the game's typeface when the platform finds it in the ROM, else in capitals without

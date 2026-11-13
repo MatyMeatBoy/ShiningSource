@@ -157,12 +157,12 @@
   {
    "why": "Online: a player that left a game in progress stays as a standing character (runtime/core/netlink.c, drop) and will never send the token the others wait for before a change of map or scene. sub_080682B8, the game's \"does everybody's ring hold this token\", counts such a player as ready.",
    "find": "s32 sub_080682B8(s32 callback)\n{",
-   "replace": "int ss_net_msg_gone(int who);\ns32 sub_080682B8(s32 callback)\n{"
+   "replace": "int ss_net_msg_gone(int who);\nvoid ss_net_msg_passed(unsigned seats);\ns32 sub_080682B8(s32 callback)\n{\n    u32 absent = 0;"
   },
   {
-   "why": "The same: after the scan of one player's ring found nothing (the scan ran to its end), a player that left counts as ready.",
+   "why": "The same: after the scan of one player's ring found nothing (the scan ran to its end), a player that left counts as ready. When the answer is yes although such a player's token is missing, the game goes on without it: the runtime is told (ss_net_msg_passed), because a player whose connection was only gone cannot be taken in again behind a barrier it was not at.",
    "find": "                found++;\n                break;\n            }\n        }\n    }\n    return count == found;\n}",
-   "replace": "                found++;\n                break;\n            }\n        }\n        if (j > counts[i] && ss_net_msg_gone(i))\n            found++;\n    }\n    return count == found;\n}"
+   "replace": "                found++;\n                break;\n            }\n        }\n        if (j > counts[i] && ss_net_msg_gone(i)) {\n            found++;\n            absent |= 1u << i;\n        }\n    }\n    if (count == found && absent)\n        ss_net_msg_passed(absent);\n    return count == found;\n}"
   }
  ],
  "code_0807A5D4.c": [
@@ -211,6 +211,16 @@
    "why": "Music in multiplayer. In a game started from the multiplayer lobby the cartridge's area-music selector stops the music in every stage except the town and the first field (its second branch ends in a stop); the port lets the stages play the song they have in a single-player game (ss_music_everywhere, on unless SS_MP_MUSIC=0). Music is local to each machine: nothing the players share depends on it.",
    "find": "void sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0) {",
    "replace": "int ss_music_everywhere(void);\nvoid sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0 || (music != 0 && music != 12 && ss_music_everywhere())) {"
+  },
+  {
+   "why": "Online: on the world map the host starts a dungeon when every player's block says it has chosen the same place. A player that left a game in progress stays as a standing character (runtime/core/netlink.c, drop) and its block never changes, so the others could choose for the rest of the session and never leave the world map. A player that left for good (ss_net_msg_left: it said goodbye, or it has been silent for longer than a player waits for its own connection) counts as having chosen, and the barrier that follows passes over it (sub_080682B8). One whose connection may still come back is waited for, as the game waits for any player that has not chosen.",
+   "find": "            if (p->p148->mode != 0 && sel == p->p148->sel)\n                cnt++;",
+   "replace": "            if ((p->p148->mode != 0 && sel == p->p148->sel) || ss_net_msg_left(i))\n                cnt++;"
+  },
+  {
+   "why": "The same: the declaration.",
+   "find": "void sub_0800BEC0(void)\n{",
+   "replace": "int ss_net_msg_left(int who);\nvoid sub_0800BEC0(void)\n{"
   }
  ]
 }

@@ -16,7 +16,11 @@ Asked of every run, over the time from five seconds after the connection came ba
              player has of itself: not frozen (the other player changed, this view of it did not), and equal
              whenever the other player stood still from a quarter of a second before to one after
   gone       no player counts another as departed at the end
-A run in which all six hold is HEALED. One line per run starts with RESULT; with several folders a table of
+  place      every player's game is on the same map at the end (pN/scene.log, SS_SCENE_LOG; a run without
+             these logs passes)
+  tokens     no token of the game's barrier is left over at the end: one that stays in a ring makes a later
+             barrier count its sender as ready before it is
+A run in which all eight hold is HEALED. One line per run starts with RESULT; with several folders a table of
 rates per case (players, who was cut off, for how long) follows.
 
 Exit status 1 if any run is not healed."""
@@ -47,6 +51,17 @@ def read_states(path):
     return found
 
 
+def read_scenes(path):
+    """[(quarter, (map set, area, choosing on the world map), tokens held of each seat)]"""
+    found = []
+    if os.path.exists(path):
+        for line in open(path, errors="replace"):
+            f = line.split()
+            if len(f) == 10:
+                found.append((int(f[0]), (int(f[2]), int(f[3]), int(f[5])), [int(v.split(":")[0]) for v in f[6:10]]))
+    return found
+
+
 def report(run):
     case = {}
     words = open(os.path.join(run, "case.txt")).read().split()
@@ -54,10 +69,11 @@ def report(run):
         case[name] = value
     players, who, seconds, frames = int(case["players"]), int(case["who"]), int(case["seconds"]), int(case["frames"])
     cut = back = None
+    # (with several outages: the first cut and the last return)
     for line in open(os.path.join(run, "relay.log"), errors="replace"):
         m = re.match(r"outage: seat \d+ (cut off|back) at \d+ ms \(clock (\d+)\)", line)
         if m and m.group(1) == "cut off":
-            cut = int(m.group(2))
+            cut = cut or int(m.group(2))
         elif m:
             back = int(m.group(2))
     lines = []
@@ -170,7 +186,20 @@ def report(run):
     if not gone:
         lines.append("  gone at the end: " + ", ".join("player %d counts %s as departed" % (
             i + 1, "+".join(str(b + 1) for b in range(4) if g >> b & 1)) for i, g in enumerate(gone_end) if g))
-    checks = dict(survived=all(survived), order=order, once=once, complete=complete, state=state, gone=gone)
+    # place and tokens: the last sample of every player's scene log before the end
+    scenes = [read_scenes(os.path.join(run, "p%d" % p, "scene.log")) for p in range(1, players + 1)]
+    last = [next((s for s in reversed(log) if s[0] * 250 <= end), None) if survived[i] else None for i, log in enumerate(scenes)]
+    places = {s[1] for s in last if s}
+    place = len(places) <= 1
+    tokens = not any(sum(s[2]) for s in last if s)
+    if any(scenes):
+        name = lambda where: "the world map" if where[2] else "map %d area %d" % where[:2]
+        lines.append("  place at the end: " + ", ".join("player %d %s" % (i + 1, name(s[1]) if s else "-") for i, s in enumerate(last))
+                     + ("" if place else "  DIFFERENT"))
+        if not tokens:
+            lines.append("  tokens LEFT OVER: " + ", ".join("player %d holds %s" % (
+                i + 1, " and ".join("%d of player %d" % (n, b + 1) for b, n in enumerate(s[2]) if n)) for i, s in enumerate(last) if s and sum(s[2])))
+    checks = dict(survived=all(survived), order=order, once=once, complete=complete, state=state, gone=gone, place=place, tokens=tokens)
     healed = all(checks.values())
     print("RESULT %s: %d players, %s cut off for %d s: %s  [%s]" % (
         os.path.basename(os.path.normpath(run)), players,
@@ -189,14 +218,14 @@ def main():
         table[key].append((healed, checks))
     if len(sys.argv) > 2:
         print()
-        print("players  cut off      runs  healed  survived  order  once  complete  state  gone")
+        print("players  cut off      runs  healed  survived  order  once  complete  state  gone  place  tokens")
         for key in sorted(table):
             runs = table[key]
             count = lambda name: sum(1 for _, c in runs if c[name])
-            print("%7d  %-11s  %4d  %6d  %8d  %5d  %4d  %8d  %5d  %4d" % (
+            print("%7d  %-11s  %4d  %6d  %8d  %5d  %4d  %8d  %5d  %4d  %5d  %6d" % (
                 key[0], "nobody" if not key[1] else "%s %2d s" % ("host" if key[1] == 1 else "everybody" if key[1] == 9 else "player %d" % key[1], key[2]),
                 len(runs), sum(1 for h, _ in runs if h), count("survived"), count("order"), count("once"),
-                count("complete"), count("state"), count("gone")))
+                count("complete"), count("state"), count("gone"), count("place"), count("tokens")))
     return 0 if all(h for runs in table.values() for h, _ in runs) else 1
 
 

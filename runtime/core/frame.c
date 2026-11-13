@@ -18,6 +18,8 @@
  *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
  *                   every live enemy (games/ss2: the five records at gUnk_030056F4). tools/enemy_compare.py
  *                   compares the files of the players of one session.
+ *   SS_SCENE_LOG=file  the same moments: the map the game is on and the tokens its barrier holds of each player
+ *                   (games/ss2). tools/net_outage_report.py compares the files of the players of one session.
  *   SS_PACE_FAST=F:K  with SS_PACE: the first F frames at K times the speed.
  *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
  *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
@@ -396,6 +398,50 @@ static void enemy_log(void)
     fflush(file);
 }
 
+/* SS_SCENE_LOG (tests): where this machine's game is, sampled like SS_ENEMY_LOG. One line per sample: the
+ * quarter's number, the frame, the scene's map set and area, the scene's flags and whether the world map is
+ * being chosen from, then for each of the four seats how many tokens the game's barrier holds of it and the
+ * oldest of them. Offsets are those of games/ss2: the scene record at *gUnk_03005CF4 (map set at +0, flags at
+ * +4, area at +0x40), the world scene's flags at gUnk_03003478 (bit 5: choosing on the world map), the rings
+ * of barrier tokens at gUnk_03006260 (ten words a seat, 0xFFFFFFFF where empty; sub_080682B8 reads them).
+ * tools/net_outage_report.py holds the players of one session against each other: the same place for all,
+ * and no token left over once a change of map is done. */
+static void scene_log(void)
+{
+    static FILE *file;
+    static int asked;
+    static uint32_t last_quarter;
+    uint32_t quarter = ss_plat_ticks_ms() / 250, scene, area, flags;
+    uint16_t map, state;
+    int i, j;
+
+    if (!asked) {
+        asked = 1;
+        if (getenv("SS_SCENE_LOG"))
+            file = fopen(getenv("SS_SCENE_LOG"), "w");
+    }
+    if (!file || quarter == last_quarter)
+        return;
+    last_quarter = quarter;
+    scene = *(const uint32_t *)(uintptr_t)0x03005CF4u;
+    if (scene < SS_EWRAM || scene >= SS_EWRAM + 0x40000 - 0x44)
+        return;                         /* no scene yet */
+    memcpy(&map, (const uint8_t *)(uintptr_t)scene, 2);
+    memcpy(&state, (const uint8_t *)(uintptr_t)(scene + 4), 2);
+    memcpy(&area, (const uint8_t *)(uintptr_t)(scene + 0x40), 4);
+    flags = *(const uint32_t *)(uintptr_t)0x03003478u;
+    fprintf(file, "%u %lu %u %u %X %u", (unsigned)quarter, frame_count, map, (unsigned)area, state, (unsigned)(flags >> 5 & 1));
+    for (i = 0; i < 4; i++) {
+        const uint32_t *ring = (const uint32_t *)(uintptr_t)(0x03006260u + (uint32_t)i * 40);
+        int held = 0;
+        for (j = 0; j < 10; j++)
+            held += ring[j] != 0xFFFFFFFFu;
+        fprintf(file, " %d:%X", held, (unsigned)ring[0]);
+    }
+    fprintf(file, "%c", 10);
+    fflush(file);
+}
+
 static void dump_video(void)
 {
     static uint32_t shot[SS_MAX_VIEW_W * SS_SCREEN_H];
@@ -749,6 +795,7 @@ void VBlankIntrWait(void)
     ss_prof(SS_PROF_BLANK, 0);
     frame_count++;
     enemy_log();
+    scene_log();
     ss_prof(SS_PROF_EXTRAS, 1);
     ss_rebel_frame();                   /* cheats of a Rebel run, then the platform's achievements (core/rebel.c) */
     ss_prof(SS_PROF_EXTRAS, 0);
