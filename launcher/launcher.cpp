@@ -932,6 +932,7 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_BORDER", classic ? setting("border", "16").c_str() : nullptr);
     SetEnvironmentVariableA("SS_BORDER_STYLE", classic ? setting("border_style", "4").c_str() : nullptr);
     SetEnvironmentVariableA("SS_VIEW", view == "auto" || classic ? nullptr : view.c_str());
+    SetEnvironmentVariableA("SS_HUD_SCALE", !classic && setting("hud_scale", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VSYNC", setting("vsync", "1").c_str());
     SetEnvironmentVariableA("SS_LANG", language ? "es" : "en");
     SetEnvironmentVariableA("SS_SKIP", setting("skip", "1") == "0" ? "0" : nullptr);
@@ -1204,6 +1205,15 @@ static void interface_frame(bool &running)
         }
         ImGui::TextWrapped("%s", text("In field scenes the extra columns show more of the real map; menus and story scenes keep the original picture, centred. Nothing is stretched.",
                                       "En las escenas de campo las columnas extra muestran m\xC3\xA1s del mapa real; los men\xC3\xBAs y escenas de historia conservan la imagen original, centrada. Nada se estira."));
+        {
+            bool hud = setting("hud_scale", "0") == "1";
+            if (ImGui::Checkbox(text("Larger status display (HP, SP, Soul and the L and R menus)", "Indicadores m\xC3\xA1s grandes (HP, SP, Soul y los men\xC3\xBAs L y R)"), &hud)) {
+                settings["hud_scale"] = hud ? "1" : "0";
+                save_settings();
+            }
+            ImGui::TextWrapped("%s", text("On a large window the field is drawn large and the status display stays as small beside it as on the console. With this on it is drawn with larger pixels, up to twice the field's, as far as it fits the window's width; it keeps its corners and stays sharp. The field, the menus and the messages do not change.",
+                                          "En una ventana grande el campo se dibuja grande y los indicadores quedan tan peque\xC3\xB1os a su lado como en la consola. Con esto activado se dibujan con p\xC3\xADxeles m\xC3\xA1s grandes, hasta el doble que los del campo, mientras quepan en el ancho de la ventana; siguen en sus esquinas y n\xC3\xADtidos. El campo, los men\xC3\xBAs y los mensajes no cambian."));
+        }
         ImGui::EndDisabled();
         {
             int sync = atoi(setting("vsync", "1").c_str());

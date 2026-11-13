@@ -38,6 +38,8 @@
  *   SS_TEST_RENDER=W  without a window (SS_FRAMES): draw and finish every frame W columns wide all the same, as a
  *                   window of that width would, and print one hash over all those pictures at the end. Measures
  *                   the picture's cost at full speed and proves that two builds draw the same.
+ *                   With SS_HUD_SCALE=1 the status display's layer (see ss_frame_set_hud) is drawn too and is part
+ *                   of the hash; SS_DUMP then also writes it, as ss_hud.raw (240 x 56 ARGB).
  *   SS_BENCH=F:N    picture tests without a window (tools/tests/flicker_bench.py): from frame F - 40 on every frame
  *                   is drawn, and frames F .. F+N-1 are written to ss_bench.bin (SS_BENCH_OUT=path). With
  *                   SS_BENCH_SCRIPT=path test sprites are put into the sprite table for the picture only.
@@ -66,7 +68,8 @@ static unsigned long frame_count, frame_limit, dump_at;
 static int test_render;                 /* SS_TEST_RENDER: the picture's width, 0 if not asked */
 static uint32_t picture_hash = 2166136261u;
 static unsigned long picture_count;
-static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_SCREEN_H];      /* the picture of the frame at hand, with or without a window */
+/* the picture of the frame at hand, with or without a window, and room for the status display's layer behind it */
+static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_SCREEN_H + SS_SCREEN_W * SS_HUD_ROWS];
 static const char *input_script;
 static int windowed, forced_width;
 
@@ -723,6 +726,10 @@ static void dump_video(void)
         ss_ppu_render(shot, width, &view);
         fwrite(shot, 4, (size_t)width * SS_SCREEN_H, file);
         fclose(file);
+        if (ss_ppu_hud() && (file = fopen("ss_hud.raw", "wb")) != NULL) {
+            fwrite(ss_ppu_hud(), 4, SS_SCREEN_W * SS_HUD_ROWS, file);
+            fclose(file);
+        }
     }
 }
 
@@ -748,8 +755,12 @@ static void walk_lines(void)
     for (y = 0; y < SS_SCREEN_H; y++) {
         REG_VCOUNT = (uint16_t)y;
         if ((REG_DISPSTAT & 0x0020) && (REG_DISPSTAT >> 8) == y) {
-            REG_DISPSTAT |= 4;
+            /* The line's handler runs with the horizontal-blank flag up: a handler that waits for the blank before
+             * it writes its registers (the split of a background in one boss scene does, in a loop on this flag)
+             * would wait for ever on a flag that nothing raises. Nothing else sees the flag. */
+            REG_DISPSTAT |= 4 | 2;
             ss_raise_interrupt(0x0004);
+            REG_DISPSTAT &= ~2;
             lines_vary = 1;
         } else {
             REG_DISPSTAT &= ~4;
@@ -788,6 +799,12 @@ void ss_frame_set_smooth(int on)
 void ss_frame_set_view(int width)
 {
     forced_width = !width ? 0 : width < SS_SCREEN_W ? SS_SCREEN_W : width > SS_MAX_VIEW_W ? SS_MAX_VIEW_W : width;
+}
+
+/* The same menu asks for the status display as a layer of its own (runtime.h): from the next picture on. */
+void ss_frame_set_hud(int on)
+{
+    ss_ppu_hud_layer(on);
 }
 
 const uint8_t *ss_ppu_still(void);       /* core/ppu.c: per pixel of the last picture drawn, 1 where what it shows did not move */
@@ -1036,6 +1053,9 @@ void VBlankIntrWait(void)
             test_render = test_render < SS_SCREEN_W ? SS_SCREEN_W : test_render > SS_MAX_VIEW_W ? SS_MAX_VIEW_W : test_render;
             atexit(picture_report);
         }
+        text = getenv("SS_HUD_SCALE");        /* with a window the platform decides (it knows the window's size) */
+        if (!windowed && text && text[0] == '1')
+            ss_ppu_hud_layer(1);
         if (windowed && ss_plat_video_init("ShiningSource") != 0)
             exit(1);
     }
@@ -1069,6 +1089,9 @@ void VBlankIntrWait(void)
         ss_prof(SS_PROF_FINISH, 0);
         for (i = 0; i < count; i++)
             picture_hash = (picture_hash ^ pixels[i]) * 16777619u;
+        if (ss_ppu_hud())
+            for (i = 0; i < SS_SCREEN_W * SS_HUD_ROWS; i++)
+                picture_hash = (picture_hash ^ ss_ppu_hud()[i]) * 16777619u;
         picture_count++;
     }
     if (dump_at && frame_count == dump_at)
@@ -1151,7 +1174,11 @@ void VBlankIntrWait(void)
                 ss_prof(SS_PROF_FINISH, 0);
                 ss_plat_overlay(skip.darkness, skip.text);
                 ss_prof(SS_PROF_PRESENT, 1);
-                held = ss_plat_present(pixels, width);
+                if (ss_ppu_hud()) {     /* the status display goes with the picture as a layer of its own */
+                    memcpy(pixels + width * SS_SCREEN_H, ss_ppu_hud(), SS_SCREEN_W * SS_HUD_ROWS * sizeof *pixels);
+                    held = ss_plat_present(pixels, width | SS_PRESENT_HUD);
+                } else
+                    held = ss_plat_present(pixels, width);
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;

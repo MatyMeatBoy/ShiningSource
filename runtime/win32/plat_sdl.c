@@ -27,12 +27,14 @@ static int display_paced;
  * Each has an environment variable (the launcher and the tests set those) and a key in shiningsource.ini, the
  * launcher's settings file in the working folder ("key=value" lines). At start the variable decides when it is
  * set, else the file, else the default; the menu writes what it changes back to the file (see "options menu"). */
-enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_COUNT };
-static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip", "qol_bars" };
+enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_HUD, SET_COUNT };
+static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip", "qol_bars",
+                                                     "hud_scale" };
 static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_FULLSCREEN", "SS_VSYNC",
-                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS" };
+                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS", "SS_HUD_SCALE" };
 static char setting_file[SET_COUNT][16];        /* what the file said at start ("" if nothing) */
 static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, option_fullscreen, vsync_refused;
+static int option_hud;                          /* SS_HUD_SCALE: the status display larger than the field, see "status display" */
 static int view_forced;                         /* SS_VIEW: the enhanced picture's width, 0 to follow the window */
 
 static void read_setting_file(void)
@@ -227,7 +229,7 @@ static void read_bindings(const char *name, int *out, int lowest, int limit)
 /* The picture's texture. Made at the start, and again when the system says the graphics device was reset (a
  * driver restart, an Android app coming back without its graphics context): every texture is gone then. The
  * others are made again where they are used: the typeface from the ROM, a notice's icon from its pixels. */
-static SDL_Texture *font_texture, *notice_texture, *field_texture;
+static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture;
 static int font_state, texture_remade;
 
 static void make_textures(void)
@@ -249,6 +251,13 @@ static void make_textures(void)
     if (field_texture)
         SDL_DestroyTexture(field_texture);
     field_texture = NULL;
+    if (hud_texture)
+        SDL_DestroyTexture(hud_texture);
+    hud_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_SCREEN_W, SS_HUD_ROWS);
+    if (hud_texture) {
+        SDL_SetTextureScaleMode(hud_texture, SDL_SCALEMODE_NEAREST);
+        SDL_SetTextureBlendMode(hud_texture, SDL_BLENDMODE_BLEND);
+    }
     texture_remade = 1;                 /* the frame at hand is uploaded again (ss_plat_present) */
 }
 
@@ -325,6 +334,8 @@ int ss_plat_video_init(const char *title)
         option_smooth = !(text && text[0] == '0');
         if (!getenv("SS_SMOOTH") && text)
             ss_frame_set_smooth(option_smooth);
+        text = setting_text(SET_HUD);
+        option_hud = text && text[0] == '1';
         text = setting_text(SET_SKIP);
         option_skip = !(text && text[0] == '0');
         if (!getenv("SS_SKIP") && text)
@@ -1240,7 +1251,7 @@ static uint16_t touch_buttons(int width)
  * reset (the textures are made again, as when the graphics device was reset). With it set, what the menu does is
  * written to stderr. */
 enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
-       ITEM_BARS, ITEM_QUIT, ITEM_KINDS };
+       ITEM_BARS, ITEM_HUD, ITEM_QUIT, ITEM_KINDS };
 enum { INFO_LINES = 8, INFO_BYTES = 96 };
 static int menu_row, menu_quit_armed, menu_online;
 static uint16_t menu_swallow;           /* buttons still held from the menu: not the game's until they are let go */
@@ -1272,6 +1283,7 @@ static int menu_items(int *items)
         items[n++] = ITEM_STYLE;
     } else {
         items[n++] = ITEM_SIDES;
+        items[n++] = ITEM_HUD;          /* the classic picture is the console's: its status display keeps its size */
     }
 #ifndef __ANDROID__
     items[n++] = ITEM_FULLSCREEN;       /* an Android app always has the whole screen */
@@ -1292,6 +1304,7 @@ static const char *item_label(int item)
         { "Border style", "Aspecto del borde" }, { "Sides", "Lados" }, { "Full screen", "Pantalla completa" }, { "VSync", "VSync" },
         { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
         { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
+        { "Larger status display", "Indicadores m\xC3\xA1s grandes" },
         { "Quit game", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)
@@ -1320,6 +1333,7 @@ static const char *item_value(int item, char *buffer, size_t capacity)
     case ITEM_SMOOTH: return option_smooth ? on : off;
     case ITEM_SKIP: return option_skip ? on : off;
     case ITEM_BARS: return ss_qol_bars() ? on : off;
+    case ITEM_HUD: return option_hud ? on : off;
     }
     return NULL;
 }
@@ -1329,7 +1343,7 @@ static void setting_value(int which, char *out, size_t capacity)
 {
     int number = which == SET_BORDER ? border : which == SET_STYLE ? border_style : which == SET_SIDES ? sides_field
                  : which == SET_FULLSCREEN ? option_fullscreen : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
-                 : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : option_skip;
+                 : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : which == SET_HUD ? option_hud : option_skip;
     if (which == SET_MODE)
         SDL_snprintf(out, capacity, "%s", classic ? "classic" : "enhanced");
     else
@@ -1467,6 +1481,10 @@ static void item_change(int item, int step)
     case ITEM_BARS:
         ss_qol_set_bars(!ss_qol_bars());
         which = SET_BARS;
+        break;
+    case ITEM_HUD:
+        option_hud = !option_hud;       /* show_picture tells the core, with the next picture */
+        which = SET_HUD;
         break;
     }
     if (which < 0)
@@ -1860,6 +1878,55 @@ static uint16_t read_buttons(void)
     return held;
 }
 
+/* ---- status display (SS_HUD_SCALE=1, "hud_scale" in the settings file, off by default) ----
+ * The picture has a whole-number scale that fits the window's height, so on a large window the field is large
+ * and the game's status display (the bars, the L and R menus) is as small beside it as on the console. With the
+ * option on, in the enhanced mode, the core leaves the display out of the picture and gives it as a layer
+ * (runtime.h, ss_frame_set_hud), and it is drawn here over the picture with larger squares: each of its pixels a
+ * whole number of the window's pixels, the largest up to twice the field's at which the left group still fits
+ * the picture's width (twice on an ultrawide window, about 1.5 to 1.8 times on 16:9). The left group keeps the
+ * picture's top left corner and the right group its top right corner; nothing is filtered. The field keeps its
+ * scale, and pages, messages and the scenes that keep the console's composition are not touched: the core gives
+ * no layer for them. A window too small for a larger display (scale 1, or the classic mode) gets the picture
+ * whole, as with the option off. */
+static int hud_asked, hud_have;         /* the core was asked for the layer; the frame at hand came with one */
+
+/* The size of one pixel of the status display, in window pixels, when the picture is `view` columns wide and one
+ * of its pixels is `scale` window pixels. */
+static int hud_scale(int view, int scale)
+{
+    int size = view * scale / SS_HUD_SPLIT;
+    return size > 2 * scale ? 2 * scale : size < scale ? scale : size;
+}
+
+/* `inside` is where the picture is, in the renderer's logical units (one is a pixel of the picture). */
+static void draw_hud(const SDL_FRect *inside, int view)
+{
+    int out_w = 0, out_h = 0, scale, wanted;
+    float by;
+    SDL_FRect from, to;
+
+    if (!SDL_GetCurrentRenderOutputSize(renderer, &out_w, &out_h))
+        return;
+    scale = out_h / SS_SCREEN_H < out_w / view ? out_h / SS_SCREEN_H : out_w / view;
+    if (scale < 1)
+        scale = 1;
+    wanted = option_hud && !classic && hud_scale(view, scale) > scale;
+    if (wanted != hud_asked) {          /* the picture after this one comes with the layer, or whole again */
+        hud_asked = wanted;
+        ss_frame_set_hud(wanted);
+    }
+    if (!hud_have || !hud_texture)
+        return;
+    by = (float)hud_scale(view, scale) / (float)scale;
+    from = (SDL_FRect){ 0, 0, SS_HUD_SPLIT, SS_HUD_ROWS };
+    to = (SDL_FRect){ inside->x, inside->y, SS_HUD_SPLIT * by, SS_HUD_ROWS * by };
+    SDL_RenderTexture(renderer, hud_texture, &from, &to);
+    from = (SDL_FRect){ SS_HUD_SPLIT, 0, SS_SCREEN_W - SS_HUD_SPLIT, SS_HUD_ROWS };
+    to = (SDL_FRect){ inside->x + inside->w - (SS_SCREEN_W - SS_HUD_SPLIT) * by, inside->y, (SS_SCREEN_W - SS_HUD_SPLIT) * by, SS_HUD_ROWS * by };
+    SDL_RenderTexture(renderer, hud_texture, &from, &to);
+}
+
 /* Draw the frame in the texture (`width` columns), what goes over it, and the menu. Returns the buttons the
  * touch controls hold. The picture shown is `width` wide except right after the mode changed and while a game
  * waits behind the menu, when the frame at hand has the width of the mode before: its middle is shown then, or
@@ -1890,6 +1957,7 @@ static uint16_t show_picture(int width)
         if (view > SS_SCREEN_W && sides_field)
             draw_field(view, SS_SCREEN_H, 0, 0, 0, 0);
         SDL_RenderTexture(renderer, texture, &source, &inside);
+        draw_hud(&inside, view);
         draw_overlay(w, h);
         draw_notice(0, 0, view);
     }
@@ -1964,8 +2032,10 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     static int unpaced;                 /* frames in a row the display was to pace and did not */
     static uint64_t ideal_ns;           /* when this game frame was due by the console's clock, however it is paced */
     static int frameskip = -1, test_slow_ms, after_left_out;
-    int waiting, late;
+    int waiting, late, hud = width & SS_PRESENT_HUD;
 
+    width &= ~SS_PRESENT_HUD;
+    update.w = width;
     if (!window)
         return 0;
     if (frameskip < 0) {
@@ -2008,6 +2078,9 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     if (part)
         part_from = SDL_GetTicksNS();
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
+    hud_have = hud != 0;
+    if (hud && hud_texture)             /* the status display's layer follows the picture (runtime.h) */
+        SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4);
     if (part) {
         part_to = SDL_GetTicksNS();
         *part = (uint32_t)((part_to - part_from) / 1000);
@@ -2023,8 +2096,11 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         menu_online = menu_open && ss_net_active();
         if (part)
             part_from = SDL_GetTicksNS();
-        if (texture_remade)             /* the device was reset: the new texture has not seen this frame */
+        if (texture_remade) {           /* the device was reset: the new textures have not seen this frame */
             SDL_UpdateTexture(texture, &update, pixels, width * 4);
+            if (hud && hud_texture)
+                SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4);
+        }
         held |= show_picture(width);
         texture_remade = 0;
         if (part) {

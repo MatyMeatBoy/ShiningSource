@@ -87,7 +87,10 @@ static recompilation of the same game:
   centred.
 - HUD elements are sprites the game positions against the 240-pixel screen. The
   renderer places them in a separate layer, each kept at its distance from the
-  screen edge it belongs to, and scales that layer with the window.
+  screen edge it belongs to, and scales that layer with the window. With the
+  "larger status display" option the layer leaves the picture: the renderer
+  gives it to the platform apart, and the window draws it with larger pixels
+  than the field's (whole window pixels, nothing filtered).
 - Scene-change blackouts use window masks that must cover the extra columns.
 - Sprite X positions 256-304 are valid on a wide view and must not wrap.
 

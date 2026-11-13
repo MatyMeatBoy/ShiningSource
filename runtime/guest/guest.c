@@ -136,6 +136,7 @@ static int guest_option(int which, int value)
     case SS_OPTION_VIEW: ss_frame_set_view(value); break;
     case SS_OPTION_SKIP: ss_skip_set_enabled(value); break;
     case SS_OPTION_ONLINE: return ss_net_active();
+    case SS_OPTION_HUD: ss_frame_set_hud(value); break;
     }
     return 0;
 }

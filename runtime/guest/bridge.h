@@ -47,7 +47,8 @@ enum {
     SS_OPTION_SMOOTH,       /* ss_frame_set_smooth(value) */
     SS_OPTION_VIEW,         /* ss_frame_set_view(value) */
     SS_OPTION_SKIP,         /* ss_skip_set_enabled(value) */
-    SS_OPTION_ONLINE        /* returns ss_net_active() */
+    SS_OPTION_ONLINE,       /* returns ss_net_active() */
+    SS_OPTION_HUD           /* ss_frame_set_hud(value) */
 };
 
 extern const uint32_t *ss_bridge;

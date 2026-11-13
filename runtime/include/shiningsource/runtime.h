@@ -128,6 +128,18 @@ void ss_frame_set_smooth(int on);
 void ss_frame_set_view(int width);
 void ss_skip_set_enabled(int on);
 
+/* The status display at a size of its own. In a field scene the game's status display (the bars at the top left,
+ * the L and R menus under them and at the right) is the top SS_HUD_ROWS lines of the console's picture, parted
+ * at column SS_HUD_SPLIT into a group for each side. ss_frame_set_hud(1) asks the core to leave it out of the
+ * picture and hand it over as a layer: ss_plat_present is then given SS_PRESENT_HUD with the width in the frames
+ * that have one, and SS_SCREEN_W x SS_HUD_ROWS ARGB pixels follow the picture's 160 lines (alpha 0: nothing
+ * there). The platform draws each group at its edge of the picture, as large as it likes. Frames without the
+ * flag are whole as they are (pages, messages, scenes that keep the console's composition). Off by default. */
+enum { SS_HUD_ROWS = 56, SS_HUD_SPLIT = 176, SS_PRESENT_HUD = 0x10000 };
+void ss_frame_set_hud(int on);
+void ss_ppu_hud_layer(int on);           /* core/ppu.c: the same switch, for the renderer */
+const uint32_t *ss_ppu_hud(void);        /* the layer of the picture drawn last, NULL if that picture has none */
+
 /* Quality of life, experimental (core/qol.c): two buttons the console never had, reported above its ten in the
  * mask ss_plat_present returns and in test scripts. ss_qol_keys turns one frame's mask into the buttons the game
  * is given; ss_qol_bar_back(0 = L bar, 1 = R bar) is asked by the game where it steps a bar. The platform owns

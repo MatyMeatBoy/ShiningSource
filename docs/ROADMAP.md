@@ -274,7 +274,22 @@ Open:
       not leave the first area.
 - [x] HUD at the edges: the top 16 lines (backgrounds and sprites) are split in
       the middle and each half goes to its edge of the visible picture.
-- [ ] HUD scale option (draw the HUD layer larger on big windows).
+- [x] HUD scale option (draw the HUD layer larger on big windows). Off by
+      default (`SS_HUD_SCALE=1`, `hud_scale=1` in `shiningsource.ini`, "Larger
+      status display" in the options menu and on the launcher's Video page;
+      enhanced mode only). The renderer leaves the status display out of the
+      picture and hands it over as a layer of 240 x 56 pixels (`ss_ppu_hud`);
+      the window draws its left and right groups at the picture's top corners
+      with pixels a whole number of window pixels large: the largest up to
+      twice the field's at which the left group's 176 columns fit the picture.
+      Twice needs a picture of 352 columns (a window wider than 2.2:1); a 16:9
+      window gets 1.5 to 1.8 times (5 for 3, 7 for 4, 10 for 6). Pages,
+      messages and scenes that keep the console's composition have no layer.
+      **Checked** by dumps and window shots of the first field, the town's
+      hall, a message, the status page and the L and R menus. **Not checked**:
+      by a person on a real display; a status display the game blends or
+      blinks (it is given an opacity, and is not smoothed); Linux and Android
+      (the code is shared, the option is not offered by their launchers).
 - [ ] Sprites near the side columns: the game does not create or draw actors
       beyond its own 240 columns, so they appear late at the sides.
 - [ ] Per-scanline register effects in wide scenes.

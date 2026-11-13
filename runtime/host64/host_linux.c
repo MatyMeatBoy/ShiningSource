@@ -201,6 +201,7 @@ static int (*guest_option)(int which, int value);
 static void b_option_hook(uint32_t function) { guest_option = (int (*)(int, int))(uintptr_t)function; }
 void ss_frame_set_smooth(int on) { if (guest_option) guest_option(SS_OPTION_SMOOTH, on); }
 void ss_frame_set_view(int width) { if (guest_option) guest_option(SS_OPTION_VIEW, width); }
+void ss_frame_set_hud(int on) { if (guest_option) guest_option(SS_OPTION_HUD, on); }
 void ss_skip_set_enabled(int on) { if (guest_option) guest_option(SS_OPTION_SKIP, on); }
 int ss_net_active(void) { return guest_option ? guest_option(SS_OPTION_ONLINE, 0) : 0; }
 

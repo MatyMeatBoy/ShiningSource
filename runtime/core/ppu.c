@@ -26,7 +26,7 @@
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
 
 /* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
-enum { HUD_BAND = 56, HUD_SPLIT = 176, EDGE_FADE = 32 };
+enum { HUD_BAND = SS_HUD_ROWS, HUD_SPLIT = SS_HUD_SPLIT, EDGE_FADE = 32 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
 /* per scanline, per background: palette index + 1 (0 = transparent); the sprites have their own lines further down */
@@ -35,6 +35,19 @@ static uint16_t line_bg[4][MAXW];
 static struct ss_view view;
 static int page_shown;          /* a full-screen page over the field, in a wide view */
 static int hud_at_edges;        /* this frame the field's status display goes to the edges of a wide view */
+
+/* The status display as a layer of its own (ss_ppu_hud_layer). A window larger than the picture shows every
+ * pixel as a square of several of its own, and the status display is small on it. So that the platform can show
+ * the display with larger squares than the field, what the port already takes for it (the lines of a background
+ * without a source map that part at HUD_SPLIT, and the sprites that are moved to an edge) is then left out of
+ * the picture and drawn here instead: HUD_BAND lines of the console's 240 columns, with their windows and fades,
+ * transparent where the display has nothing. A page, a message and every scene that keeps the console's
+ * composition are not the status display: they stay in the picture. */
+static int hud_wanted;          /* the platform asked for the layer */
+static int hud_apart;           /* this frame the status display is in its layer and not in the picture */
+static int hud_line;            /* one bit per background that has a line of it on the line being drawn */
+static uint16_t hud_bg[4][W];
+static uint32_t hud_pixels[W * HUD_BAND];
 
 /* A page that fills the screen (status, items, the Start menu) is one composition with the status display and
  * everything stays in the middle then. Such a page crosses the column that parts the display's two groups in
@@ -182,13 +195,19 @@ static void text_background(int n, int y)
         return;
     }
     split = 0;
-    if (hud_at_edges && y < HUD_BAND) {
+    if ((hud_at_edges || hud_apart) && y < HUD_BAND) {
         /* The field's status display: what is left of HUD_SPLIT stays at the left edge of the screen and what
          * is right of it goes to the right edge. A line where the layer crosses that column (a window, a
          * message) is one piece and stays in the middle. */
         int py = (y + scroll_y) & 255;
         const uint16_t *row = (const uint16_t *)(map + (py >> 3) * 64);
         split = !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
+    }
+    if (split && hud_apart) {           /* the whole line belongs to the status display: into its layer */
+        hardware_span(hud_bg[n], W, scroll_x, y + scroll_y, chars, map, width, height, colour256);
+        memset(dst, 0, (size_t)view.width * sizeof *dst);
+        hud_line |= 1 << n;
+        return;
     }
     for (X = 0; X < view.width; ) {
         /* the native column shown here, and for how many columns the ones after it follow on */
@@ -282,6 +301,7 @@ struct obj_line {
     uint8_t flags[MAXW];        /* 1 semi-transparent, 2 sprite-window pixel, 4 the sprite is not where it last was */
 };
 static struct obj_line obj_now, obj_other;      /* the sprites of this frame, and of the frame that goes with it */
+static struct obj_line hud_now, hud_other;      /* the same for the sprites of the status display's layer (W columns) */
 
 struct track {
     uint32_t content;           /* what it looks like: a sum over its tiles */
@@ -664,7 +684,7 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
-    int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place;
+    int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width;
     int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
 
     if ((!affine && (a0 & 0x200)) || shape == 3)
@@ -692,10 +712,15 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
     colour256 = a0 & 0x2000;
     tile = a2 & 0x3FF;
     prio = (a2 >> 10) & 3;
-    if (hud_at_edges && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
+    if ((hud_at_edges || hud_apart) && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
         int centre = x0 + box_w / 2;
         if (centre < 72) place = 0;
         else if (centre >= HUD_SPLIT) place = extra;
+        if (hud_apart && (centre < 72 || centre >= HUD_SPLIT)) {    /* into the layer, where the console has it */
+            line = line == &obj_now ? &hud_now : &hud_other;
+            place = 0;
+            columns = W;
+        }
     }
     bank = a2 >> 12;
     if (affine) {
@@ -704,7 +729,7 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
     }
     for (x = 0; x < box_w; x++) {
         int sx = x0 + x + place, tx, ty, number, index;
-        if (sx < 0 || sx >= view.width)
+        if (sx < 0 || sx >= columns)
             continue;
         if (page_shown && (sx < view.shift || sx >= view.shift + W))
             continue;                   /* a page is the console's picture: nothing of it belongs beside it */
@@ -748,6 +773,12 @@ static void sprites(int y, int two)
     memset(obj_now.colour, 0, sizeof obj_now.colour);
     memset(obj_now.prio, 4, sizeof obj_now.prio);
     memset(obj_now.flags, 0, sizeof obj_now.flags);
+    if (hud_apart && y < HUD_BAND) {
+        memset(hud_now.colour, 0, W * sizeof hud_now.colour[0]);
+        memset(hud_now.flags, 0, W);
+        memset(hud_other.colour, 0, W * sizeof hud_other.colour[0]);
+        memset(hud_other.flags, 0, W);
+    }
     for (i = 127; i >= 0; i--)
         sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_now);
     if (!two)
@@ -876,6 +907,81 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
     return top_colour;
 }
 
+/* One pixel of the status display's layer with the sprites of `obj`: 0 where the display has nothing, else its
+ * colour with the line's windows and fades, as compose does it for the picture. What is under the display is not
+ * known here (the platform puts the layer over the picture at another size), so where the game blends the
+ * display with what is behind it the pixel is given the blend's first weight as its opacity. */
+static uint32_t hud_pixel(int x, int y, const struct obj_line *obj)
+{
+    int mask = 0x3F, top = -1, n;
+    uint16_t dispcnt = line.dispcnt, bldcnt = line.bldcnt, colour = 0;
+    uint32_t opacity = 255;
+
+    if (line.windows) {
+        uint16_t winin = IO16(0x48), winout = IO16(0x4A);
+        if ((dispcnt & 0x2000) && inside(IO16(0x44) >> 8, IO16(0x44) & 255, y) && inside(IO16(0x40) >> 8, IO16(0x40) & 255, x))
+            mask = winin & 0x3F;
+        else if ((dispcnt & 0x4000) && inside(IO16(0x46) >> 8, IO16(0x46) & 255, y) && inside(IO16(0x42) >> 8, IO16(0x42) & 255, x))
+            mask = (winin >> 8) & 0x3F;
+        else
+            mask = winout & 0x3F;
+    }
+    if ((dispcnt & 0x1000) && (mask & 0x10) && obj->colour[x]) {        /* its sprites are in front of everything */
+        top = LAYER_OBJ;
+        colour = (obj->colour[x] & 0x8000) ? (uint16_t)(obj->colour[x] & 0x7FFF) : PAL[obj->colour[x] - 1];
+    }
+    for (n = line.count - 1; n >= 0 && top < 0; n--) {
+        int bg = line.order[n];
+        if ((hud_line & (1 << bg)) && hud_bg[bg][x] && (mask & (1 << bg))) {
+            top = bg;
+            colour = PAL[hud_bg[bg][x] - 1];
+        }
+    }
+    if (top < 0)
+        return 0;
+    if (top == LAYER_OBJ && (obj->flags[x] & 1)) {
+        opacity = (uint32_t)line.eva * 255 / 16;
+    } else if ((mask & 0x20) && (bldcnt & (1 << top))) {
+        switch ((bldcnt >> 6) & 3) {
+        case 1: if (bldcnt & 0x3F00) opacity = (uint32_t)line.eva * 255 / 16; break;
+        case 2: colour = fade(colour, line.evy, 1); break;
+        case 3: colour = fade(colour, line.evy, 0); break;
+        }
+    }
+    return opacity << 24 | (to_rgb(colour) & 0x00FFFFFFu);
+}
+
+/* A line of the layer. Where one of its sprites alternates the pixel is half of each of the two pictures, as in
+ * the picture itself (see "sprites that alternate"). */
+static void hud_row(int y, int two)
+{
+    uint32_t *out = hud_pixels + y * W;
+    int x;
+    for (x = 0; x < W; x++) {
+        uint32_t now = hud_pixel(x, y, &hud_now);
+        if (two && (hud_now.colour[x] != hud_other.colour[x] || hud_now.flags[x] != hud_other.flags[x])) {
+            uint32_t other = hud_pixel(x, y, &hud_other), a = now >> 24, b = other >> 24;
+            if (a + b) {                /* each colour by its opacity, and half of the two opacities */
+                uint32_t red = (((now >> 16) & 255) * a + ((other >> 16) & 255) * b) / (a + b);
+                uint32_t green = (((now >> 8) & 255) * a + ((other >> 8) & 255) * b) / (a + b);
+                uint32_t blue = ((now & 255) * a + (other & 255) * b) / (a + b);
+                now = ((a + b + 1) / 2) << 24 | red << 16 | green << 8 | blue;
+            }
+        }
+        out[x] = now;
+    }
+}
+
+void ss_ppu_hud_layer(int on)
+{
+    hud_wanted = on != 0;
+}
+
+const uint32_t *ss_ppu_hud(void)
+{
+    return hud_apart ? hud_pixels : NULL;
+}
+
 /* What a frame leaves behind for the frames after it: the sprite table, the sprites' tiles and their colours. */
 static void keep_frame(void)
 {
@@ -922,6 +1028,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     line.edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
     page_shown = view.world && view.width > W && (IO16(0) & 7) == 0 && page_open();
     hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_shown;
+    hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(view.width > W ? page_shown : page_open());
     for (y = 0; y < H; y++) {
         uint32_t *out = pixels + y * pitch_pixels;
         uint8_t *calm = still + y * view.width;
@@ -961,8 +1068,11 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
         if (line.dispcnt & 0x80) {
             for (X = 0; X < view.width; X++) out[X] = 0xFFFFFFFFu;
             memset(calm, 1, (size_t)view.width);
+            if (hud_apart && y < HUD_BAND)
+                memset(hud_pixels + y * W, 0, W * sizeof hud_pixels[0]);
             continue;
         }
+        hud_line = 0;
         for (n = 0; n < 4; n++) {
             if (!line.enabled[n]) continue;
             if ((mode == 1 && n == 2) || mode == 2) affine_background(n, y);
@@ -970,6 +1080,8 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
         }
         two = two_pictures[y] && (line.dispcnt & 0x1000);
         if (line.dispcnt & 0x1000) sprites(y, two);
+        if (hud_apart && y < HUD_BAND)
+            hud_row(y, two);
         for (X = 0; X < view.width; X++) {
             int moved, moved_other;
             uint32_t colour;
