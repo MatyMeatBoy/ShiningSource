@@ -66,6 +66,11 @@ failed 27 of them, the new one none).
 - With a window on a 144 Hz display: 16.74 ms a frame, none late, the sound
   reserve never empty; a simulated 60 and 120 Hz display keeps 16.74 ms.
 - The measurements are in [OPTIPORT.md](OPTIPORT.md).
+- After the release, from the same source: the play-through gives the same
+  hash and the same sound on Linux x64 and Linux ARM64 (Debian 12 virtual
+  machines, with a two-player session through a local relay in each), and in
+  the Android emulator (x86_64), where the game was also started with its
+  picture and left cleanly.
 
 ## Not checked
 
@@ -76,5 +81,5 @@ failed 27 of them, the new one none).
   scenes.
 - A real 60 Hz display, a real graphics driver reset, a real controller, a
   phone.
-- This package on Android: it was built, not run.
+- Android on a phone (ARM64): the emulator runs the x86_64 half.
 - Everything listed as not checked in 0.7 (combat online, a hosted server).

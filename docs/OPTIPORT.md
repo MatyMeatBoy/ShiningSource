@@ -201,3 +201,34 @@ a minimised window keeps 16.74 ms on the game's own clock.
   the terminal; Android writes its log to the app's folder but has no watchdog.
 - Online: intervals under real latency are measured only through the relay
   simulation (docs/ROADMAP.md, M7).
+
+## After the second pass: the renderer (2026-11-13)
+
+The second pass left `ss_ppu_render` alone and named it as what keeps a slow
+device from fitting a frame. Timers around its parts (removed again) gave, per
+frame over the whole 32,000-frame reference run: backgrounds 634 us, sprites
+135, composing the pixels 625 at 240 columns; 818, 136 and 1,164 at 480.
+
+- **Backgrounds a tile row at a time** (`tile_run`, `hardware_span`,
+  `source_span` in `runtime/core/ppu.c`): the map entry and the tile's row are
+  found once for up to eight pixels, and an empty row is written in one go.
+  634 -> 279 us at 240 columns, 818 -> 381 at 480.
+- **Composition from the front**: the line's layer order is worked out once per
+  line, and a pixel stops at the first layer that shows something; the layer
+  under it is only looked for when a blend needs it. 625 -> 473 us, 1,164 -> 931.
+
+| `ss_ppu_render`, frames 22,000 to 32,000, mean / p99 (us) | before | after |
+|---|---|---|
+| 240 columns | 1,398 / 2,667 | 889 / 1,738 |
+| 480 columns | 2,079 / 4,322 | 1,381 / 2,414 |
+
+Same machine and method as above (noisy: single runs, Windows x64). Proof that
+the picture is the same: `SS_TEST_RENDER` hashes over all 32,000 pictures are
+identical before and after at 240, 284, 427 and 480 columns (6CEBF2FF,
+046826C4, 168EA6A0, 10328074), the reference hash is unchanged, and the
+transparency bench still has no failing case. What the script does not show
+(256-colour tiles, 512-pixel hardware maps) is covered only by the code being
+a transcription of the per-pixel version.
+
+Tried and dropped, no measurable gain: composing each line into local buffers.
+

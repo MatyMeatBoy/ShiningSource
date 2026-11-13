@@ -85,6 +85,75 @@ static uint16_t tile_pixel(const uint8_t *chars, uint16_t entry, int tx, int ty,
     return (uint16_t)(index ? (entry >> 12) * 16 + index + 1 : 0);
 }
 
+/* `run` pixels of one tile, from its column `tx` on, of its row `ty`: what tile_pixel gives for each, with the
+ * tile's row found once. An empty row of a 16-colour tile, by far the most common, is written in one go. */
+static void tile_run(uint16_t *dst, const uint8_t *chars, uint16_t entry, int tx, int ty, int run, int colour256)
+{
+    int i;
+    if (entry & 0x800) ty = 7 - ty;
+    if (colour256) {
+        const uint8_t *src = chars + (entry & 0x3FF) * 64 + ty * 8;
+        for (i = 0; i < run; i++) {
+            int index = src[(entry & 0x400) ? 7 - (tx + i) : tx + i];
+            dst[i] = (uint16_t)(index ? index + 1 : 0);
+        }
+    } else {
+        uint32_t bits;
+        int base = (entry >> 12) * 16 + 1;
+        memcpy(&bits, chars + (entry & 0x3FF) * 32 + ty * 4, 4);
+        if (!bits) {
+            for (i = 0; i < run; i++) dst[i] = 0;
+            return;
+        }
+        if (entry & 0x400) {            /* mirrored: the eight nibbles in the opposite order */
+            bits = (bits >> 16) | (bits << 16);
+            bits = ((bits >> 8) & 0x00FF00FFu) | ((bits << 8) & 0xFF00FF00u);
+            bits = ((bits >> 4) & 0x0F0F0F0Fu) | ((bits << 4) & 0xF0F0F0F0u);
+        }
+        bits >>= tx * 4;
+        for (i = 0; i < run; i++, bits >>= 4) {
+            int index = bits & 15;
+            dst[i] = (uint16_t)(index ? base + index : 0);
+        }
+    }
+}
+
+/* `count` pixels of a background as the hardware holds it, from its pixel (px, py) on, wrapping as it does. */
+static void hardware_span(uint16_t *dst, int count, int px, int py, const uint8_t *chars, const uint8_t *map,
+                          int width, int height, int colour256)
+{
+    const uint8_t *row;
+    py &= height - 1;
+    row = map + (py >> 8) * (width == 512 ? 2 : 1) * 0x800 + ((py & 255) >> 3) * 64;
+    while (count > 0) {
+        int tx, run;
+        px &= width - 1;
+        tx = px & 7;
+        run = 8 - tx < count ? 8 - tx : count;
+        tile_run(dst, chars, *(const uint16_t *)(row + (px >> 8) * 0x800 + ((px & 255) >> 3) * 2), tx, py & 7, run, colour256);
+        dst += run; px += run; count -= run;
+    }
+}
+
+/* `count` pixels of a background from its full source map, from world position (wx, wy) on: no wrapping, and
+ * nothing outside the map. */
+static void source_span(uint16_t *dst, int count, int wx, int wy, const struct ss_bg_source *source, const uint8_t *chars, int colour256)
+{
+    int inside_rows = wy >= 0 && (wy >> 3) < source->height;
+    while (count > 0) {
+        int tx, run;
+        if (!inside_rows || wx < 0 || (wx >> 3) >= source->width) {
+            run = (inside_rows && wx < 0 && -wx < count) ? -wx : count;
+            memset(dst, 0, (size_t)run * sizeof *dst);
+        } else {
+            tx = wx & 7;
+            run = 8 - tx < count ? 8 - tx : count;
+            tile_run(dst, chars, source->map[(wy >> 3) * source->width + (wx >> 3)], tx, wy & 7, run, colour256);
+        }
+        dst += run; wx += run; count -= run;
+    }
+}
+
 static void text_background(int n, int y)
 {
     uint16_t cnt = IO16(0x08 + n * 2);
@@ -94,6 +163,7 @@ static void text_background(int n, int y)
     int width = (size & 1) ? 512 : 256, height = (size & 2) ? 512 : 256;
     int scroll_x = IO16(0x10 + n * 4) & 511, scroll_y = IO16(0x12 + n * 4) & 511;
     const struct ss_bg_source *source = &view.bg[n];
+    uint16_t *dst = line_bg[n];
     int X, split;
 
     if (source->map) {
@@ -101,20 +171,14 @@ static void text_background(int n, int y)
          * drawn over the field is then always whole); the columns beside them come from the full source map:
          * world position, no wrapping. */
         int wy = y + source->scroll_y;
-        for (X = 0; X < view.width; X++) {
-            int wx = X - view.shift + source->scroll_x;
-            if (X >= view.shift && X < view.shift + W) {
-                int px = (X - view.shift + scroll_x) & (width - 1), py = (y + scroll_y) & (height - 1);
-                int block = (px >> 8) + ((py >> 8) * (width == 512 ? 2 : 1));
-                line_bg[n][X] = tile_pixel(chars, *(const uint16_t *)(map + block * 0x800 + ((py & 255) >> 3) * 64 + ((px & 255) >> 3) * 2),
-                                           px & 7, py & 7, colour256);
-                continue;
-            }
-            if (wx < 0 || wy < 0 || (wx >> 3) >= source->width || (wy >> 3) >= source->height)
-                line_bg[n][X] = 0;
-            else
-                line_bg[n][X] = tile_pixel(chars, source->map[(wy >> 3) * source->width + (wx >> 3)], wx & 7, wy & 7, colour256);
-        }
+        int from = view.shift < 0 ? 0 : view.shift > view.width ? view.width : view.shift;
+        int to = view.shift + W < from ? from : view.shift + W > view.width ? view.width : view.shift + W;
+        if (from > 0)
+            source_span(dst, from, source->scroll_x - view.shift, wy, source, chars, colour256);
+        if (to > from)
+            hardware_span(dst + from, to - from, from - view.shift + scroll_x, y + scroll_y, chars, map, width, height, colour256);
+        if (to < view.width)
+            source_span(dst + to, view.width - to, to - view.shift + source->scroll_x, wy, source, chars, colour256);
         return;
     }
     split = 0;
@@ -126,19 +190,19 @@ static void text_background(int n, int y)
         const uint16_t *row = (const uint16_t *)(map + (py >> 3) * 64);
         split = !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
     }
-    for (X = 0; X < view.width; X++) {
-        int x = native_x(X, y), px, py, block;
-        if (split)
-            x = X < HUD_SPLIT ? X : (X >= view.width - W + HUD_SPLIT ? X - (view.width - W) : -1);
+    for (X = 0; X < view.width; ) {
+        /* the native column shown here, and for how many columns the ones after it follow on */
+#define NATIVE_AT(X) (split ? ((X) < HUD_SPLIT ? (X) : ((X) >= view.width - W + HUD_SPLIT ? (X) - (view.width - W) : -1)) : native_x((X), y))
+        int x = NATIVE_AT(X), run = 1;
         if (x < 0) {
-            line_bg[n][X] = 0;
+            dst[X++] = 0;
             continue;
         }
-        px = (x + scroll_x) & (width - 1);
-        py = (y + scroll_y) & (height - 1);
-        block = (px >> 8) + ((py >> 8) * (width == 512 ? 2 : 1));
-        line_bg[n][X] = tile_pixel(chars, *(const uint16_t *)(map + block * 0x800 + ((py & 255) >> 3) * 64 + ((px & 255) >> 3) * 2),
-                                   px & 7, py & 7, colour256);
+        while (X + run < view.width && NATIVE_AT(X + run) == x + run)
+            run++;
+#undef NATIVE_AT
+        hardware_span(dst + X, run, x + scroll_x, y + scroll_y, chars, map, width, height, colour256);
+        X += run;
     }
 }
 
@@ -742,6 +806,7 @@ static struct {
     uint16_t dispcnt, bldcnt;
     int eva, evb, evy, windows;
     int prio[4], enabled[4];
+    int order[4], order_prio[4], count;     /* the enabled backgrounds from the back to the front, and their priorities */
     int moved[4];               /* this background is not where it was on this line in the last frame */
     int edge_fade;
 } line;
@@ -774,21 +839,17 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
             mask = winout & 0x3F;
     }
     obj_visible = (dispcnt & 0x1000) && (mask & 0x10) && obj->colour[X];
-    /* walk priorities from the back so that `top` ends as the front-most pixel and `second` as the one under it */
-    for (p = 3; p >= 0; p--) {
-        for (n = 3; n >= 0; n--) {
-            if (line.enabled[n] && line.prio[n] == p && (mask & (1 << n)) && line_bg[n][X]) {
-                second = top; second_colour = top_colour;
-                top = n; top_colour = PAL[line_bg[n][X] - 1];
-            }
-        }
-        if (obj_visible && obj->prio[X] == p) {
-            second = top; second_colour = top_colour;
-            top = LAYER_OBJ;
-            top_colour = (obj->colour[X] & 0x8000) ? (uint16_t)(obj->colour[X] & 0x7FFF) : PAL[obj->colour[X] - 1];
-            semi = obj->flags[X] & 1;
-        }
-    }
+    /* The front-most pixel: the layers from the front, the sprite in front of the backgrounds of its own
+     * priority, stopping at the first that shows something. The one under it is only looked for when a blend
+     * needs it. */
+    p = obj_visible ? obj->prio[X] : -1;
+    n = line.count - 1;
+#define NEXT_LAYER(LAYER_, COLOUR_)     for (;;) {         int bg;         uint16_t index;         if (p >= 0 && (n < 0 || line.order_prio[n] >= p)) {             p = -1;             LAYER_ = LAYER_OBJ;             COLOUR_ = (obj->colour[X] & 0x8000) ? (uint16_t)(obj->colour[X] & 0x7FFF) : PAL[obj->colour[X] - 1];             break;         }         if (n < 0)             break;         bg = line.order[n--];         index = line_bg[bg][X];         if (index && (mask & (1 << bg))) {             LAYER_ = bg;             COLOUR_ = PAL[index - 1];             break;         }     }
+    NEXT_LAYER(top, top_colour)
+    semi = top == LAYER_OBJ ? obj->flags[X] & 1 : 0;
+    if (semi || ((mask & 0x20) && (bldcnt & (1 << top)) && ((bldcnt >> 6) & 3) == 1))
+        NEXT_LAYER(second, second_colour)
+#undef NEXT_LAYER
     if (semi && (bldcnt & (0x100 << second))) {
         top_colour = blend(top_colour, second_colour, line.eva, line.evb);
     } else if ((mask & 0x20) && (bldcnt & (1 << top))) {
@@ -853,6 +914,13 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 line.prio[n] = IO16(0x08 + n * 2) & 3;
                 line.enabled[n] = (line.dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
             }
+            line.count = 0;
+            for (X = 3; X >= 0; X--)
+                for (n = 3; n >= 0; n--)
+                    if (line.enabled[n] && line.prio[n] == X) {
+                        line.order[line.count] = n;
+                        line.order_prio[line.count++] = X;
+                    }
         }
         for (n = 0; n < 4; n++) {
             /* where the background is: its scroll, or everything that places a rotated one */
