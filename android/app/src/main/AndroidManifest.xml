@@ -8,13 +8,18 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <!-- online play -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 10 and older only: lets the first screen find a ROM the user left in Download. Later versions give
+         an app nothing of the kind, so there the ROM comes from the file picker or from the app's own folders. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
     <application android:label="ShiningSource"
         android:icon="@mipmap/ic_launcher"
         android:allowBackup="false"
+        android:requestLegacyExternalStorage="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:hardwareAccelerated="true">
         <activity android:name="com.shiningsource.android.MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

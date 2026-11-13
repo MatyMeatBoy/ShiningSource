@@ -55,8 +55,7 @@ def main():
     shutil.copytree(ROOT / "android/app", stage / "app", dirs_exist_ok=True)
     skeleton = sdl / "android-project"
     shutil.copytree(skeleton / "app/src/main/java/org", main_dir / "java/org", dirs_exist_ok=True)
-    for folder in (skeleton / "app/src/main/res").glob("mipmap-*"):        # placeholder icon until the port has its own
-        shutil.copytree(folder, main_dir / "res" / folder.name, dirs_exist_ok=True)
+    # the icon is the port's own (android/app/src/main/res/mipmap-*, drawn by tools/make_icon.py)
     shutil.copytree(skeleton / "gradle", stage / "gradle", dirs_exist_ok=True)
     shutil.copy2(skeleton / "gradlew.bat", stage / "gradlew.bat")
     if args.test:
