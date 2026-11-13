@@ -29,6 +29,80 @@
    "why": "Joining a game in progress: the network layer is told while the host's game is at the announcement of a map's layouts inside the set-up of a map. A newcomer is let in at a 0x85 message handed over here and nowhere else (the same message is also sent from the world map, where a second one follows).",
    "find": "        sub_08022E60(t025State270->f0, 0);\n    }\n    temp_r0 = t025State270->f40;",
    "replace": "        ss_net_join_anchor(1);\n        sub_08022E60(t025State270->f0, 0);\n        ss_net_join_anchor(0);\n    }\n    temp_r0 = t025State270->f40;"
+  },
+  {
+   "why": "Online, a player that is gone (it left, crashed or was given up; its character stays standing, runtime/core/netlink.c, drop): every place where the game waits for all players passes over it, as the barrier (sub_080682B8) and the world map (sub_0800BEC0) already do. Here: the task of a player that stands at a map's exit (sub_0802413C) counts who is ready, to know whether B may still step back; a gone player counts as ready. The decision itself is the host's (sub_080245CC, below).",
+   "find": "            ent = gPlayers2413C[i].ent;\n            ex = ent->x;",
+   "replace": "            {\n                extern int ss_net_msg_gone(int who);\n                if (ss_net_msg_gone(i)) {\n                    cnt++;\n                    continue;\n                }\n            }\n            ent = gPlayers2413C[i].ent;\n            ex = ent->x;"
+  },
+  {
+   "why": "The same: the declaration, and how many gone players the host's count at an exit passed over.",
+   "find": "u32 local245CC_sub_08002164() asm(",
+   "replace": "int ss_net_msg_gone(int who);\nstatic u32 ssGone245CC;\nu32 local245CC_sub_08002164() asm("
+  },
+  {
+   "why": "The same, the exit of a map (sub_080245CC, first kind of exit). The host starts the change of map (link message 0x8D) when every player's block is ready at the exit or marked down, and not everybody is down. A gone player's block never changes, so the others stood at the exit for the rest of the session. A gone player counts as ready and as absent from the two counts beside it (down, flagged), so a party that is down does not leave through the exit because of it. Only the host counts, and everybody acts on its message, so every machine changes map at the same point. The set-up of the next map stands behind barriers, where the runtime is told that the game went on without the player (ss_net_msg_passed in sub_080682B8): one that was only given up is kept out from there on.",
+   "find": "            for (playerIndex = 0; playerIndex < local245CC_sub_08002164(); playerIndex++) {\n                sp7C = (s16) ((u16) local245CC_gUnk_03003CE0[playerIndex].remote->x >> 4);",
+   "replace": "            ssGone245CC = 0;\n            for (playerIndex = 0; playerIndex < local245CC_sub_08002164(); playerIndex++) {\n                if (ss_net_msg_gone(playerIndex)) {\n                    matchedPlayers += 1;\n                    ssGone245CC += 1;\n                    continue;\n                }\n                sp7C = (s16) ((u16) local245CC_gUnk_03003CE0[playerIndex].remote->x >> 4);"
+  },
+  {
+   "why": "The same: the two counts beside it.",
+   "find": "\n            if ((matchedPlayers == local245CC_sub_08002164()) && (activePlayers != local245CC_sub_08002164())) {\n                if ((spA4 == 0) || (spC8 != 0)) {\n                    if ((activePlayers == 0) && (flaggedPlayers != local245CC_sub_08002164())) {",
+   "replace": "\n            if ((matchedPlayers == local245CC_sub_08002164()) && (activePlayers + ssGone245CC != local245CC_sub_08002164())) {\n                if ((spA4 == 0) || (spC8 != 0)) {\n                    if ((activePlayers == 0) && (flaggedPlayers + ssGone245CC != local245CC_sub_08002164())) {"
+  },
+  {
+   "why": "The same for the second kind of exit in sub_080245CC.",
+   "find": "                for (playerIndex = 0; playerIndex < local245CC_sub_08002164(); playerIndex++) {\n                    sp7C = (s16) ((u16) local245CC_gUnk_03003CE0[playerIndex].remote->x >> 4);",
+   "replace": "                ssGone245CC = 0;\n                for (playerIndex = 0; playerIndex < local245CC_sub_08002164(); playerIndex++) {\n                    if (ss_net_msg_gone(playerIndex)) {\n                        matchedPlayers += 1;\n                        ssGone245CC += 1;\n                        continue;\n                    }\n                    sp7C = (s16) ((u16) local245CC_gUnk_03003CE0[playerIndex].remote->x >> 4);"
+  },
+  {
+   "why": "The same: its two counts.",
+   "find": "\n                if ((matchedPlayers == local245CC_sub_08002164()) && (activePlayers != local245CC_sub_08002164())) {\n                    if ((spA4 == 0) || (spC8 != 0)) {\n                        if ((activePlayers == 0) && (flaggedPlayers != local245CC_sub_08002164())) {",
+   "replace": "\n                if ((matchedPlayers == local245CC_sub_08002164()) && (activePlayers + ssGone245CC != local245CC_sub_08002164())) {\n                    if ((spA4 == 0) || (spC8 != 0)) {\n                        if ((activePlayers == 0) && (flaggedPlayers + ssGone245CC != local245CC_sub_08002164())) {"
+  },
+  {
+   "why": "The same, the party's defeat in an encounter: the exit tasks (sub_080245CC, here and below) and the portal task (sub_08025890) end the local player (state 12) when every player's record is flagged as defeated (0x2000). A gone player's record is never flagged, so a defeated party would have waited for ever beside its standing character. A gone player counts as defeated here. Every machine counts for itself from the flags all of them are told (0x8C) and from who is gone, which all of them come to know.",
+   "find": "\n                        if (local245CC_gUnk_03003CE0[playerIndex].flags & 0x2000)\n                            matchedPlayers += 1;",
+   "replace": "\n                        if ((local245CC_gUnk_03003CE0[playerIndex].flags & 0x2000) || ss_net_msg_gone(playerIndex))\n                            matchedPlayers += 1;"
+  },
+  {
+   "why": "The same in the second kind of exit.",
+   "find": "\n                    if (local245CC_gUnk_03003CE0[playerIndex].flags & 0x2000)\n                        matchedPlayers += 1;",
+   "replace": "\n                    if ((local245CC_gUnk_03003CE0[playerIndex].flags & 0x2000) || ss_net_msg_gone(playerIndex))\n                        matchedPlayers += 1;"
+  },
+  {
+   "why": "The same in the portal task (sub_08025890).",
+   "find": "                if (t24_playerFlags25890[i].flags & 0x2000)\n                    count++;",
+   "replace": "                if ((t24_playerFlags25890[i].flags & 0x2000) || ss_net_msg_gone(i))\n                    count++;"
+  },
+  {
+   "why": "The same, the portal back (sub_08025890): the host starts the change of map when every player's block has the ready bit. A gone player counts as ready. Host only, announced by message 0x8D.",
+   "find": "                if ((s32)(t24_playerNets25890[i].net->unk7 << 0x1B) < 0)\n                    count++;",
+   "replace": "                if ((s32)(t24_playerNets25890[i].net->unk7 << 0x1B) < 0 || ss_net_msg_gone(i))\n                    count++;"
+  },
+  {
+   "why": "The same, the boss portal (sub_080263B4): every player in the zone and ready. A gone player counts. Host only, announced by message 0x9F.",
+   "find": "scan_body:\n            {\n                temp_r2_2 = t24_players080263B4[var_r4].net;",
+   "replace": "scan_body:\n            if (ss_net_msg_gone(var_r4)) {\n                var_r5 += 1;\n                var_r4 += 1;\n                goto scan_check;\n            }\n            {\n                temp_r2_2 = t24_players080263B4[var_r4].net;"
+  },
+  {
+   "why": "The same in the second portal of that kind (sub_08026858).",
+   "find": "scan_body:\n        {\n            temp_r2_2 = t24_players08026858[var_r4].net;",
+   "replace": "scan_body:\n        if (ss_net_msg_gone(var_r4)) {\n            var_r5 += 1;\n            var_r4 += 1;\n            goto scan_check;\n        }\n        {\n            temp_r2_2 = t24_players08026858[var_r4].net;"
+  }
+ ],
+ "code_0803B69C.c": [
+  {
+   "why": "Online, a player that is gone (see code_08021DC4.c): at the end of the first field's scene every player's game says that it has arrived (link message 0xA3 with sub_0803E5D8, which adds one to a count on every machine) and waits until the count is the number of players. A gone player never says so: with three players and one program ended in that field the other two stood there for the rest of the session (measured, tools/net_gone_test.sh). The wait now also ends when the count and the gone players together make the number of players. Every machine waits for itself and then meets the others at the barrier of the next map's set-up, which passes over the gone player and tells the runtime (sub_080682B8); a machine that goes on a little before another stands at that barrier until the other is there.",
+   "find": "            var_r0_4 = gStateDE84 + 0x1B5;\n        }\n    } while (*var_r0_4 != temp_r0_2);",
+   "replace": "            var_r0_4 = gStateDE84 + 0x1B5;\n        }\n        {\n            extern int ss_net_msg_gone(int who);\n            u32 ssSeat, ssGone = 0;\n            for (ssSeat = 0; ssSeat < temp_r0_2; ssSeat++)\n                ssGone += ss_net_msg_gone(ssSeat) != 0;\n            if (ssGone != 0 && (u32)*var_r0_4 + ssGone >= temp_r0_2)\n                break;\n        }\n    } while (*var_r0_4 != temp_r0_2);"
+  }
+ ],
+ "code_080A3D2C.c": [
+  {
+   "why": "Online, a player that is gone (see code_08021DC4.c): the scene of the actor sub_080A756C (started by the area function sub_0808E774) goes on to its end, and with it to the next area, when no standing player is left below a line of the map. A gone player's character stands where it was and would hold the scene there. A gone player is passed over. Read from the code, not run: no scripted session reaches this scene. Every machine runs this scene for itself and meets the others at the barrier after it, which passes over the gone player too (sub_080682B8).",
+   "find": "                if ((s32)((u32)(((u16 *)t)[1] << 20) >> 20) > 0x7C && (u32)(((u8 *)t)[4] << 26) >> 26 == 0x11)\n                    state = 4;",
+   "replace": "                extern int ss_net_msg_gone(int who);\n                if ((s32)((u32)(((u16 *)t)[1] << 20) >> 20) > 0x7C && (u32)(((u8 *)t)[4] << 26) >> 26 == 0x11 && !ss_net_msg_gone(i))\n                    state = 4;"
   }
  ],
  "code_0801AAF8.c": [
