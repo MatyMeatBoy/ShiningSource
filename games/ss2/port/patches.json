@@ -140,6 +140,11 @@
    "why": "The same in sub_0808441C (the item made from three others): its 128-byte frame is addressed through the ARM stack pointer. With a null `stack` it lost its own arguments and combined records read from address 0.",
    "find": "    u8 frameStorage8441C[128];\n    u8 *stack;",
    "replace": "    u8 frameStorage8441C[128];\n    u8 *stack = frameStorage8441C;"
+  },
+  {
+   "why": "Skip scene online: the introduction ends on Start only in a single-player game (gUnk_03002838 is the title menu's choice). While the port's skip is under way (every player voted, runtime/core/scene.c) it ends in any game, through the game's own exit.",
+   "find": "#define SKIP_KEYS() if ((keys86860 & 8) && gUnk_03002838 == 0) skip = 1\n#define SKIP_KEYS2() if (sub_0801AAE0() != 0 && (keys86860 & 8) && gUnk_03002838 == 0) skip = 1",
+   "replace": "int ss_skip_request(void);\n#define SKIP_KEYS() if (((keys86860 & 8) && gUnk_03002838 == 0) || ss_skip_request()) skip = 1\n#define SKIP_KEYS2() if (sub_0801AAE0() != 0 && (((keys86860 & 8) && gUnk_03002838 == 0) || ss_skip_request())) skip = 1"
   }
  ],
  "code_080443EC.c": [

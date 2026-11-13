@@ -28,6 +28,7 @@
  */
 #include "shiningsource/runtime.h"
 
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,26 @@ static int configured = -1, gather, seat = -1, synced, delay = 4, timeout_ms = 1
 static uint32_t room, token, epoch, farewell_epoch, frame_label, own_first, connected, available, last_hello, last_send;
 static struct stream streams[SEATS];
 static void start_session(void);
+
+/* What happens to the session, in words: to the console and, with the moment it happened, to shiningsource_net.log
+ * beside the program. A game started from the launcher has no console, and "a companion vanished" can only be
+ * understood afterwards from what each player's program saw. The file is small: a line per event. */
+static void net_say(const char *format, ...)
+{
+    char text[200];
+    va_list arguments;
+    FILE *file;
+    va_start(arguments, format);
+    vsnprintf(text, sizeof text, format, arguments);
+    va_end(arguments);
+    fprintf(stderr, "%s", text);
+    if (getenv("SS_FRAMES"))
+        return;                 /* test runs keep their own logs */
+    if ((file = fopen("shiningsource_net.log", "ab")) != NULL) {
+        fprintf(file, "%10u ms  frame %lu  seat %d  %s", (unsigned)ss_plat_ticks_ms(), (unsigned long)ss_frame_number(), seat + 1, text);
+        fclose(file);
+    }
+}
 static uint8_t own[RING][BLOCK];
 static char room_name[32] = "default", status_line[96];
 static FILE *log_file;
@@ -86,6 +107,8 @@ static int my_vote;
 static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_delay, quiet_windows;
 static uint32_t change_at, change_done, last_target;
 static uint32_t skip_at, skip_done;
+static int session_open;                /* the game's link task has started a session that was not left */
+static uint32_t leaving_since;          /* when the game's link task ended, 0 if it runs */
 static const void *last_sendp;         /* the game's send block, while its link task runs */
 static uint32_t flushed_label;          /* the label whose block went out at the end of its frame, 0 if none */
 enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
@@ -158,10 +181,10 @@ static int configure(void)
     token = getenv("SS_NET_TOKEN") ? (uint32_t)strtoul(getenv("SS_NET_TOKEN"), NULL, 10)
                                    : fnv(ss_plat_ticks_ms() * 2654435761u, &text, sizeof text) | 1;
     if (ss_plat_net_open(host, port)) {
-        fprintf(stderr, "net: cannot reach %s:%d, playing offline\n", host, port);
+        net_say("net: cannot reach %s:%d, playing offline\n", host, port);
         return 0;
     }
-    fprintf(stderr, "net: relay %s:%d, room '%s', delay %d\n", host, port, room_name, delay);
+    net_say("net: relay %s:%d, room '%s', delay %d\n", host, port, room_name, delay);
     configured = 1;
     return 1;
 }
@@ -309,7 +332,7 @@ static void drop(int who, const char *why)
     int stays = in_play && who != 0 && who != seat && s->known && seen && (connected & 1u << who);
 
     if (s->known)
-        fprintf(stderr, "net: player %d %s%s\n", who + 1, why, stays ? " (its character stays)" : "");
+        net_say("net: player %d %s%s\n", who + 1, why, stays ? " (its character stays)" : "");
     if (stays) {
         memcpy(gone_block[who], seen, BLOCK);
         gone_block[who][8] = (uint8_t)who;      /* the message bytes as a sender leaves them between messages */
@@ -515,7 +538,7 @@ static void receive(void)
         if (type == T_WELCOME) {
             if (from < SEATS && seat != from) {
                 seat = from;
-                fprintf(stderr, "net: seat %d of room '%s'\n", seat + 1, room_name);
+                net_say("net: seat %d of room '%s'\n", seat + 1, room_name);
                 start_session();
             }
             continue;
@@ -551,7 +574,7 @@ static void receive(void)
             s->cursor = 0;
             s->has_last = s->repeats = 0;
             s->msg_start = s->msg_acked = out_next;     /* it was not here for what I sent before */
-            fprintf(stderr, "net: player %d connected\n", from + 1);
+            net_say("net: player %d connected\n", from + 1);
         }
         s->heard = ss_plat_ticks_ms();
         if (rd32(packet + 44 + seat * 4) == epoch)
@@ -598,7 +621,7 @@ static void receive(void)
                         o->next++;
                 }
             synced = 1;
-            fprintf(stderr, "net: joined the host at frame %u, delay %d\n", (unsigned)frame_label, delay);
+            net_say("net: joined the host at frame %u, delay %d\n", (unsigned)frame_label, delay);
         }
     }
 }
@@ -690,16 +713,30 @@ void __wrap_sub_0800170C(void)
         configure();
     if (configured != 1)
         return;
+    if (session_open) {
+        /* The game starts its link task again without ever having left the others (it does on some changes of
+         * place). On a cable nothing is seen of that: the same consoles go on. Here too: the same session
+         * continues, and the goodbye that the task's end had prepared is not said. */
+        if (leaving_since)
+            net_say("net: the game's link task started again; the session goes on\n");
+        leaving_since = 0;
+        return;
+    }
     leave();
     start_session();
     send_hello();
+    session_open = 1;
 }
 
 /* The link task ended its session (called from the game through games/<game>/port/patches.json). */
 void ss_net_leave(void)
 {
     last_sendp = NULL;
-    leave();
+    /* Not said to the others yet: if the game starts its link task again in a moment, nobody left. A player
+     * the others are told has left stays for them as a standing character for the rest of the game, so the
+     * goodbye waits two seconds (ss_net_flush says it then; closing the program says it at once). */
+    if (session_open && !leaving_since)
+        leaving_since = ss_plat_ticks_ms() | 1;
 }
 
 /* End of a frame of the game (called from VBlankIntrWait). The game has just written its block for this frame;
@@ -708,6 +745,12 @@ void ss_net_leave(void)
  * and off every message handed over during the frame. The next MultiSioMain call finds its block already sent. */
 void ss_net_flush(void)
 {
+    if (leaving_since && ss_plat_ticks_ms() - leaving_since > 2000) {
+        net_say("net: the game's link task ended; leaving the session\n");
+        leaving_since = 0;
+        session_open = 0;
+        leave();
+    }
     if (configured != 1 || !synced || !last_sendp || flushed_label == frame_label)
         return;
     memcpy(own[frame_label % RING], last_sendp, BLOCK);
@@ -789,6 +832,19 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
     if (seat < 0 || now - last_hello > 2000)
         if (now - last_hello > 250)
             send_hello();
+    {
+        /* If this program itself stood still (its window was being moved, the machine was busy, it was
+         * suspended), the others were not silent: it was not listening. Their clocks start again, or every one
+         * of them would be given up at once and stay a standing character for the rest of the game. */
+        static uint32_t last_poll;
+        if (last_poll && now - last_poll > 1000) {
+            net_say("net: this program stood still for %u ms; nobody is counted as silent for that\n", (unsigned)(now - last_poll));
+            for (i = 0; i < SEATS; i++)
+                if (streams[i].known)
+                    streams[i].heard = now;
+        }
+        last_poll = now;
+    }
     receive();
     if (seat == 0 && !synced)
         start_session();
@@ -847,7 +903,7 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
         }
     }
     if (change_at && frame_label >= change_at) {
-        fprintf(stderr, "net: delay %d -> %d frames\n", delay, new_delay);
+        net_say("net: delay %d -> %d frames\n", delay, new_delay);
         delay = new_delay;
         change_done = change_at;
         change_at = 0;
@@ -895,7 +951,7 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
             send_data();        /* carries the acknowledgements, so the other side repeats what is missing */
         if (!told && now - waited_since > 500) {
             told = 1;
-            fprintf(stderr, "net: waiting for player %d\n", missing + 1);
+            net_say("net: waiting for player %d\n", missing + 1);
             status(missing);
         }
         for (i = 0; i < SEATS; i++)

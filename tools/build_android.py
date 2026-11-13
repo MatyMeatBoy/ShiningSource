@@ -67,8 +67,11 @@ def main():
 
     for abi in args.abi:
         image = ROOT / (IMAGES[abi][0] % (args.game, args.game))
-        if not image.exists():
-            sys.exit("%s is missing: run tools/%s first" % (image.relative_to(ROOT), IMAGES[abi][1]))
+        # The image is always built again here. Taking whatever file was there shipped several packages whose
+        # ARM64 half was hours older than the rest: both halves must be the same game.
+        done = subprocess.run([sys.executable, str(ROOT / "tools" / IMAGES[abi][1]), "--game", args.game])
+        if done.returncode or not image.exists():
+            sys.exit("%s could not be built (tools/%s)" % (image.relative_to(ROOT), IMAGES[abi][1]))
         native = ROOT / "build/android" / ("native-" + abi)
         run([cmake, "-S", ROOT / "android", "-B", native, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=%s" % ninja,
              "-DCMAKE_TOOLCHAIN_FILE=%s/build/cmake/android.toolchain.cmake" % ndk, "-DANDROID_ABI=" + abi,
@@ -103,7 +106,7 @@ android {
  namespace 'com.shiningsource.android'
  compileSdk 35
  ndkVersion '%s'
- defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 6; versionName '0.5' }
+ defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 7; versionName '0.6' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { debug { debuggable true }; release { minifyEnabled false } }
  lint { abortOnError false }

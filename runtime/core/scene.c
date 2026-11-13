@@ -53,6 +53,30 @@ int ss_scene_active(void)
     return 0;
 }
 
+/* The introduction is running (alone or with its captions): the one scene the game itself can end at once. */
+static int intro_running(void)
+{
+    uint32_t task = *(const uint32_t *)(uintptr_t)0x03001240u;
+    int guard;
+    for (guard = 0; task >= SS_EWRAM && task < SS_IWRAM + 0x8000 && guard < 64; guard++) {
+        if (*(const uint32_t *)(uintptr_t)(task + 0x0C) == (uint32_t)(uintptr_t)sub_08086860)
+            return 1;
+        task = *(const uint32_t *)(uintptr_t)task;
+    }
+    return 0;
+}
+
+/* Asked by the game's introduction where it looks at Start (games/ss2/port/patches.json): the cartridge lets
+ * Start end the introduction, but only in a single-player game. While a skip is under way this says "end it
+ * now" in any game, so online the scene is ended by the game's own exit, at normal speed, on every player's
+ * machine, instead of being run through fast (the game counts its waits for the other players in frames, and
+ * run fast they all ran out: communication error). */
+static int requested;
+int ss_skip_request(void)
+{
+    return requested;
+}
+
 static int spanish(void)
 {
     static int known = -1;
@@ -72,6 +96,10 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
     static char line[48];
     uint16_t pressed = (uint16_t)(held & ~previous), game = held;
     int active = ss_scene_active(), online = ss_net_active(), have = 0, need = 0;
+
+    requested = 0;
+    if (online)
+        active = intro_running();       /* online only the introduction is skipped: the game can end it itself */
 
     static int enabled = -1;
     if (enabled < 0)
@@ -158,7 +186,8 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         /* Online the game reads the buttons once every few frames: a press of two frames in four can fall on
          * the same phase every time and look held for ever. A longer, odd rhythm cannot. */
         int same = active != 0;         /* a story is told by scenes of several kinds, one after another: all of it is skipped */
-        game = same && (online ? beat % 10 < 5 : (beat & 3) < 2) ? KEY_A : 0;
+        game = same && !online && (beat & 3) < 2 ? KEY_A : 0;      /* online nothing is pressed: the game ends the scene */
+        requested = 1;
         quiet = same ? 0 : quiet + 1;
         timer++;
         view->darkness = 255;

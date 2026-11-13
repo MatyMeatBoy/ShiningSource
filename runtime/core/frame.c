@@ -79,6 +79,7 @@ static int audio_peak;
 static FILE *audio_file;
 
 static int skip_mute;           /* a skipped scene makes no sound */
+static int skip_fast;           /* a scene is being skipped (tests without a window pace themselves by it) */
 
 void ss_audio_push(const int16_t *samples, int frames)
 {
@@ -330,16 +331,16 @@ void VBlankIntrWait(void)
                 held = ss_plat_present(pixels, width);
             } else if (ss_net_active()) {
                 /* A scene being skipped online. Alone the game runs as fast as the machine allows; with other
-                 * players it may not: the game counts its waits for them in frames, and at a thousand frames a
-                 * second every one of them runs out at once (it then reports a communication error). Twice
-                 * the normal speed is what those waits can take. */
+                 * players it keeps its normal speed: the game counts its waits for them in frames, and run fast
+                 * every one of them runs out at once (it then reports a communication error). Online the scene
+                 * is ended by the game itself instead (core/scene.c). */
                 static uint32_t due;
                 uint32_t now = ss_plat_ticks_ms();
                 if (now - due > 200u)
                     due = now;
                 while ((int32_t)(ss_plat_ticks_ms() - due) < 0)
                     ss_plat_net_wait(1);
-                due += 8;
+                due += 16 + (due % 3 == 0);     /* 60 frames a second */
             }
             if (input_script) {                 /* tests: the script plays the part of the player */
                 scripted_input();
@@ -354,6 +355,7 @@ void VBlankIntrWait(void)
             scripted_input();
         REG_KEYINPUT = (uint16_t)(~ss_skip_update((uint16_t)(~REG_KEYINPUT & 0x03FF), &skip) & 0x03FF);
         skip_mute = skip.mute;
+        skip_fast = skip.mute;
     }
     REG_DISPSTAT &= ~1;
     REG_VCOUNT = 0;

@@ -198,6 +198,11 @@ static const uint8_t obj_sizes[3][4][2] = {
  * the same sprite when they have the same size and priority and are within a few pixels. */
 static uint16_t oam_history[4][128][3];
 static uint8_t flicker_here[128], flicker_gone[128];
+/* The sprite graphics and colours as they were when the last frame was drawn. The game hands out sprite tiles
+ * anew every frame, so a sprite of the last frame that is drawn again in this one (flicker_gone) must take its
+ * picture from then: the tiles it used may hold something else by now. */
+static uint8_t past_tiles[0x8000];
+static uint16_t past_colours[256];
 
 static int obj_box(const uint16_t *e, int *x, int *y)
 {
@@ -217,7 +222,9 @@ static int obj_in(const uint16_t *e, uint16_t (*list)[3])
         return 0;
     for (j = 0; j < 128; j++) {
         const uint16_t *o = list[j];
-        if (((o[0] ^ e[0]) & 0xC000) || ((o[1] ^ e[1]) & 0xC000) || ((o[2] ^ e[2]) & 0x0C00) || !obj_box(o, &x2, &y2))
+        /* same shape, size, priority and palette: two different things the game alternates in one place (a
+         * fallen character and its marker) are two sprites, each of them one that alternates */
+        if (((o[0] ^ e[0]) & 0xC000) || ((o[1] ^ e[1]) & 0xC000) || ((o[2] ^ e[2]) & 0xFC00) || !obj_box(o, &x2, &y2))
             continue;
         if (x2 - x <= 8 && x - x2 <= 8 && y2 - y <= 8 && y - y2 <= 8)
             return 1;
@@ -242,9 +249,12 @@ static void find_flicker(void)
     }
 }
 
-/* One sprite on line y. `ghost`: it is one that alternates, and goes to the half-strength line. */
+/* One sprite on line y. `ghost`: it is one that alternates, and goes to the half-strength line; 2 if it is drawn
+ * from the last frame's graphics. */
 static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghost)
 {
+    const uint8_t *tiles = ghost == 2 ? past_tiles : VRAM + 0x10000;
+    const uint16_t *colours = ghost == 2 ? past_colours : PAL + 0x100;
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
@@ -304,11 +314,11 @@ static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghos
         }
         if (colour256) {
             number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) * 2 : 32) + (tx >> 3) * 2;
-            index = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 8 + (tx & 7)];
+            index = tiles[(number & 0x3FF) * 32 + (ty & 7) * 8 + (tx & 7)];
         } else {
             uint8_t byte;
             number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) : 32) + (tx >> 3);
-            byte = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 4 + ((tx & 7) >> 1)];
+            byte = tiles[(number & 0x3FF) * 32 + (ty & 7) * 4 + ((tx & 7) >> 1)];
             index = (tx & 1) ? byte >> 4 : byte & 15;
             if (index) index += bank * 16;
         }
@@ -320,7 +330,7 @@ static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghos
         }
         if (ghost) {
             if (prio <= line_ghost_prio[sx] || !line_ghost[sx]) {
-                line_ghost[sx] = (uint16_t)(0x100 + index + 1);
+                line_ghost[sx] = (uint16_t)(0x8000 | (colours[index] & 0x7FFF));       /* the colour itself */
                 line_ghost_prio[sx] = (uint8_t)prio;
                 line_ghost_index[sx] = (uint8_t)i;
             }
@@ -342,7 +352,7 @@ static void sprites(int y)
     memset(line_ghost, 0, sizeof line_ghost);
     for (i = 127; i >= 0; i--) {
         if (flicker_gone[i])
-            sprite(y, oam_history[1][i][0], oam_history[1][i][1], oam_history[1][i][2], i, 1);
+            sprite(y, oam_history[1][i][0], oam_history[1][i][1], oam_history[1][i][2], i, 2);
         sprite(y, OAM[i * 4], OAM[i * 4 + 1], OAM[i * 4 + 2], i, flicker_here[i]);
     }
 }
@@ -489,7 +499,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 else
                     front = top == LAYER_BACKDROP || g <= prio[top];
                 if (front) {
-                    uint16_t colour = PAL[line_ghost[X] - 1];
+                    uint16_t colour = line_ghost[X] & 0x7FFF;
                     if ((mask & 0x20) && (bldcnt & 0x10) && ((bldcnt >> 6) & 3) >= 2)
                         colour = fade(colour, evy, ((bldcnt >> 6) & 3) == 2);
                     top_colour = blend(top_colour, colour, 8, 8);
@@ -508,4 +518,6 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     }
     if (per_line)
         memcpy((void *)(uintptr_t)SS_IO, end_of_frame, sizeof end_of_frame);
+    memcpy(past_tiles, VRAM + 0x10000, sizeof past_tiles);
+    memcpy(past_colours, PAL + 0x100, sizeof past_colours);
 }
