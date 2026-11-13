@@ -252,6 +252,13 @@ static void make_textures(void)
     texture_remade = 1;                 /* the frame at hand is uploaded again (ss_plat_present) */
 }
 
+/* For a host that ends the process without running what atexit registered (Android): the statistics, if asked for. */
+void ss_plat_last_words(void)
+{
+    if (stat_interval_us)
+        stats_report();
+}
+
 int ss_plat_video_init(const char *title)
 {
     SDL_AudioSpec spec;
@@ -1949,7 +1956,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     SDL_Event event;
     static int unpaced;                 /* frames in a row the display was to pace and did not */
     static uint64_t ideal_ns;           /* when this game frame was due by the console's clock, however it is paced */
-    static int frameskip = -1, test_slow_ms;
+    static int frameskip = -1, test_slow_ms, after_left_out;
     int waiting, late;
 
     if (!window)
@@ -1979,9 +1986,8 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
             SDL_DelayPrecise(ideal_ns - now);
             now = ideal_ns;
         }
-        if (next_frame_ns < now)
-            next_frame_ns = now;
-        late = now - ideal_ns > 16742706 && !menu_open && !overlay_skipping;
+        after_left_out = 1;             /* the picture that follows is late already: it waits for nothing */
+        late =now - ideal_ns > 16742706 && !menu_open && !overlay_skipping;
         if (menu_open) {
             held = 0;
         } else {
@@ -2056,7 +2062,10 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */
         next_frame_ns += 16742706;
         now = SDL_GetTicksNS();
-        if (display_paced && !overlay_skipping && now + 2500000 >= next_frame_ns) {
+        if (after_left_out) {
+            next_frame_ns = now;                        /* frames went by without a picture to make up time */
+            after_left_out = 0;
+        } else if (display_paced && !overlay_skipping && now + 2500000 >= next_frame_ns) {
             next_frame_ns = now;                        /* the display's refresh already spaced this frame */
             unpaced = 0;
         } else if (next_frame_ns > now) {

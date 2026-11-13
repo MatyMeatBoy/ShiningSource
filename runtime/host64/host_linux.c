@@ -161,7 +161,12 @@ static void b_exit(int code)
 #ifdef __ANDROID__
     /* On Android this is the game's thread, and SDL's other threads are still running: exit() tears down what
      * they hold (a destroyed mutex is then locked and the process aborts on its way out). Everything of ours is
-     * flushed here and the process ends at once. */
+     * flushed here and the process ends at once. What the platform would have said at exit (SS_STATS) is said
+     * first, since nothing registered with atexit runs. */
+    {
+        extern void ss_plat_last_words(void);
+        ss_plat_last_words();
+    }
     fflush(NULL);
     _exit(code == SS_EXIT_RESTART ? 0 : code);
 #endif

@@ -260,3 +260,20 @@ a display that really paces the game at 60 Hz on a slow device (this panel is
 phone. Per-pixel smoothing of blinking that is not a sprite sees only the
 pictures that are drawn, so it can miss while pictures are being left out.
 
+### In the Android emulator (0.7.3)
+
+The emulator (x86_64, software graphics) is itself a machine too slow for every
+picture: a present call takes 12 to 19 ms there. 1,500 frames with a window:
+
+| | game frames a second | pictures shown | sound reserve |
+|---|---|---|---|
+| pictures never left out | 42.0 | all | 1.7 ms on average |
+| 0.7.2 | 58.1 | 1 in 4 (15 a second) | 38 ms |
+| 0.7.3 | 57.9 (59.7 without the 0.8 s the first picture takes) | 4 in 5 (46 a second) | 23 ms, never empty |
+
+0.7.2 had a defect this run found: after a frame without a picture the next
+picture waited for a time that had been pushed into the future, so three of
+four pictures were left out and display pacing was given up for no reason. The
+simulated slowness on Windows could not show it (there the port's own clock
+paces the game). Fixed: the picture after left-out frames waits for nothing.
+
