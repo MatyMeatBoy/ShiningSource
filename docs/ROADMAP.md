@@ -328,9 +328,30 @@ Open:
 - Shelved: prediction with rollback. The game reads its own block locally, so
   delay does not slow the player's own controls (docs/ARCHITECTURE.md, 7).
 
+- [x] 0.3 (2026-11-13): the transport was rebuilt after the first real sessions
+      with three and four players. The game replicates state and passes its
+      one-time events as stop-and-wait messages inside the link blocks, so a
+      shared timeline with a buffered delay made every item, enemy and map
+      change cost many round trips. Now: a direct transport (each player's
+      blocks handed over in order as they arrive, nobody waits, no delay), the
+      game's messages carried whole on an ordered exactly-once channel
+      (`ss_net_msg_*`, patches in the game's sender and receiver tasks), enemy
+      positions corrected every second, and a departed player kept as a
+      standing character instead of ending the session (player 1 leaving still
+      ends it: the game gives player 1 the enemies and items). Rules 4.
+      Measured with 60 ms simulated latency: about 100 ms per message instead
+      of about 650.
+- [ ] After a departure: items, gold and a map change (the barrier patch is
+      untested in a real transition). `SoftReset` closes the program; when the
+      host leaves the others should return to the title instead.
+- [ ] The crash reported on opening a shop in multiplayer (needs the player's
+      `shiningsource_crash.log`).
+
 ## M8. Everything else ReKHCoM ships
 
-Web (wasm32), PS5, PS4, Switch, Vita. No online at first. `reloc` mode for the
+Web (wasm32): builds and runs from the user's ROM file (`tools/build_web.py`,
+2026-11-13; offline, saves not kept between visits yet). PS5, PS4, Switch, Vita:
+not started. No online at first. `reloc` mode for the
 platforms that cannot map low addresses.
 
 ## Shining Soul 1
