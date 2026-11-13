@@ -19,6 +19,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_opengl.h>
@@ -760,6 +761,145 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
 
 #include "qol.h"                    /* the "Quality of life" page: qol_page, qol_environment */
 
+/* ---------------------------------------------------------------- saves */
+
+/* The game keeps its save beside the program (shiningsource.sav, the previous one as .bak; Rebel mode has its
+ * own pair). This page shows them and keeps dated copies in the folder "saves": a copy is made on request, and
+ * putting one back first copies the present save there too, so a restore never loses anything. */
+
+struct SaveFile { std::string name; long long size, when; };
+
+static bool file_facts(const std::string &path, SaveFile &out)
+{
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (!GetFileAttributesExA(path.c_str(), GetFileExInfoStandard, &data) || (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        return false;
+    ULARGE_INTEGER time;
+    time.LowPart = data.ftLastWriteTime.dwLowDateTime;
+    time.HighPart = data.ftLastWriteTime.dwHighDateTime;
+    out.size = ((long long)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+    out.when = (long long)(time.QuadPart / 10000000ULL) - 11644473600LL;
+    return true;
+}
+
+static std::string minute_of(long long when)
+{
+    time_t moment = (time_t)when;
+    struct tm *local = localtime(&moment);
+    char line[40] = "";
+    if (local)
+        strftime(line, sizeof line, "%Y-%m-%d %H:%M", local);
+    return line;
+}
+
+static std::vector<SaveFile> kept_copies()
+{
+    std::vector<SaveFile> list;
+    WIN32_FIND_DATAA found;
+    HANDLE search = FindFirstFileA((folder + "saves\\*.sav").c_str(), &found);
+    if (search == INVALID_HANDLE_VALUE)
+        return list;
+    do {
+        SaveFile entry;
+        entry.name = found.cFileName;
+        if (file_facts(folder + "saves\\" + entry.name, entry))
+            list.push_back(entry);
+    } while (FindNextFileA(search, &found));
+    FindClose(search);
+    for (size_t i = 1; i < list.size(); i++)            /* newest first */
+        for (size_t j = i; j > 0 && list[j].when > list[j - 1].when; j--)
+            std::swap(list[j], list[j - 1]);
+    return list;
+}
+
+/* Copy `source` (a file beside the program) into saves\ under a dated name. Returns the name, or "" on failure. */
+static std::string keep_copy(const char *source, const char *label)
+{
+    SYSTEMTIME now;
+    char name[96];
+    GetLocalTime(&now);
+    CreateDirectoryA((folder + "saves").c_str(), nullptr);
+    snprintf(name, sizeof name, "%s-%04d%02d%02d-%02d%02d%02d.sav", label, now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond);
+    return CopyFileA((folder + source).c_str(), (folder + "saves\\" + name).c_str(), TRUE) ? name : "";
+}
+
+static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green)
+{
+    static std::string answer, ask_restore;
+    static bool answer_good;
+    static const struct { const char *file, *label, *english, *spanish; } kinds[] = {
+        { "shiningsource.sav", "normal", "Your save", "Tu partida" },
+        { "shiningsource_rebel.sav", "rebel", "Rebel mode save", "Partida del modo rebelde" },
+    };
+
+    ImGui::TextColored(gold, "%s", text("Saves", "Partidas"));
+    ImGui::TextWrapped("%s", text("The game saves beside the program, as the cartridge did in its memory, and keeps the save before the last one as a backup. Here you can keep dated copies and put one back.",
+                                  "El juego guarda junto al programa, como el cartucho en su memoria, y conserva la partida anterior a la \xC3\xBAltima como respaldo. Aqu\xC3\xAD puedes guardar copias con fecha y recuperar una."));
+    ImGui::Spacing();
+    for (const auto &kind : kinds) {
+        SaveFile now, before;
+        bool have = file_facts(folder + kind.file, now), have_before = file_facts(folder + kind.file + ".bak", before);
+        ImGui::PushID(kind.file);
+        ImGui::TextColored(gold, "%s", text(kind.english, kind.spanish));
+        if (have)
+            ImGui::Text("%s    %s", kind.file, minute_of(now.when).c_str());
+        else
+            ImGui::TextColored(dim, "%s", text("None yet.", "A\xC3\xBAn no hay."));
+        if (have_before)
+            ImGui::TextColored(dim, text("Backup of the one before: %s", "Respaldo de la anterior: %s"), minute_of(before.when).c_str());
+        ImGui::BeginDisabled(!have);
+        if (ImGui::Button(text("Keep a copy now", "Guardar una copia ahora"))) {
+            std::string name = keep_copy(kind.file, kind.label);
+            answer_good = !name.empty();
+            answer = answer_good ? std::string(text("Copy kept: ", "Copia guardada: ")) + name : text("The copy could not be written.", "No se pudo escribir la copia.");
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+    if (ImGui::Button(text("Open the folder", "Abrir la carpeta")))
+        ShellExecuteA(nullptr, "open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (!answer.empty())
+        ImGui::TextColored(answer_good ? green : red, "%s", answer.c_str());
+
+    ImGui::Separator();
+    ImGui::TextColored(gold, "%s", text("Copies kept", "Copias guardadas"));
+    std::vector<SaveFile> copies = kept_copies();
+    if (copies.empty())
+        ImGui::TextColored(dim, "%s", text("None. They are kept in the folder \"saves\" beside the program.", "Ninguna. Se guardan en la carpeta \"saves\" junto al programa."));
+    for (const SaveFile &copy : copies) {
+        bool rebel = copy.name.compare(0, 5, "rebel") == 0;
+        ImGui::PushID(copy.name.c_str());
+        if (ImGui::SmallButton(text("Put back", "Recuperar")))
+            ask_restore = copy.name;
+        ImGui::SameLine();
+        ImGui::Text("%s", minute_of(copy.when).c_str());
+        ImGui::SameLine();
+        ImGui::TextColored(dim, "%s  (%s)", copy.name.c_str(), rebel ? text("Rebel mode", "modo rebelde") : "normal");
+        ImGui::PopID();
+    }
+    if (!ask_restore.empty()) {
+        bool rebel = ask_restore.compare(0, 5, "rebel") == 0;
+        const auto &kind = kinds[rebel];
+        ImGui::Separator();
+        ImGui::TextWrapped(text("Put %s back as %s? The present save is first kept as a copy here. Close the game before doing this.",
+                                "\xC2\xBFRecuperar %s como %s? La partida actual se guarda antes como copia aqu\xC3\xAD. Cierra el juego antes de hacerlo."),
+                           ask_restore.c_str(), text(kind.english, kind.spanish));
+        if (ImGui::Button(text("Yes, put it back", "S\xC3\xAD, recuperar"))) {
+            SaveFile present;
+            bool safe = !file_facts(folder + kind.file, present) || !keep_copy(kind.file, rebel ? "rebel-before-restore" : "normal-before-restore").empty();
+            answer_good = safe && CopyFileA((folder + "saves\\" + ask_restore).c_str(), (folder + kind.file).c_str(), FALSE);
+            answer = answer_good ? std::string(text("Put back: ", "Recuperada: ")) + ask_restore
+                   : safe ? text("The save could not be replaced (is the game running?).", "No se pudo reemplazar la partida (\xC2\xBF" "est\xC3\xA1 el juego abierto?).")
+                          : text("The present save could not be copied first; nothing was changed.", "No se pudo copiar antes la partida actual; no se cambi\xC3\xB3 nada.");
+            ask_restore.clear();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("No"))
+            ask_restore.clear();
+    }
+}
+
 static std::string launch_error;
 
 static bool launched;            /* the game was started: the launcher's work is done and it closes */
@@ -919,9 +1059,9 @@ static void interface_frame(bool &running)
     }
     ImGui::Spacing();
     ImGui::TextColored(dim, "%s", text("PAGES", "SECCIONES"));
-    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "Quality of life", "About" };
-    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Calidad de vida", "Acerca de" };
-    for (int i = 0; i < 8; i++)
+    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "Quality of life", "Saves", "About" };
+    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Calidad de vida", "Partidas", "Acerca de" };
+    for (int i = 0; i < 9; i++)
         if (ImGui::Selectable(language ? pages_es[i] : pages_en[i], page == i))
             page = i;
     ImGui::EndChild();
@@ -1233,11 +1373,13 @@ static void interface_frame(bool &running)
         achievements_page(game, gold, dim, red, green);
     } else if (page == 6) {
         qol_page(gold, dim);
+    } else if (page == 7) {
+        saves_page(gold, dim, red, green);
     } else {
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.7.4", "Versión 0.7.3"));
+        ImGui::TextColored(gold, "%s", text("Version 0.7.4", "Versi\xC3\xB3n 0.7.4"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
     }
     ImGui::EndChild();
