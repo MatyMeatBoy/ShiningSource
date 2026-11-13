@@ -243,7 +243,9 @@ Open:
       SHA-1 verification, picture width, full screen, volume, controller list,
       English and Spanish. Settings live in `shiningsource.ini` and reach the
       game as environment variables.
-- [ ] Launcher: controller remapping, save-file management,
+- [x] Controls: every console button can be given another key and another
+      controller button in the launcher's Controls page (`SS_KEYS`, `SS_PAD`).
+- [ ] Launcher: save-file management,
       Linux and Android versions of the launcher.
 - [ ] Achievements. rcheevos needs a client (login, HTTP, the game's memory
       exposed in RetroAchievements' GBA layout) and a decision the owner has to

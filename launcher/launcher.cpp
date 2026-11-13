@@ -199,6 +199,60 @@ static void measure_ping(const std::string &server)
     freeaddrinfo(found);
 }
 
+/* ---- controls: which key and which controller button is each of the console's buttons ---- */
+
+static const char *const BUTTON_NAMES[10] = { "A", "B", "Select", "Start", "Right", "Left", "Up", "Down", "R", "L" };
+static const char *const BUTTON_NAMES_ES[10] = { "A", "B", "Select", "Start", "Derecha", "Izquierda", "Arriba", "Abajo", "R", "L" };
+static const int DEFAULT_KEYS[10] = { SDL_SCANCODE_X, SDL_SCANCODE_Z, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT,
+                                      SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_V, SDL_SCANCODE_C };
+static const int DEFAULT_PAD[10] = { SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
+                                     SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP,
+                                     SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER };
+static int capture_key = -1, capture_pad = -1;      /* the entry waiting for a press, or -1 */
+
+static void bindings(const char *name, const int *defaults, int *out)
+{
+    std::string text = setting(name);
+    const char *at = text.c_str();
+    for (int i = 0; i < 10; i++) {
+        char *end;
+        long value = strtol(at, &end, 10);
+        out[i] = end != at && value > 0 ? (int)value : defaults[i];
+        at = *end == ',' ? end + 1 : end;
+    }
+}
+
+static void store_bindings(const char *name, const int *values)
+{
+    std::string text;
+    for (int i = 0; i < 10; i++)
+        text += (i ? "," : "") + std::to_string(values[i]);
+    settings[name] = text;
+    save_settings();
+}
+
+/* Called for every event while the Controls page waits for a press. */
+static void capture_event(const SDL_Event &event)
+{
+    int values[10];
+    if (capture_key >= 0 && event.type == SDL_EVENT_KEY_DOWN) {
+        if (event.key.scancode != SDL_SCANCODE_ESCAPE) {        /* Esc cancels, and always quits the game */
+            bindings("keys", DEFAULT_KEYS, values);
+            values[capture_key] = (int)event.key.scancode;
+            store_bindings("keys", values);
+        }
+        capture_key = -1;
+    }
+    if (capture_pad >= 0 && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        bindings("pad", DEFAULT_PAD, values);
+        values[capture_pad] = (int)event.gbutton.button;
+        store_bindings("pad", values);
+        capture_pad = -1;
+    }
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED)
+        SDL_OpenGamepad(event.gdevice.which);       /* an open controller is what sends button events */
+}
+
 /* ---- start the game ---- */
 
 static std::string launch_error;
@@ -214,6 +268,8 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_VIEW", view == "auto" ? nullptr : view.c_str());
     SetEnvironmentVariableA("SS_FULLSCREEN", setting("fullscreen", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
+    SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
+    SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
     bool online = setting("online", "0") == "1";
     SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
@@ -253,6 +309,10 @@ static void style()
 static void interface_frame(bool &running)
 {
     static int selected = 0, page = 0;
+    static bool first = true;
+    if (first && getenv("SS_LAUNCHER_PAGE"))      /* tests: open on a given page */
+        page = atoi(getenv("SS_LAUNCHER_PAGE"));
+    first = false;
     const Game &game = games[selected];
     const ImVec4 gold(0.84f, 0.66f, 0.29f, 1), red(0.95f, 0.45f, 0.40f, 1), green(0.45f, 0.85f, 0.50f, 1), dim(0.6f, 0.65f, 0.75f, 1);
 
@@ -348,19 +408,55 @@ static void interface_frame(bool &running)
             save_settings();
         }
     } else if (page == 3) {
-        int count = 0;
+        int count = 0, keys[10], pad[10];
         SDL_JoystickID *pads = SDL_GetGamepads(&count);
+        bindings("keys", DEFAULT_KEYS, keys);
+        bindings("pad", DEFAULT_PAD, pad);
         ImGui::TextColored(gold, "%s", text("Controls", "Controles"));
-        ImGui::TextUnformatted(text("Keyboard: arrows, X = A, Z = B, C = L, V = R, Enter = Start, right Shift = Select, F11 full screen, Esc quit.",
-                                    "Teclado: flechas, X = A, Z = B, C = L, V = R, Enter = Start, Shift derecho = Select, F11 pantalla completa, Esc salir."));
+        ImGui::TextWrapped("%s", text("Click a box and press the key or the controller button you want for it. Esc cancels. F11 is full screen and Esc quits the game.",
+                                      "Haz clic en una casilla y pulsa la tecla o el bot\xC3\xB3n del mando que quieras para ella. Esc cancela. F11 es pantalla completa y Esc sale del juego."));
+        if (ImGui::BeginTable("bindings", 3, ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupColumn(text("Button", "Bot\xC3\xB3n"), 0, 110);
+            ImGui::TableSetupColumn(text("Keyboard", "Teclado"), 0, 190);
+            ImGui::TableSetupColumn(text("Controller", "Mando"), 0, 190);
+            ImGui::TableHeadersRow();
+            for (int i = 0; i < 10; i++) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(language ? BUTTON_NAMES_ES[i] : BUTTON_NAMES[i]);
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                const char *key_name = SDL_GetScancodeName((SDL_Scancode)keys[i]);
+                std::string label = capture_key == i ? text("press a key...", "pulsa una tecla...") : (key_name && *key_name ? key_name : "?");
+                if (ImGui::Button((label + "##key").c_str(), ImVec2(180, 0))) {
+                    capture_key = i;
+                    capture_pad = -1;
+                }
+                ImGui::TableNextColumn();
+                const char *pad_name = SDL_GetGamepadStringForButton((SDL_GamepadButton)pad[i]);
+                label = capture_pad == i ? text("press a button...", "pulsa un bot\xC3\xB3n...") : (pad_name ? pad_name : "?");
+                ImGui::BeginDisabled(count == 0);
+                if (ImGui::Button((label + "##pad").c_str(), ImVec2(180, 0))) {
+                    capture_pad = i;
+                    capture_key = -1;
+                }
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            ImGui::EndTable();
+        }
+        if (ImGui::Button(text("Restore defaults", "Restaurar valores"))) {
+            settings.erase("keys");
+            settings.erase("pad");
+            save_settings();
+            capture_key = capture_pad = -1;
+        }
         ImGui::Spacing();
         if (count == 0)
-            ImGui::TextColored(dim, "%s", text("No controller detected.", "No se detecta ning\xC3\xBAn mando."));
+            ImGui::TextColored(dim, "%s", text("No controller detected. The left stick always works as the d-pad.",
+                                               "No se detecta ning\xC3\xBAn mando. El stick izquierdo siempre funciona como cruceta."));
         for (int i = 0; i < count; i++)
             ImGui::BulletText("%s", SDL_GetGamepadNameForID(pads[i]));
-        if (count)
-            ImGui::TextUnformatted(text("Controller: d-pad or left stick, A and B as on the console, shoulders = L and R, Start, Back = Select.",
-                                        "Mando: cruceta o stick izquierdo, A y B como en la consola, gatillos = L y R, Start, Back = Select."));
         SDL_free(pads);
     } else if (page == 4) {
         bool online = setting("online", "0") == "1";
@@ -454,6 +550,7 @@ int main(int, char **)
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
+            capture_event(event);
             if (event.type == SDL_EVENT_QUIT)
                 running = false;
         }

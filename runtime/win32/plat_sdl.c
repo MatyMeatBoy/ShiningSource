@@ -73,10 +73,33 @@ static void stats_report(void)
 }
 
 /* GBA buttons, bit order of KEYINPUT: A B Select Start Right Left Up Down R L */
-static const SDL_Scancode keys[10] = {
+static SDL_Scancode keys[10] = {
     SDL_SCANCODE_X, SDL_SCANCODE_Z, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT,
     SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_V, SDL_SCANCODE_C,
 };
+/* controller buttons in the same order; the east button is A as on the console's layout */
+static SDL_GamepadButton pad_buttons[10] = {
+    SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
+    SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
+    SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
+};
+
+/* SS_KEYS and SS_PAD: ten numbers separated by commas (SDL scancodes, SDL controller buttons) in the order
+ * above. The launcher writes them; a number out of range or a short list keeps the default of that entry. */
+static void read_bindings(const char *name, int *out, int limit)
+{
+    const char *text = getenv(name);
+    int i;
+    for (i = 0; text && *text && i < 10; i++) {
+        char *end;
+        long value = strtol(text, &end, 10);
+        if (end == text)
+            break;
+        if (value > 0 && value < limit)
+            out[i] = (int)value;
+        text = *end == ',' ? end + 1 : end;
+    }
+}
 
 int ss_plat_video_init(const char *title)
 {
@@ -85,6 +108,8 @@ int ss_plat_video_init(const char *title)
 #ifdef __ANDROID__
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");     /* otherwise a resizable window follows the user */
 #endif
+    read_bindings("SS_KEYS", (int *)keys, SDL_SCANCODE_COUNT);
+    read_bindings("SS_PAD", (int *)pad_buttons, SDL_GAMEPAD_BUTTON_COUNT);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -282,15 +307,10 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         if (state[keys[i]])
             held |= (uint16_t)(1 << i);
     if (gamepad) {
-        /* same bit order as `keys`; the east button is A as on the console's layout, the stick acts as the d-pad */
-        static const SDL_GamepadButton buttons[10] = {
-            SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
-            SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
-            SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
-        };
+        /* the stick acts as the d-pad */
         int x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
         for (i = 0; i < 10; i++)
-            if (SDL_GetGamepadButton(gamepad, buttons[i]))
+            if (SDL_GetGamepadButton(gamepad, pad_buttons[i]))
                 held |= (uint16_t)(1 << i);
         if (x > 12000) held |= 1 << 4;
         if (x < -12000) held |= 1 << 5;
