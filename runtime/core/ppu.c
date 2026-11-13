@@ -16,6 +16,7 @@
  */
 #include "shiningsource/runtime.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #define IO16(o)  (*(const uint16_t *)(uintptr_t)(SS_IO + (o)))
@@ -28,14 +29,8 @@
 enum { HUD_BAND = 56, HUD_SPLIT = 176, EDGE_FADE = 32 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
-/* per scanline, per layer: palette index + 1 (0 = transparent); sprites also carry priority and flags */
+/* per scanline, per background: palette index + 1 (0 = transparent); the sprites have their own lines further down */
 static uint16_t line_bg[4][MAXW];
-static uint16_t line_obj[MAXW];
-static uint8_t line_obj_prio[MAXW], line_obj_flags[MAXW];   /* flags: 1 semi-transparent, 2 sprite-window pixel */
-static uint8_t line_obj_index[MAXW];
-/* sprites the game shows every other frame (see flicker below): drawn apart, mixed half and half at the end */
-static uint16_t line_ghost[MAXW];
-static uint8_t line_ghost_prio[MAXW], line_ghost_index[MAXW];
 
 static struct ss_view view;
 static int page_shown;          /* a full-screen page over the field, in a wide view */
@@ -183,28 +178,83 @@ static const uint8_t obj_sizes[3][4][2] = {
     { { 8, 16 }, { 8, 32 }, { 16, 32 }, { 32, 64 } },
 };
 
-/* ---- flicker ----
+/* ---- sprites that alternate ----
  * The cartridge has one real transparency effect and many things to make transparent, so for shadows, ghosts,
- * the arrow that points to a companion and a character that has just been hurt it shows the sprite one frame
- * and hides it the next. On the console's slow screen that reads as half transparent; on a modern display it
- * is a hard blink, and when frames are not presented evenly (online, or a display that is not at 60 Hz) the
- * sprite can stay solid or vanish for a moment. So a sprite that alternates is recognised and drawn in every
- * frame at half strength instead, which is what the eye saw.
+ * the arrow that points to a companion, the labels over companions and a character that has just been hurt it
+ * shows the sprite one frame and hides it the next (some effects: two frames shown, two hidden), or shows two
+ * things in one place in turns. On the console's slow screen that reads as half transparent; on a modern
+ * display it is a hard blink, and when frames are not presented evenly (online, or a display that is not at
+ * 60 Hz) the sprite can stay solid or vanish for a moment.
  *
- * Recognised from the last four frames of the sprite table: a sprite is one that alternates if it is here now,
- * was not in the frame before and was in the one before that; and one that is not here now is still shown
- * if it was in the last frame, in neither neighbour of that frame, and in the frame before those. A sprite that
- * simply appears, disappears or changes shape for an animation does not fit either pattern. Two entries are
- * the same sprite when they have the same size and priority and are within a few pixels. */
-static uint16_t oam_history[4][128][3];
-static uint8_t flicker_here[128], flicker_gone[128];
-/* The sprite graphics and colours as they were when the last frame was drawn. The game hands out sprite tiles
- * anew every frame, so a sprite of the last frame that is drawn again in this one (flicker_gone) must take its
- * picture from then: the tiles it used may hold something else by now. */
-static uint8_t past_tiles[0x8000];
-static uint16_t past_colours[256];
+ * What the slow screen showed is the average of two pictures: this frame, and the frame that goes with it, in
+ * which the things that alternate have changed places: those shown now are hidden, those hidden now are shown.
+ * So that is what is drawn. Where something alternates, the pixel is composed twice, once with the sprites of
+ * this frame and once with the sprites of the other frame, each time in full (priorities, windows, blending,
+ * fades), and the two results are averaged. A sprite that alternates with nothing comes out at half strength
+ * over whatever is behind it; two that take turns come out as half of each; one hidden behind a solid sprite
+ * stays hidden. Everything else is the same in both pictures and is composed once, as the console draws it.
+ *
+ * Which sprites alternate is read from the sprite table of the last frames. The game builds that table anew
+ * every frame, and hands out the sprite tiles anew too, so neither the entry number nor the tile number says
+ * which sprite is which. A sprite is known by what it looks like (its tiles' contents, with its shape, size,
+ * palette and priority) and by where it is: each one seen is followed from frame to frame (`tracks`), across
+ * the camera's movement and its own, and a record is kept of the frames it was in. One that is here now,
+ * after a gap of one or two frames, having been here before the gap for no longer than the gap, alternates;
+ * so does one that is missing now for no longer than its last gap, with turns as short before it. A sprite
+ * that simply appears, disappears, blinks slowly, drops out for a frame or changes its picture for an
+ * animation never shows that pattern and is drawn as it is. The pattern needs two turns to show: a sprite that
+ * starts to alternate blinks once (one that was there all along: twice) before it is steady.
+ *
+ * A sprite that is in the other frame only is drawn from the frame it was last seen in: its entry, its tiles
+ * and its colours as they were then (the tiles may hold something else by now), placed where it would be now:
+ * moved on by the camera and by its own speed. When the game stops alternating a sprite, the copy is drawn
+ * for the one frame in which that cannot be known yet (two frames, for two shown and two hidden).
+ * SS_FLICKER=0 turns all of this off: every frame is drawn as the console draws it. */
+enum { TRACKS = 192, KEPT = 3, COPIES = 64, REACH = 4 /* pixels a frame a sprite may move and still be followed */ };
 
-static int obj_box(const uint16_t *e, int *x, int *y)
+struct obj_line {
+    uint16_t colour[MAXW];      /* 0x101 + palette index, or 0x8000 + the colour itself (a copy from a past frame); 0: nothing */
+    uint8_t prio[MAXW];
+    uint8_t flags[MAXW];        /* 1 semi-transparent, 2 sprite-window pixel, 4 the sprite is not where it last was */
+};
+static struct obj_line obj_now, obj_other;      /* the sprites of this frame, and of the frame that goes with it */
+
+struct track {
+    uint32_t content;           /* what it looks like: a sum over its tiles */
+    uint32_t born, last, before;    /* frame it was first seen in, last seen in, and seen in before that */
+    uint16_t kind;              /* shape, size, colour mode, priority, palette */
+    int16_t x, y;               /* where on the screen it was when last seen */
+    int16_t camera_x, camera_y; /* where the camera was then */
+    int16_t move_x, move_y;     /* how far it moved between its last two sightings (in the world) ... */
+    uint8_t steps;              /* ... which were this many frames apart (0: seen once) */
+    uint8_t fixed;              /* it keeps its place on the screen while the camera moves (the status display) */
+    uint16_t seen;              /* bit 0: it is in this frame, bit 1: in the one before, ...; 0: record not in use */
+    uint8_t entry, kept;        /* its sprite table entry when last seen, and which kept frame that is */
+};
+static struct track tracks[TRACKS];
+/* the sprite table, sprite tiles and sprite colours of the last frames, to draw from */
+static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; } kept[KEPT];
+static uint32_t frame_drawn;
+static int frame_known, frame_is_new;
+static int camera_x, camera_y;
+
+static uint8_t only_now[128];       /* this entry alternates: it belongs to this frame's picture only */
+static uint8_t obj_moved[128];      /* this entry is not where it was last seen (or was never seen) */
+static struct { uint16_t entry[3]; uint8_t index, kept, moved; } copies[COPIES];   /* sprites of the other frame's picture only */
+static int copy_count;
+static uint8_t two_pictures[H];     /* lines on which something alternates */
+
+/* Per pixel of the last picture: 1 where what is shown has not moved since the frame before (a background
+ * that did not scroll, a sprite that stayed in its place). The smoothing of blinking in frame.c works only
+ * there: anything that moves must stay sharp. Row y starts at y * the picture's width. */
+static uint8_t still[MAXW * H];
+
+const uint8_t *ss_ppu_still(void)
+{
+    return still;
+}
+
+static int obj_box(const uint16_t *e, int *x, int *y, int *w, int *h)
 {
     if ((!(e[0] & 0x100) && (e[0] & 0x200)) || (e[0] >> 14) == 3)
         return 0;
@@ -212,78 +262,341 @@ static int obj_box(const uint16_t *e, int *x, int *y)
     if (*y >= 160) *y -= 256;
     *x = e[1] & 511;
     if (*x >= 384) *x -= 512;
+    *w = obj_sizes[e[0] >> 14][e[1] >> 14][0];
+    *h = obj_sizes[e[0] >> 14][e[1] >> 14][1];
     return *y > -64;
 }
 
-/* Where the camera was in each of those frames (the scroll of the field's map), so that a sprite of the world is
- * still recognised while the view moves: on the screen it shifts by what the camera moved. Sprites that do not
- * belong to the world (the status display) stay put, so both places are tried. */
-static int camera_history[4][2];
-/* how far a sprite of the last frame that is drawn again has moved on by now, in pixels (see find_flicker) */
-static int8_t gone_dx[128], gone_dy[128];
-
-static int obj_in(const uint16_t *e, int from, int in)
+/* What a sprite looks like, whatever tiles it was given this frame: a sum over the contents of its tiles.
+ * 0 if it is empty. */
+static uint32_t obj_content(const uint16_t *e, int w, int h)
 {
-    uint16_t (*list)[3] = oam_history[in];
-    int dx = camera_history[from][0] - camera_history[in][0], dy = camera_history[from][1] - camera_history[in][1];
-    int x, y, x2, y2, j;
-    if (!obj_box(e, &x, &y))
-        return 0;
-    for (j = 0; j < 128; j++) {
-        const uint16_t *o = list[j];
-        /* same shape, size, priority and palette: two different things the game alternates in one place (a
-         * fallen character and its marker) are two sprites, each of them one that alternates */
-        if (((o[0] ^ e[0]) & 0xC000) || ((o[1] ^ e[1]) & 0xC000) || ((o[2] ^ e[2]) & 0xFC00) || !obj_box(o, &x2, &y2))
-            continue;
-        if (x2 - x <= 8 && x - x2 <= 8 && y2 - y <= 8 && y - y2 <= 8)
-            return j + 1;
-        if (x2 - x - dx <= 8 && x + dx - x2 <= 8 && y2 - y - dy <= 8 && y + dy - y2 <= 8)
-            return j + 1;
-    }
-    return 0;
-}
-
-static void find_flicker(void)
-{
-    int i, x, y;
-    memmove(oam_history[1], oam_history[0], sizeof oam_history[0] * 3);
-    memmove(camera_history[1], camera_history[0], sizeof camera_history[0] * 3);
-    camera_history[0][0] = camera_history[0][1] = 0;
-    for (i = 0; i < 4; i++)
-        if (view.world && view.bg[i].map) {
-            camera_history[0][0] = view.bg[i].scroll_x;
-            camera_history[0][1] = view.bg[i].scroll_y;
-            break;
-        }
-    for (i = 0; i < 128; i++) {
-        oam_history[0][i][0] = OAM[i * 4];
-        oam_history[0][i][1] = OAM[i * 4 + 1];
-        oam_history[0][i][2] = OAM[i * 4 + 2];
-    }
-    for (i = 0; i < 128; i++) {
-        const uint16_t *now = oam_history[0][i], *last = oam_history[1][i];
-        flicker_here[i] = obj_box(now, &x, &y) && !obj_in(now, 0, 1) && obj_in(now, 0, 2);
-        flicker_gone[i] = 0;
-        if (obj_box(last, &x, &y) && !obj_in(last, 1, 0) && !obj_in(last, 1, 2)) {
-            int before = obj_in(last, 1, 3), x3, y3;
-            if (before && obj_box(oam_history[3][before - 1], &x3, &y3)) {
-                /* It was here two frames before the last one too, so it moves (with its character, with the
-                 * camera) by half of that difference a frame, and that is where its copy belongs now. Drawn
-                 * where it was, the copy of anything that moves trails a step behind: a blur. */
-                flicker_gone[i] = 1;
-                gone_dx[i] = (int8_t)((x - x3) / 2);
-                gone_dy[i] = (int8_t)((y - y3) / 2);
+    const uint8_t *tiles = VRAM + 0x10000;
+    int slots = (e[0] & 0x2000) ? 2 : 1, per_row = (w >> 3) * slots, rows = h >> 3;
+    int step = (IO16(0) & 0x40) ? per_row : 32, r, t, k;
+    uint32_t sum = 0x9E3779B1u, any = 0;
+    for (r = 0; r < rows; r++) {
+        for (t = 0; t < per_row; t++) {
+            const uint32_t *words = (const uint32_t *)(tiles + (((e[2] & 0x3FF) + r * step + t) & 0x3FF) * 32);
+            for (k = 0; k < 8; k++) {
+                any |= words[k];
+                sum = (sum ^ words[k]) * 0x01000193u;
+                sum ^= sum >> 15;
             }
         }
     }
+    return any ? (sum | 1) : 0;
 }
 
-/* One sprite on line y. `ghost`: it is one that alternates, and goes to the half-strength line; 2 if it is drawn
- * from the last frame's graphics. */
-static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghost)
+static int apart(int dx, int dy)
 {
-    const uint8_t *tiles = ghost == 2 ? past_tiles : VRAM + 0x10000;
-    const uint16_t *colours = ghost == 2 ? past_colours : PAL + 0x100;
+    if (dx < 0) dx = -dx;
+    if (dy < 0) dy = -dy;
+    return dx > dy ? dx : dy;
+}
+
+/* n / d rounded to the nearest whole number; a half goes towards zero: where a sprite's step cannot be told
+ * to the pixel, it is taken to have moved the smaller amount */
+static int nearest(int n, int d)
+{
+    return n >= 0 ? (2 * n + d - 1) / (2 * d) : -((-2 * n + d - 1) / (2 * d));
+}
+
+/* Where a sprite last seen `frames` ago would be now: carried along by the camera unless it belongs to the
+ * screen, and moved on at its own speed. */
+static void track_place(const struct track *t, int frames, int *x, int *y)
+{
+    *x = t->x;
+    *y = t->y;
+    if (t->fixed)
+        return;
+    *x -= camera_x - t->camera_x;
+    *y -= camera_y - t->camera_y;
+    if (t->steps) {
+        *x += nearest(t->move_x * frames, t->steps);
+        *y += nearest(t->move_y * frames, t->steps);
+    }
+}
+
+/* The record of the frames a sprite was in, read as runs: `seen` starts with a run of frames it was in (or
+ * was not in), then a run of the opposite, and so on. */
+static int run(unsigned seen, int *from, int value)
+{
+    int length = 0;
+    while (*from < 16 && (int)((seen >> *from) & 1) == value) {
+        (*from)++;
+        length++;
+    }
+    return length;
+}
+
+/* Here now, after a gap of one or two frames, and before the gap it was here for no longer than the gap; and
+ * it has not been here since for longer than the gap either (then it has come to stay). */
+static int alternates_here(unsigned seen)
+{
+    int from = 0, here = run(seen, &from, 1), gap = run(seen, &from, 0), earlier = run(seen, &from, 1);
+    return here >= 1 && gap >= 1 && gap <= 2 && here <= gap && earlier >= 1 && earlier <= gap;
+}
+
+/* Not here now, but it alternates and this is its turn to be hidden: it was here until one or two frames ago,
+ * for no longer than the gap before that, it has not been missing for longer than that gap, and before that gap
+ * it was not here for longer either. (A sprite that was simply there, went away for a moment, came back and
+ * left again is not one that alternates.) */
+static int alternates_away(unsigned seen)
+{
+    int from = 0, away = run(seen, &from, 0), here = run(seen, &from, 1), gap = run(seen, &from, 0), earlier = run(seen, &from, 1);
+    return away >= 1 && here >= 1 && gap >= 1 && gap <= 2 && away <= gap && here <= gap && earlier >= 1 && earlier <= gap;
+}
+
+struct seen_obj { uint32_t content; uint16_t kind; int16_t x, y; int16_t track; };
+
+/* The record that fits a sprite best, or -1: one that looks the same (`same`), or else one of the same kind
+ * with another picture that was not in the last frame (the sprite went on to its next animation picture while
+ * it was hidden: a hurt character keeps walking). It must be within reach of where the record was last seen;
+ * the nearest to where the record would be by now wins. */
+static int best_track(const struct seen_obj *s, int same, int *score)
+{
+    int best = -1, best_score = 0, best_age = 0, n;
+    for (n = 0; n < TRACKS; n++) {
+        const struct track *t = &tracks[n];
+        int age, reach, x, y, d;
+        if (!t->seen || (t->seen & 1) || t->kind != s->kind || (t->content == s->content) != same)
+            continue;
+        if (!same && (t->seen & 2))
+            continue;                   /* (in the last frame: then this is its next picture, or another sprite) */
+        age = (int)(frame_drawn - t->last);
+        reach = REACH * age + 1;
+        /* within reach of where it was: on the screen, or in the world */
+        if (apart(s->x - t->x, s->y - t->y) > reach
+            && apart(s->x - t->x + (camera_x - t->camera_x), s->y - t->y + (camera_y - t->camera_y)) > reach)
+            continue;
+        track_place(t, age, &x, &y);
+        d = apart(s->x - x, s->y - y);
+        if (best < 0 || d < best_score || (d == best_score && age < best_age)) {
+            best = n;
+            best_score = d;
+            best_age = age;
+        }
+    }
+    *score = best_score > 31 ? 31 : best_score;
+    return best;
+}
+
+static void track_seen(struct track *t, struct seen_obj *s, int entry)
+{
+    int age = (int)(frame_drawn - t->last);
+    int dx = s->x - t->x, dy = s->y - t->y;
+    int cx = camera_x - t->camera_x, cy = camera_y - t->camera_y;
+    if (dx || dy) {
+        t->fixed = 0;
+        t->move_x = (int16_t)(dx + cx);
+        t->move_y = (int16_t)(dy + cy);
+    } else {
+        if (cx || cy)
+            t->fixed = 1;               /* the camera moved and it did not: it belongs to the screen */
+        t->move_x = t->move_y = 0;
+    }
+    t->steps = (uint8_t)age;
+    t->x = s->x; t->y = s->y;
+    t->camera_x = (int16_t)camera_x; t->camera_y = (int16_t)camera_y;
+    t->before = t->last;
+    t->last = frame_drawn;
+    t->content = s->content;
+    t->entry = (uint8_t)entry;
+    t->kept = (uint8_t)(frame_drawn % KEPT);
+    t->seen |= 1;
+    s->track = (int16_t)(t - tracks);
+    obj_moved[entry] = (uint8_t)(dx || dy);
+}
+
+static void mark_lines(const uint16_t *e)
+{
+    int x, y, w, h;
+    if (!obj_box(e, &x, &y, &w, &h))
+        return;
+    if ((e[0] & 0x300) == 0x300)
+        h *= 2;
+    for (h += y; y < h; y++)
+        if (y >= 0 && y < H)
+            two_pictures[y] = 1;
+}
+
+static void find_alternating(void)
+{
+    static struct seen_obj seen[128];
+    static uint8_t due_entry[TRACKS], due_kept[TRACKS];
+    static uint16_t due[TRACKS];
+    static int16_t due_x[TRACKS], due_y[TRACKS];
+    static int enabled = -1;
+    uint8_t order[32][128], counts[32];
+    uint32_t frame = (uint32_t)ss_frame_number();
+    int i, n, score;
+
+    if (enabled < 0)
+        enabled = !(getenv("SS_FLICKER") && getenv("SS_FLICKER")[0] == '0');
+    frame_is_new = !frame_known || frame != frame_drawn;
+    if (!frame_is_new)
+        return;                         /* the same frame drawn again (a screenshot): nothing has changed */
+    if (!frame_known || frame != frame_drawn + 1)
+        memset(tracks, 0, sizeof tracks);       /* frames were left out (a skipped scene): start afresh */
+    frame_known = 1;
+    frame_drawn = frame;
+    /* where the camera is (the scroll of the field's map): a sprite of the world moves on the screen by what the
+     * camera moved */
+    camera_x = camera_y = 0;
+    for (i = 0; i < 4; i++)
+        if (view.world && view.bg[i].map) {
+            camera_x = view.bg[i].scroll_x;
+            camera_y = view.bg[i].scroll_y;
+            break;
+        }
+    memset(only_now, 0, sizeof only_now);
+    memset(obj_moved, 1, sizeof obj_moved);
+    memset(two_pictures, 0, sizeof two_pictures);
+    copy_count = 0;
+    for (n = 0; n < TRACKS; n++) {
+        struct track *t = &tracks[n];
+        t->seen = (uint16_t)(t->seen << 1);
+        if (!(t->seen & 0x0E))
+            t->seen = 0;                /* not seen for three frames: forgotten */
+        /* those that alternate, were hidden in the last frame and are due back in this one: where, and their record */
+        due[n] = 0;
+        if (t->seen && alternates_away((unsigned)t->seen >> 1)) {
+            int x, y;
+            track_place(t, (int)(frame - t->last), &x, &y);
+            due[n] = t->seen;
+            due_x[n] = (int16_t)x;
+            due_y[n] = (int16_t)y;
+            due_entry[n] = t->entry;
+            due_kept[n] = t->kept;
+        }
+    }
+
+    /* the sprites of this frame, each with the record that fits it best */
+    memset(counts, 0, sizeof counts);
+    for (i = 0; i < 128; i++) {
+        const uint16_t *e = OAM + i * 4;
+        struct seen_obj *s = &seen[i];
+        int x, y, w, h;
+        s->track = -1;
+        s->content = 0;
+        if (!(IO16(0) & 0x1000) || !obj_box(e, &x, &y, &w, &h) || !(s->content = obj_content(e, w, h)))
+            continue;
+        s->kind = (uint16_t)((e[0] >> 8) | (e[1] >> 14) << 8 | (e[2] >> 10) << 10);
+        s->x = (int16_t)x;
+        s->y = (int16_t)y;
+        if (best_track(s, 1, &score) >= 0)
+            order[score][counts[score]++] = (uint8_t)i;
+    }
+    /* the closest fits first, so that of two sprites that look alike each gets its own record */
+    for (score = 0; score < 32; score++)
+        for (n = 0; n < counts[score]; n++) {
+            int found, unused;
+            i = order[score][n];
+            found = best_track(&seen[i], 1, &unused);
+            if (found >= 0)
+                track_seen(&tracks[found], &seen[i], i);
+        }
+    for (i = 0; i < 128; i++) {
+        struct seen_obj *s = &seen[i];
+        int found, earlier = -1;
+        if (!s->content || s->track >= 0)
+            continue;
+        /* A picture not seen before. If a sprite of this kind was close by in the last frame and is not there
+         * now, this is its next animation picture (or the thing it takes turns with): a new record, which starts
+         * with that sprite's record of frames, so that a sprite that only changes its picture counts as having
+         * been here all along. Else it may be a hidden sprite that came back with its next picture. */
+        for (n = 0; n < TRACKS; n++)
+            if ((tracks[n].seen & 3) == 2 && tracks[n].kind == s->kind && apart(s->x - tracks[n].x, s->y - tracks[n].y) <= 16
+                && (earlier < 0 || apart(s->x - tracks[n].x, s->y - tracks[n].y) < apart(s->x - tracks[earlier].x, s->y - tracks[earlier].y)))
+                earlier = n;
+        found = earlier < 0 ? best_track(s, 0, &score) : -1;
+        if (found >= 0) {               /* a hidden sprite came back with its next animation picture */
+            track_seen(&tracks[found], s, i);
+            continue;
+        }
+        for (n = 0; n < TRACKS && tracks[n].seen; n++)
+            ;
+        if (n < TRACKS) {               /* a sprite not seen before (when all records are in use it is simply drawn) */
+            struct track *t = &tracks[n];
+            unsigned record = earlier >= 0 ? tracks[earlier].seen | 1u : 1;
+            int x, y, w, h, u;
+            /* A character is made of several sprites, and its next animation picture can be cut into pieces of
+             * other sizes. A new sprite that lies over an alternating one that is due back now, with the same
+             * palette and priority, is the next piece of the same thing: it takes over that record of frames. */
+            obj_box(OAM + i * 4, &x, &y, &w, &h);
+            for (u = 0; u < TRACKS && earlier < 0 && record == 1; u++) {
+                int ux, uy, uw, uh;
+                if (!due[u] || ((tracks[u].kind ^ s->kind) & 0xFC00) || !obj_box(kept[due_kept[u]].oam + due_entry[u] * 4, &ux, &uy, &uw, &uh))
+                    continue;
+                ux = due_x[u];
+                uy = due_y[u];
+                if (x < ux + uw + 4 && ux < x + w + 4 && y < uy + uh + 4 && uy < y + h + 4)
+                    record = due[u] | 1u;
+            }
+            memset(t, 0, sizeof *t);
+            t->content = s->content;
+            t->kind = s->kind;
+            t->born = t->last = t->before = frame;
+            t->x = s->x; t->y = s->y;
+            t->camera_x = (int16_t)camera_x; t->camera_y = (int16_t)camera_y;
+            t->entry = (uint8_t)i;
+            t->kept = (uint8_t)(frame % KEPT);
+            t->seen = (uint16_t)record;
+            s->track = (int16_t)n;
+        }
+    }
+    /* A sprite that is back where it was two frames ago has not alternated if a sprite of its kind turned up
+     * close by in between and is gone again now: that is one sprite going there and back (bouncing off a wall,
+     * shaking, a lunge in an attack animation), and it must stay solid. Its record starts again. (Two things
+     * that really take turns close to each other pass this the second time round: by then both are known.) */
+    for (n = 0; n < TRACKS; n++) {
+        struct track *t = &tracks[n];
+        if ((t->seen & 3) != 1 || t->seen == 1)
+            continue;
+        for (i = 0; i < TRACKS; i++) {
+            const struct track *u = &tracks[i];
+            if (u->seen && !(u->seen & 1) && u != t && u->kind == t->kind && u->born > t->before
+                && apart(u->x - t->x, u->y - t->y) <= 16 * (int)(frame - t->before)) {
+                t->seen = 1;
+                break;
+            }
+        }
+    }
+    if (!enabled)
+        return;
+    for (n = 0; n < TRACKS; n++) {
+        const struct track *t = &tracks[n];
+        if (!t->seen)
+            continue;
+        if (t->seen & 1) {
+            if (alternates_here(t->seen)) {
+                only_now[t->entry] = 1;
+                mark_lines(OAM + t->entry * 4);
+            }
+        } else if (alternates_away(t->seen) && copy_count < COPIES) {
+            const uint16_t *e = kept[t->kept].oam + t->entry * 4;
+            int x, y;
+            track_place(t, (int)(frame - t->last), &x, &y);
+            if (x < -128 || x >= 384 || y <= -64 || y >= 160)
+                continue;
+            copies[copy_count].entry[0] = (uint16_t)((e[0] & 0xFF00) | (y & 0xFF));
+            copies[copy_count].entry[1] = (uint16_t)((e[1] & 0xFE00) | (x & 0x1FF));
+            copies[copy_count].entry[2] = e[2];
+            copies[copy_count].index = t->entry;
+            copies[copy_count].kept = t->kept;
+            copies[copy_count].moved = (uint8_t)(x != t->x || y != t->y);
+            mark_lines(copies[copy_count].entry);
+            copy_count++;
+        }
+    }
+}
+
+/* One sprite on line y, into `line`. `oam` is the sprite table it belongs to (for its rotation), `tiles` its
+ * graphics, `colours` its palette if it is drawn from a past frame (NULL: this frame's, looked up later). */
+static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t *tiles, const uint16_t *colours, int moved, struct obj_line *line)
+{
+    uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
@@ -322,7 +635,7 @@ static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghos
     }
     bank = a2 >> 12;
     if (affine) {
-        const uint16_t *matrix = OAM + ((a1 >> 9) & 31) * 16;
+        const uint16_t *matrix = oam + ((a1 >> 9) & 31) * 16;
         pa = (int16_t)matrix[3]; pb = (int16_t)matrix[7]; pc = (int16_t)matrix[11]; pd = (int16_t)matrix[15];
     }
     for (x = 0; x < box_w; x++) {
@@ -354,39 +667,40 @@ static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghos
         if (!index)
             continue;
         if (mode == 2) {
-            line_obj_flags[sx] |= 2;
+            line->flags[sx] |= 2;
             continue;
         }
-        if (ghost) {
-            if (prio <= line_ghost_prio[sx] || !line_ghost[sx]) {
-                line_ghost[sx] = (uint16_t)(0x8000 | (colours[index] & 0x7FFF));       /* the colour itself */
-                line_ghost_prio[sx] = (uint8_t)prio;
-                line_ghost_index[sx] = (uint8_t)i;
-            }
-        } else if (prio <= line_obj_prio[sx] || !line_obj[sx]) {
-            line_obj[sx] = (uint16_t)(0x100 + index + 1);
-            line_obj_prio[sx] = (uint8_t)prio;
-            line_obj_index[sx] = (uint8_t)i;
-            line_obj_flags[sx] = (uint8_t)((line_obj_flags[sx] & 2) | (mode == 1));
+        if (prio <= line->prio[sx] || !line->colour[sx]) {
+            line->colour[sx] = colours ? (uint16_t)(0x8000 | (colours[index] & 0x7FFF)) : (uint16_t)(0x100 + index + 1);
+            line->prio[sx] = (uint8_t)prio;
+            line->flags[sx] = (uint8_t)((line->flags[sx] & 2) | (mode == 1) | moved);
         }
     }
 }
 
-static void sprites(int y)
+static void sprites(int y, int two)
 {
-    int i;
-    memset(line_obj, 0, sizeof line_obj);
-    memset(line_obj_prio, 4, sizeof line_obj_prio);
-    memset(line_obj_flags, 0, sizeof line_obj_flags);
-    memset(line_ghost, 0, sizeof line_ghost);
+    int i, n;
+    memset(obj_now.colour, 0, sizeof obj_now.colour);
+    memset(obj_now.prio, 4, sizeof obj_now.prio);
+    memset(obj_now.flags, 0, sizeof obj_now.flags);
+    for (i = 127; i >= 0; i--)
+        sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_now);
+    if (!two)
+        return;
+    /* The other frame's sprites: this frame's without those that alternate, and those that are hidden now, each
+     * in the place it had in its own sprite table. The game fills the table without gaps, so the entries behind
+     * a hidden sprite have moved up by one: the hidden sprite goes in front of the entry that has its number now. */
+    memset(obj_other.colour, 0, sizeof obj_other.colour);
+    memset(obj_other.prio, 4, sizeof obj_other.prio);
+    memset(obj_other.flags, 0, sizeof obj_other.flags);
     for (i = 127; i >= 0; i--) {
-        if (flicker_gone[i]) {
-            uint16_t a0 = oam_history[1][i][0], a1 = oam_history[1][i][1];
-            a0 = (uint16_t)((a0 & 0xFF00) | ((a0 + gone_dy[i]) & 0xFF));
-            a1 = (uint16_t)((a1 & 0xFE00) | ((a1 + gone_dx[i]) & 0x1FF));
-            sprite(y, a0, a1, oam_history[1][i][2], i, 2);
-        }
-        sprite(y, OAM[i * 4], OAM[i * 4 + 1], OAM[i * 4 + 2], i, flicker_here[i]);
+        if (!only_now[i])
+            sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_other);
+        for (n = 0; n < copy_count; n++)
+            if (copies[n].index == i)
+                sprite(y, copies[n].entry, kept[copies[n].kept].oam, kept[copies[n].kept].tiles, kept[copies[n].kept].colours,
+                       copies[n].moved ? 4 : 0, &obj_other);
     }
 }
 
@@ -423,13 +737,90 @@ static int inside(int low, int high, int value)
     return low <= high ? (value >= low && value < high) : (value >= low || value < high);
 }
 
+/* the registers of the line being drawn */
+static struct {
+    uint16_t dispcnt, bldcnt;
+    int eva, evb, evy, windows;
+    int prio[4], enabled[4];
+    int moved[4];               /* this background is not where it was on this line in the last frame */
+    int edge_fade;
+} line;
+
+/* One pixel of the picture with the sprites of `obj`: the layers in their order, the windows, the blending and
+ * the fades. `moved` tells whether what is shown in front moved since the last frame. */
+static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
+{
+    int mask = 0x3F, top = LAYER_BACKDROP, second = LAYER_BACKDROP, p, n;
+    uint16_t dispcnt = line.dispcnt, bldcnt = line.bldcnt;
+    uint16_t top_colour = PAL[0], second_colour = PAL[0];
+    int obj_visible, semi = 0;
+
+    if (view.world && (X < view.hud_left || X >= view.hud_right))
+        top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
+    if (line.windows) {
+        /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
+         * full-screen mask (the scene-change blackout) covers them too */
+        int x = X - (view.width - W) / 2;      /* the console's columns are always the middle ones */
+        uint16_t winin = IO16(0x48), winout = IO16(0x4A);
+        if (x < 0) x = 0;
+        if (x > W - 1) x = W - 1;
+        if ((dispcnt & 0x2000) && inside(IO16(0x44) >> 8, IO16(0x44) & 255, y) && inside(IO16(0x40) >> 8, IO16(0x40) & 255, x))
+            mask = winin & 0x3F;
+        else if ((dispcnt & 0x4000) && inside(IO16(0x46) >> 8, IO16(0x46) & 255, y) && inside(IO16(0x42) >> 8, IO16(0x42) & 255, x))
+            mask = (winin >> 8) & 0x3F;
+        else if ((dispcnt & 0x8000) && (dispcnt & 0x1000) && (obj->flags[X] & 2))
+            mask = (winout >> 8) & 0x3F;
+        else
+            mask = winout & 0x3F;
+    }
+    obj_visible = (dispcnt & 0x1000) && (mask & 0x10) && obj->colour[X];
+    /* walk priorities from the back so that `top` ends as the front-most pixel and `second` as the one under it */
+    for (p = 3; p >= 0; p--) {
+        for (n = 3; n >= 0; n--) {
+            if (line.enabled[n] && line.prio[n] == p && (mask & (1 << n)) && line_bg[n][X]) {
+                second = top; second_colour = top_colour;
+                top = n; top_colour = PAL[line_bg[n][X] - 1];
+            }
+        }
+        if (obj_visible && obj->prio[X] == p) {
+            second = top; second_colour = top_colour;
+            top = LAYER_OBJ;
+            top_colour = (obj->colour[X] & 0x8000) ? (uint16_t)(obj->colour[X] & 0x7FFF) : PAL[obj->colour[X] - 1];
+            semi = obj->flags[X] & 1;
+        }
+    }
+    if (semi && (bldcnt & (0x100 << second))) {
+        top_colour = blend(top_colour, second_colour, line.eva, line.evb);
+    } else if ((mask & 0x20) && (bldcnt & (1 << top))) {
+        switch ((bldcnt >> 6) & 3) {
+        case 1:
+            if (bldcnt & (0x100 << second)) top_colour = blend(top_colour, second_colour, line.eva, line.evb);
+            break;
+        case 2: top_colour = fade(top_colour, line.evy, 1); break;
+        case 3: top_colour = fade(top_colour, line.evy, 0); break;
+        }
+    }
+    if (line.edge_fade && (top == LAYER_BACKDROP || (top == LAYER_OBJ ? obj->prio[X] > 0 : view.bg[top].map != NULL))) {
+        /* the last columns of a map narrower than the view sink into the black beside it */
+        int from_left = X - view.hud_left, from_right = view.hud_right - 1 - X, by = -1;
+        if (view.hud_left > 0 && from_left >= 0 && from_left < EDGE_FADE) by = from_left;
+        if (view.hud_right < view.width && from_right >= 0 && from_right < EDGE_FADE) by = from_right;
+        if (by >= 0) {
+            /* a soft curve: most of the darkening in the last few columns, a hint of it further in */
+            int rest = EDGE_FADE - by;                  /* 1 at the inner end .. EDGE_FADE at the edge */
+            top_colour = fade(top_colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
+        }
+    }
+    *moved = top == LAYER_OBJ ? obj->flags[X] & 4 : top < 4 ? line.moved[top] : 0;
+    return top_colour;
+}
+
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
 {
-    uint16_t dispcnt, bldcnt;
-    int mode, eva, evb, evy, windows, y, X, n;
-    int prio[4], enabled[4];
+    static uint32_t place[H][4];        /* where each background was on each line of the last frame */
+    int mode = 0, y, X, n;
     uint8_t end_of_frame[SS_LINE_REGISTERS];
-    int per_line = ss_line_registers(0) != NULL, edge_fade;
+    int per_line = ss_line_registers(0) != NULL;
 
     if (requested) {
         view = *requested;
@@ -441,120 +832,76 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     if (view.width < W) view.width = W;
     if (view.width > MAXW) view.width = MAXW;
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
-    find_flicker();
-    edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
+    find_alternating();
+    line.edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
     page_shown = view.world && view.width > W && (IO16(0) & 7) == 0 && page_open();
     hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_shown;
     for (y = 0; y < H; y++) {
         uint32_t *out = pixels + y * pitch_pixels;
+        uint8_t *calm = still + y * view.width;
+        int two;
         if (per_line)
             memcpy((void *)(uintptr_t)SS_IO, ss_line_registers(y), SS_LINE_REGISTERS);
         if (y == 0 || per_line) {
-            dispcnt = IO16(0); bldcnt = IO16(0x50);
-            mode = dispcnt & 7; eva = IO16(0x52) & 31; evb = (IO16(0x52) >> 8) & 31; evy = IO16(0x54) & 31;
-            windows = dispcnt & 0xE000;
-            if (eva > 16) eva = 16;
-            if (evb > 16) evb = 16;
-            if (evy > 16) evy = 16;
+            line.dispcnt = IO16(0); line.bldcnt = IO16(0x50);
+            mode = line.dispcnt & 7; line.eva = IO16(0x52) & 31; line.evb = (IO16(0x52) >> 8) & 31; line.evy = IO16(0x54) & 31;
+            line.windows = line.dispcnt & 0xE000;
+            if (line.eva > 16) line.eva = 16;
+            if (line.evb > 16) line.evb = 16;
+            if (line.evy > 16) line.evy = 16;
             for (n = 0; n < 4; n++) {
-                prio[n] = IO16(0x08 + n * 2) & 3;
-                enabled[n] = (dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
+                line.prio[n] = IO16(0x08 + n * 2) & 3;
+                line.enabled[n] = (line.dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
             }
         }
-        if (dispcnt & 0x80) {
+        for (n = 0; n < 4; n++) {
+            /* where the background is: its scroll, or everything that places a rotated one */
+            uint32_t at = IO32(0x10 + n * 4) & 0x01FF01FFu;
+            if (n >= 2 && mode != 0)
+                at = IO32(0x20 + (n - 2) * 0x10) * 31u + IO32(0x24 + (n - 2) * 0x10) * 131u + IO32(0x28 + (n - 2) * 0x10) * 7u + IO32(0x2C + (n - 2) * 0x10);
+            if (view.bg[n].map)
+                at += (uint32_t)view.shift << 9;
+            line.moved[n] = at != place[y][n];
+            if (frame_is_new)
+                place[y][n] = at;
+        }
+        if (line.dispcnt & 0x80) {
             for (X = 0; X < view.width; X++) out[X] = 0xFFFFFFFFu;
+            memset(calm, 1, (size_t)view.width);
             continue;
         }
         for (n = 0; n < 4; n++) {
-            if (!enabled[n]) continue;
+            if (!line.enabled[n]) continue;
             if ((mode == 1 && n == 2) || mode == 2) affine_background(n, y);
             else text_background(n, y);
         }
-        if (dispcnt & 0x1000) sprites(y);
+        two = two_pictures[y] && (line.dispcnt & 0x1000);
+        if (line.dispcnt & 0x1000) sprites(y, two);
         for (X = 0; X < view.width; X++) {
-            int mask = 0x3F, top = LAYER_BACKDROP, second = LAYER_BACKDROP, p;
-            uint16_t top_colour = PAL[0], second_colour = PAL[0];
-            int obj_visible, semi = 0;
-
+            int moved, moved_other;
+            uint32_t colour;
             if (!view.world && view.width > W && native_x(X, y) < 0 && y >= view.hud_rows) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
+                calm[X] = 0;
                 continue;
             }
-            if (view.world && (X < view.hud_left || X >= view.hud_right))
-                top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
-            if (windows) {
-                /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
-                 * full-screen mask (the scene-change blackout) covers them too */
-                int x = X - (view.width - W) / 2;      /* the console's columns are always the middle ones */
-                uint16_t winin = IO16(0x48), winout = IO16(0x4A);
-                if (x < 0) x = 0;
-                if (x > W - 1) x = W - 1;
-                if ((dispcnt & 0x2000) && inside(IO16(0x44) >> 8, IO16(0x44) & 255, y) && inside(IO16(0x40) >> 8, IO16(0x40) & 255, x))
-                    mask = winin & 0x3F;
-                else if ((dispcnt & 0x4000) && inside(IO16(0x46) >> 8, IO16(0x46) & 255, y) && inside(IO16(0x42) >> 8, IO16(0x42) & 255, x))
-                    mask = (winin >> 8) & 0x3F;
-                else if ((dispcnt & 0x8000) && (dispcnt & 0x1000) && (line_obj_flags[X] & 2))
-                    mask = (winout >> 8) & 0x3F;
-                else
-                    mask = winout & 0x3F;
+            colour = to_rgb(compose(X, y, &obj_now, &moved));
+            if (two && (obj_now.colour[X] != obj_other.colour[X] || obj_now.prio[X] != obj_other.prio[X] || obj_now.flags[X] != obj_other.flags[X])) {
+                /* something alternates here: half of this frame's picture, half of the other frame's */
+                uint32_t other = to_rgb(compose(X, y, &obj_other, &moved_other));
+                colour = 0xFF000000u | (((colour >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + ((colour | other) & 0x010101));
+                moved |= moved_other;
             }
-            obj_visible = (dispcnt & 0x1000) && (mask & 0x10) && line_obj[X];
-            /* walk priorities from the back so that `top` ends as the front-most pixel and `second` as the one under it */
-            for (p = 3; p >= 0; p--) {
-                for (n = 3; n >= 0; n--) {
-                    if (enabled[n] && prio[n] == p && (mask & (1 << n)) && line_bg[n][X]) {
-                        second = top; second_colour = top_colour;
-                        top = n; top_colour = PAL[line_bg[n][X] - 1];
-                    }
-                }
-                if (obj_visible && line_obj_prio[X] == p) {
-                    second = top; second_colour = top_colour;
-                    top = LAYER_OBJ; top_colour = PAL[line_obj[X] - 1];
-                    semi = line_obj_flags[X] & 1;
-                }
-            }
-            if (semi && (bldcnt & (0x100 << second))) {
-                top_colour = blend(top_colour, second_colour, eva, evb);
-            } else if ((mask & 0x20) && (bldcnt & (1 << top))) {
-                switch ((bldcnt >> 6) & 3) {
-                case 1:
-                    if (bldcnt & (0x100 << second)) top_colour = blend(top_colour, second_colour, eva, evb);
-                    break;
-                case 2: top_colour = fade(top_colour, evy, 1); break;
-                case 3: top_colour = fade(top_colour, evy, 0); break;
-                }
-            }
-            if (line_ghost[X] && (dispcnt & 0x1000) && (mask & 0x10)) {
-                /* a sprite that alternates, where it is in front of what was drawn: half of each */
-                int g = line_ghost_prio[X], front;
-                if (top == LAYER_OBJ)
-                    front = g < line_obj_prio[X] || (g == line_obj_prio[X] && line_ghost_index[X] < line_obj_index[X]);
-                else
-                    front = top == LAYER_BACKDROP || g <= prio[top];
-                if (front) {
-                    uint16_t colour = line_ghost[X] & 0x7FFF;
-                    if ((mask & 0x20) && (bldcnt & 0x10) && ((bldcnt >> 6) & 3) >= 2)
-                        colour = fade(colour, evy, ((bldcnt >> 6) & 3) == 2);
-                    top_colour = blend(top_colour, colour, 8, 8);
-                }
-            }
-            if (edge_fade && (top == LAYER_BACKDROP || (top == LAYER_OBJ ? line_obj_prio[X] > 0 : view.bg[top].map != NULL))) {
-                /* the last columns of a map narrower than the view sink into the black beside it */
-                int from_left = X - view.hud_left, from_right = view.hud_right - 1 - X, by = -1;
-                if (view.hud_left > 0 && from_left >= 0 && from_left < EDGE_FADE) by = from_left;
-                if (view.hud_right < view.width && from_right >= 0 && from_right < EDGE_FADE) by = from_right;
-                if (by >= 0)
-{
-                    /* a soft curve: most of the darkening in the last few columns, a hint of it further in */
-                    int rest = EDGE_FADE - by;                  /* 1 at the inner end .. EDGE_FADE at the edge */
-                    top_colour = fade(top_colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
-                }
-            }
-            out[X] = to_rgb(top_colour);
+            out[X] = colour;
+            calm[X] = (uint8_t)!moved;
         }
     }
     if (per_line)
         memcpy((void *)(uintptr_t)SS_IO, end_of_frame, sizeof end_of_frame);
-    memcpy(past_tiles, VRAM + 0x10000, sizeof past_tiles);
-    memcpy(past_colours, PAL + 0x100, sizeof past_colours);
+    if (frame_is_new) {
+        n = (int)(frame_drawn % KEPT);
+        memcpy(kept[n].oam, OAM, sizeof kept[n].oam);
+        memcpy(kept[n].tiles, VRAM + 0x10000, sizeof kept[n].tiles);
+        memcpy(kept[n].colours, PAL + 0x100, sizeof kept[n].colours);
+    }
 }

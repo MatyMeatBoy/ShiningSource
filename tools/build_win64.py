@@ -63,7 +63,7 @@ def main():
 
     # 2. runtime core and the image's platform layer
     runtime_objects = []
-    rt_flags = [*GUEST_TARGET, "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/guest/include"), "-I", str(ROOT / "runtime/include"),
+    rt_flags = [*GUEST_TARGET, *build.RUNTIME_DEFINES, "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/guest/include"), "-I", str(ROOT / "runtime/include"),
                 "-I", str(ROOT / "runtime/guest")]
     for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/guest").glob("*.c")) + [ROOT / "runtime/guest/co_x64.S"]:
         target = out / "rt" / (source.stem + ".o")

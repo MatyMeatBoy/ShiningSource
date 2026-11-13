@@ -85,9 +85,16 @@ static void start_session(void);
 
 /* What happens to the session, in words: to the console and, with the moment it happened, to shiningsource_net.log
  * beside the program. A game started from the launcher has no console, and "a companion vanished" can only be
- * understood afterwards from what each player's program saw. The file is small: a line per event. */
+ * understood afterwards from what each player's program saw. A line per event; the file is bounded: past
+ * NET_LOG_LIMIT it becomes shiningsource_net.old.log (the one before that is dropped) and a new one starts, so
+ * the last 256 to 512 KiB are kept. If the file cannot be renamed nothing is lost: it is appended to as before
+ * and the change is tried again later. What a line holds: the system's millisecond counter, the frame, the
+ * seat, and the event; the first line of a session names the relay's address and the room. */
+enum { NET_LOG_LIMIT = 256 * 1024 };
 static void net_say(const char *format, ...)
 {
+    static const char name[] = "shiningsource_net.log", old[] = "shiningsource_net.old.log";
+    static long bytes = -1;     /* the size of the file, counted once from what earlier sessions left */
     char text[200];
     va_list arguments;
     FILE *file;
@@ -97,8 +104,23 @@ static void net_say(const char *format, ...)
     fprintf(stderr, "%s", text);
     if (getenv("SS_FRAMES"))
         return;                 /* test runs keep their own logs */
-    if ((file = fopen("shiningsource_net.log", "ab")) != NULL) {
-        fprintf(file, "%10u ms  frame %lu  seat %d  %s", (unsigned)ss_plat_ticks_ms(), (unsigned long)ss_frame_number(), seat + 1, text);
+    if (bytes < 0) {
+        bytes = 0;
+        if ((file = fopen(name, "rb")) != NULL) {
+            char passed[1024];
+            size_t got;
+            while ((got = fread(passed, 1, sizeof passed, file)) > 0)
+                bytes += (long)got;
+            fclose(file);
+        }
+    }
+    if (bytes > NET_LOG_LIMIT) {
+        remove(old);
+        bytes = rename(name, old) == 0 ? 0 : bytes - NET_LOG_LIMIT / 4;
+    }
+    if ((file = fopen(name, "ab")) != NULL) {
+        int put = fprintf(file, "%10u ms  frame %lu  seat %d  %s", (unsigned)ss_plat_ticks_ms(), (unsigned long)ss_frame_number(), seat + 1, text);
+        bytes += put > 0 ? put : 0;
         fclose(file);
     }
 }
@@ -880,7 +902,17 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
 }
 
 /* MultiSioMain: one block out, the blocks of frame F - delay in. */
+static uint32_t multi_sio_main(void *sendp, void *recvp);
 uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
+{
+    uint32_t result;
+    ss_prof(SS_PROF_NET, 1);
+    result = multi_sio_main(sendp, recvp);
+    ss_prof(SS_PROF_NET, 0);
+    return result;
+}
+
+static uint32_t multi_sio_main(void *sendp, void *recvp)
 {
     uint32_t now, target, received = 0, waited_since, hash = 2166136261u;
     int i, told = 0, waited = 0;

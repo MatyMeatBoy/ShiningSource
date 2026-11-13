@@ -163,16 +163,29 @@ static SYSV uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static SYSV int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
 static void sign_of_life(void);
 static volatile LONG alive;
-/* Tests of the reports themselves: SS_TEST_FAULT=crash or hang, three seconds into the session. */
+/* Tests of the reports themselves: SS_TEST_FAULT=crash or hang, three seconds into the session; thread: a crash
+ * on another thread than the game's, as a worker of the achievements would have it. */
+static DWORD WINAPI faulting_thread(LPVOID unused)
+{
+    (void)unused;
+    *(volatile int *)(uintptr_t)8 = 0;
+    return 0;
+}
+
 static void test_fault(void)
 {
     static int frames, kind = -1;
     if (kind < 0) {
         const char *text = getenv("SS_TEST_FAULT");
-        kind = !text ? 0 : !strcmp(text, "crash") ? 1 : !strcmp(text, "hang") ? 2 : 0;
+        kind = !text ? 0 : !strcmp(text, "crash") ? 1 : !strcmp(text, "hang") ? 2 : !strcmp(text, "thread") ? 3 : 0;
     }
     if (!kind || ++frames < 180)
         return;
+    if (kind == 3) {
+        kind = 0;
+        CloseHandle(CreateThread(NULL, 0, faulting_thread, NULL, 0, NULL));
+        return;
+    }
     if (kind == 1)
         *(volatile int *)(uintptr_t)8 = 0;
     for (;;)
@@ -315,6 +328,7 @@ static void report_context(const CONTEXT *c)
  * ten seconds without one means it is stuck: the watchdog writes where the game's thread is, once per hang,
  * and lets it go on (it may only be very slow). The window stays in the user's hands either way. */
 static HANDLE game_thread;
+static DWORD game_thread_id;
 
 static DWORD WINAPI watchdog(LPVOID unused)
 {
@@ -348,8 +362,10 @@ static DWORD WINAPI watchdog(LPVOID unused)
 static void sign_of_life(void)
 {
     if (!game_thread && DuplicateHandle(GetCurrentProcess(), GetCurrentThread(), GetCurrentProcess(), &game_thread, 0, FALSE,
-                                        DUPLICATE_SAME_ACCESS))
+                                        DUPLICATE_SAME_ACCESS)) {
+        game_thread_id = GetCurrentThreadId();
         CloseHandle(CreateThread(NULL, 0, watchdog, NULL, 0, NULL));
+    }
     InterlockedIncrement(&alive);
 }
 
@@ -372,8 +388,8 @@ static LONG CALLBACK on_fault(EXCEPTION_POINTERS *info)
         ExitProcess(4);
     reporting = 1;
     report_start("crash");
-    report("exception %08lX at rip %016llX (%s)", record->ExceptionCode, (unsigned long long)c->Rip,
-           in_image ? "game image" : "host");
+    report("exception %08lX at rip %016llX (%s, %s)", record->ExceptionCode, (unsigned long long)c->Rip,
+           in_image ? "game image" : "host", !game_thread_id || GetCurrentThreadId() == game_thread_id ? "the game's thread" : "another thread");
     if (record->NumberParameters >= 2)
         report(", %s address %016llX", record->ExceptionInformation[0] ? "writing" : "reading",
                (unsigned long long)record->ExceptionInformation[1]);

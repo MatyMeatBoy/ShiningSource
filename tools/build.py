@@ -63,6 +63,8 @@ CFLAGS = ["--target=i686-w64-mingw32",
           "-DSHININGSOURCE=1", "-DPORT=1"]
 if os.environ.get("SHININGSOURCE_TRACE"):       # call trace build, see runtime/core/trace.c
     CFLAGS.append("-finstrument-functions")
+# for the runtime's own sources: only a call trace build carries the trace's 4 MiB buffer
+RUNTIME_DEFINES = ["-DSS_CALL_TRACE=1"] if os.environ.get("SHININGSOURCE_TRACE") else []
 
 
 def icon_object(out):

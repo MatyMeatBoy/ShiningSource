@@ -86,7 +86,7 @@ def main():
 
     # 2. runtime core and the image's platform layer
     runtime_objects = []
-    rt_flags = [*GUEST_TARGET, "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/guest/include"), "-I", str(ROOT / "runtime/include"),
+    rt_flags = [*GUEST_TARGET, *build.RUNTIME_DEFINES, "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/guest/include"), "-I", str(ROOT / "runtime/include"),
                 "-I", str(ROOT / "runtime/guest")]
     rt_flags += ["-D%s=__wrap_%s" % (name, name) for name in link.WRAPS]     # the runtime's own calls are wrapped too
     for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/guest").glob("*.c")) + [ROOT / "runtime/guest/co_a64.S"]:

@@ -188,7 +188,7 @@ def main():
     replaced = build.port_config(args.game)["runtime"]
     units = [(p, game_flags + ["-iquote", str(gen / "include"), "-I", str(gen / "include")], gen)
              for p in sorted((gen / "src").glob("*.c")) if p.stem not in replaced]
-    rt_flags = ["-O2", "-g0", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(sdl_include)]
+    rt_flags = [*build.RUNTIME_DEFINES, "-O2", "-g0", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(sdl_include)]
     skipped = {"netlink", "debug_alloc"}        # no sockets in a browser; the allocator diagnostics rely on a linker wrap
     runtime = [p for p in sorted((ROOT / "runtime/core").glob("*.c")) if p.stem not in skipped]
     runtime += [ROOT / "runtime/web/web_main.c", ROOT / "runtime/win32/plat_sdl.c"]

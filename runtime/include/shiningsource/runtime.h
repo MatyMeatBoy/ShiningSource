@@ -155,6 +155,12 @@ unsigned long ss_stray_count(void);
 /* Frames completed so far. */
 unsigned long ss_frame_number(void);
 
+/* Stage timer (core/frame.c, SS_PROF): ss_prof(stage, 1) where a stage starts and ss_prof(stage, 0) where it ends.
+ * Stages may nest. Nothing is measured, and nothing but a test is spent, unless SS_PROF is set. */
+enum { SS_PROF_LOGIC, SS_PROF_SOUND, SS_PROF_NET, SS_PROF_BLANK, SS_PROF_EXTRAS, SS_PROF_RENDER, SS_PROF_FLICKER, SS_PROF_FINISH,
+       SS_PROF_PRESENT, SS_PROF_STAGES };
+void ss_prof(int stage, int begin);
+
 /* Called by a generated stub the first time a function nobody implements yet is reached. */
 void ss_stub(const char *name, int *seen);
 

@@ -87,6 +87,18 @@ enum { STAT_SLOTS = 1 << 16 };
 static uint32_t *stat_interval_us;
 static unsigned stat_count;
 static uint64_t stat_last_ns, stat_waits, stat_wait_ns;
+/* the parts of presenting a frame, each in microseconds: the texture upload, the drawing calls, the present call
+ * (which waits for the display when it is synchronised) */
+enum { PART_UPLOAD, PART_DRAW, PART_PRESENT, PARTS };
+static uint32_t *stat_part_us[PARTS];
+static unsigned stat_part_count;
+/* the sound queue as each frame's samples arrive: how full, how often empty (the device ran dry) and how often
+ * full (the frame's sound was dropped) */
+static unsigned long stat_audio_frames, stat_audio_dropped, stat_audio_empty, stat_audio_trimmed;
+static uint64_t stat_audio_queued;
+static int stat_audio_least = -1, stat_audio_most;
+static double stat_first_frame_ms = -1;     /* from the start of the process to the first picture in the window */
+static double stat_start_ms[5];             /* when each step of the window's start was done */
 
 #ifdef _WIN32
 #include <windows.h>
@@ -112,6 +124,23 @@ static void memory_report(void)
 }
 #endif
 
+/* Milliseconds since this process was created (elsewhere: since the platform layer started). */
+static double process_age_ms(void)
+{
+#ifdef _WIN32
+    FILETIME created, ended, kernel, user, now;
+    ULARGE_INTEGER from, to;
+    if (!GetProcessTimes(GetCurrentProcess(), &created, &ended, &kernel, &user))
+        return -1;
+    GetSystemTimeAsFileTime(&now);
+    from.LowPart = created.dwLowDateTime; from.HighPart = created.dwHighDateTime;
+    to.LowPart = now.dwLowDateTime; to.HighPart = now.dwHighDateTime;
+    return (double)(to.QuadPart - from.QuadPart) / 10000.0;
+#else
+    return (double)SDL_GetTicksNS() / 1e6;
+#endif
+}
+
 static int by_value(const void *a, const void *b)
 {
     uint32_t x = *(const uint32_t *)a, y = *(const uint32_t *)b;
@@ -120,20 +149,42 @@ static int by_value(const void *a, const void *b)
 
 static void stats_report(void)
 {
-    unsigned n = stat_count < STAT_SLOTS ? stat_count : STAT_SLOTS, i, late = 0;
+    unsigned n = stat_count < STAT_SLOTS ? stat_count : STAT_SLOTS, i, late = 0, early = 0;
     uint64_t sum = 0;
+    if (stat_first_frame_ms >= 0)
+        fprintf(stderr, "stats: first picture %.0f ms after the process started: %.0f before the window code (ROM, image), SDL %.0f, "
+                "sound device %.0f, window and renderer %.0f, shown %.0f, first frame %.0f\n", stat_first_frame_ms, stat_start_ms[0],
+                stat_start_ms[1] - stat_start_ms[0], stat_start_ms[2] - stat_start_ms[1], stat_start_ms[3] - stat_start_ms[2],
+                stat_start_ms[4] - stat_start_ms[3], stat_first_frame_ms - stat_start_ms[4]);
     if (n > 60) {
         for (i = 0; i < n; i++) {
             sum += stat_interval_us[i];
             late += stat_interval_us[i] > 16743 + 2000;
+            early += stat_interval_us[i] < 16743 - 2000;
         }
         qsort(stat_interval_us, n, sizeof *stat_interval_us, by_value);
         fprintf(stderr, "stats: %u frames, interval mean %.2f ms, p50 %.2f, p95 %.2f, p99 %.2f, max %.2f; %u late (%.2f%%)\n",
                 n, sum / 1000.0 / n, stat_interval_us[n / 2] / 1000.0, stat_interval_us[n * 95 / 100] / 1000.0,
                 stat_interval_us[n * 99 / 100] / 1000.0, stat_interval_us[n - 1] / 1000.0, late, late * 100.0 / n);
+        fprintf(stderr, "stats: shortest interval %.2f ms; %u more than 2 ms early (%.2f%%)\n", stat_interval_us[0] / 1000.0, early,
+                early * 100.0 / n);
         fprintf(stderr, "stats: waited for the next frame %.1f%% of the time (the rest is the game, the picture and the system)\n",
                 stat_wait_ns * 100.0 / (sum * 1000.0));
     }
+    n = stat_part_count < STAT_SLOTS ? stat_part_count : STAT_SLOTS;
+    for (i = 0; n > 60 && i < PARTS; i++) {
+        static const char *const names[PARTS] = { "texture upload", "drawing calls", "present call" };
+        unsigned k;
+        for (sum = 0, k = 0; k < n; k++)
+            sum += stat_part_us[i][k];
+        qsort(stat_part_us[i], n, sizeof *stat_part_us[i], by_value);
+        fprintf(stderr, "stats: %s: mean %.0f us, p50 %u, p99 %u, max %u\n", names[i], (double)sum / n, (unsigned)stat_part_us[i][n / 2],
+                (unsigned)stat_part_us[i][n * 99 / 100], (unsigned)stat_part_us[i][n - 1]);
+    }
+    if (stat_audio_frames)
+        fprintf(stderr, "stats: sound queue when a frame's samples arrive: mean %.1f ms, least %.1f, most %.1f; empty %lu times, "
+                "dropped %lu of %lu frames; speed trimmed in %lu\n", stat_audio_queued / (double)stat_audio_frames / 192.0,
+                stat_audio_least / 192.0, stat_audio_most / 192.0, stat_audio_empty, stat_audio_dropped, stat_audio_frames, stat_audio_trimmed);
     memory_report();
 }
 
@@ -166,6 +217,34 @@ static void read_bindings(const char *name, int *out, int lowest, int limit)
     }
 }
 
+/* The picture's texture. Made at the start, and again when the system says the graphics device was reset (a
+ * driver restart, an Android app coming back without its graphics context): every texture is gone then. The
+ * others are made again where they are used: the typeface from the ROM, a notice's icon from its pixels. */
+static SDL_Texture *font_texture, *notice_texture, *field_texture;
+static int font_state, texture_remade;
+
+static void make_textures(void)
+{
+    if (texture)
+        SDL_DestroyTexture(texture);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
+    if (!texture)
+        fprintf(stderr, "window: no texture for the picture: %s\n", SDL_GetError());
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);      /* transparent pixels let the side field show */
+    if (font_texture)
+        SDL_DestroyTexture(font_texture);
+    font_texture = NULL;
+    font_state = 0;                     /* looked for again at the next text */
+    if (notice_texture)
+        SDL_DestroyTexture(notice_texture);
+    notice_texture = NULL;
+    if (field_texture)
+        SDL_DestroyTexture(field_texture);
+    field_texture = NULL;
+    texture_remade = 1;                 /* the frame at hand is uploaded again (ss_plat_present) */
+}
+
 int ss_plat_video_init(const char *title)
 {
     SDL_AudioSpec spec;
@@ -174,12 +253,14 @@ int ss_plat_video_init(const char *title)
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");     /* otherwise a resizable window follows the user */
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");                    /* Back is a key here: it opens the options menu */
 #endif
+    stat_start_ms[0] = process_age_ms();
     read_bindings("SS_KEYS", (int *)keys, 1, SDL_SCANCODE_COUNT);
     read_bindings("SS_PAD", (int *)pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
+    stat_start_ms[1] = process_age_ms();
     spec.format = SDL_AUDIO_S16;
     spec.channels = 2;
     spec.freq = 48000;
@@ -197,6 +278,7 @@ int ss_plat_video_init(const char *title)
     }
     else
         fprintf(stderr, "no audio device: %s\n", SDL_GetError());
+    stat_start_ms[2] = process_age_ms();
     if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
@@ -207,9 +289,8 @@ int ss_plat_video_init(const char *title)
         if (option_vsync < 0 || option_vsync > 2) option_vsync = 1;
         set_vsync(option_vsync);
     }
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
-    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
-    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);      /* transparent pixels let the side field show */
+    make_textures();
+    stat_start_ms[3] = process_age_ms();
 #ifdef __ANDROID__
     SDL_SetWindowFullscreen(window, true);
 #else
@@ -241,9 +322,13 @@ int ss_plat_video_init(const char *title)
     }
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
+    stat_start_ms[4] = process_age_ms();
     next_frame_ns = SDL_GetTicksNS();
     if (getenv("SS_STATS")) {
+        int part;
         stat_interval_us = calloc(STAT_SLOTS, sizeof *stat_interval_us);
+        for (part = 0; part < PARTS; part++)
+            stat_part_us[part] = calloc(STAT_SLOTS, sizeof *stat_part_us[part]);
         atexit(stats_report);
     }
     return 0;
@@ -262,6 +347,9 @@ int ss_plat_video_init(const char *title)
  *     returns at once when the display is not ready, which SDL's renderer does not offer.)
  * A display or a driver without adaptive synchronisation gets none, and the menu says so.
  * SS_TEST_REFRESH=N makes this believe the display runs at N Hz (tests of the decision on one monitor). */
+static float audio_ratio = 1.0f;        /* how much faster than recorded the sound is played: the display's pace */
+static int audio_trim;                  /* -1, 0, 1: played 0.4% slower, as it is, 0.4% faster (ss_plat_audio) */
+
 static void set_vsync(int wanted)
 {
     const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
@@ -295,17 +383,62 @@ static void set_vsync(int wanted)
     } else {
         SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
     }
+    audio_ratio = display_paced ? rate / 59.7275f : 1.0f;
+    audio_trim = 0;
     if (audio)
-        SDL_SetAudioStreamFrequencyRatio(audio, display_paced ? rate / 59.7275f : 1.0f);
+        SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio);
     next_frame_ns = SDL_GetTicksNS();
     fprintf(stderr, "video: display %.2f Hz, %s\n", refresh, said);
 }
 
 void ss_plat_audio(const int16_t *samples, int frames)
 {
+    int queued = audio ? SDL_GetAudioStreamQueued(audio) : 0;
+    if (audio && stat_interval_us) {
+        if (stat_audio_frames > 30) {           /* after the first half second: the queue starts empty */
+            stat_audio_queued += (uint64_t)queued;
+            stat_audio_empty += queued == 0;
+            if (stat_audio_least < 0 || queued < stat_audio_least) stat_audio_least = queued;
+            if (queued > stat_audio_most) stat_audio_most = queued;
+        }
+        stat_audio_dropped += queued >= 48000 * 4 / 10;
+        stat_audio_frames++;
+    }
+    if (!audio)
+        return;
     /* never let more than about a tenth of a second queue up: late sound is worse than a dropped frame */
-    if (audio && SDL_GetAudioStreamQueued(audio) < 48000 * 4 / 10)
-        SDL_PutAudioStreamData(audio, samples, frames * 4);
+    if (queued >= 48000 * 4 / 10)
+        return;
+    {
+        /* The device takes sound at its own steady pace; frames bring it a frame at a time, now and then late.
+         * With nothing in reserve every late frame is a gap. So: when the queue has run dry (the start, the
+         * pause behind the menu, a skipped scene, a frame that took too long) a reserve of silence goes in first,
+         * once; and because the device's clock and the game's are never quite the same, the reserve is held: when
+         * its average sinks under 20 ms the sound is played 0.4% slower, over 55 ms 0.4% faster, until it is back
+         * near the middle. That is a few cents of pitch, and most of the time nothing is changed at all. */
+        enum { MS = 48000 * 4 / 1000, RESERVE = 36 * MS, LOW = 20 * MS, HIGH = 55 * MS };
+        static const int16_t silence[RESERVE / 2];
+        static int level = RESERVE;
+        static uint64_t last_ns;
+        uint64_t now_ns = SDL_GetTicksNS();
+        int trim = audio_trim;
+        if (queued <= 0 && now_ns - last_ns > 100000000) {
+            SDL_PutAudioStreamData(audio, silence, RESERVE);
+            queued = level = RESERVE;
+        }
+        last_ns = now_ns;
+        level += (queued - level) / 16;
+        if (level < LOW) trim = -1;
+        else if (level > HIGH) trim = 1;
+        else if ((trim < 0 && level >= RESERVE) || (trim > 0 && level <= RESERVE)) trim = 0;
+        if (trim != audio_trim) {
+            audio_trim = trim;
+            SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio * (1.0f + 0.004f * (float)trim));
+        }
+        if (stat_interval_us)
+            stat_audio_trimmed += trim != 0;
+    }
+    SDL_PutAudioStreamData(audio, samples, frames * 4);
 }
 
 /* The picture keeps a whole-number scale (the largest that fits the height of the window) and takes as many
@@ -347,10 +480,51 @@ static void jewel(int cx, int cy, int size, int r, int g, int b)
 }
 
 /* The field of the Soul look: blue-green, darker towards the bottom, with a fixed pattern of points of light.
- * Nothing is drawn inside the given box (where the picture goes). */
+ * Nothing is drawn inside the given box (where the picture goes).
+ * It is the same every frame, and drawn as rectangles it is about a thousand of them: so it is computed once for
+ * a shape and kept as a texture (made again when the shape changes or the graphics device was reset). If the
+ * texture cannot be made the rectangles are drawn as before. */
+static int field_shape[6];              /* field_texture is declared with make_textures */
+
 static void draw_field(int w, int h, int box_left, int box_top, int box_right, int box_bottom)
 {
+    const int shape[6] = { w, h, box_left, box_top, box_right, box_bottom };
     int x, y, k;
+    if (!field_texture || memcmp(shape, field_shape, sizeof shape)) {
+        uint32_t *pixels = w > 0 && h > 0 ? malloc((size_t)w * (size_t)h * 4) : NULL;
+        if (field_texture)
+            SDL_DestroyTexture(field_texture);
+        field_texture = pixels ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h) : NULL;
+        if (field_texture) {
+            for (y = 0; y < h; y++) {
+                int t = y * 255 / (h > 1 ? h - 1 : 1);
+                uint32_t colour = 0xFF000000u | (uint32_t)(20 - t * 10 / 255) << 16 | (uint32_t)(62 - t * 34 / 255) << 8 | (uint32_t)(74 - t * 36 / 255);
+                for (x = 0; x < w; x++)
+                    pixels[y * w + x] = colour;
+            }
+            for (y = 3; y < h; y += 7)
+                for (x = 3 + (y * 5) % 11; x < w; x += 13) {
+                    if (x >= box_left && x < box_right && y >= box_top && y < box_bottom)
+                        continue;
+                    k = (x * 31 + y * 17) % 5;
+                    pixels[y * w + x] = 0xFF000000u | (uint32_t)(60 + k * 22) << 16 | (uint32_t)(120 + k * 20) << 8 | (uint32_t)(130 + k * 20);
+                }
+            if (SDL_UpdateTexture(field_texture, NULL, pixels, w * 4)) {
+                SDL_SetTextureBlendMode(field_texture, SDL_BLENDMODE_NONE);
+                SDL_SetTextureScaleMode(field_texture, SDL_SCALEMODE_NEAREST);
+                memcpy(field_shape, shape, sizeof shape);
+            } else {
+                SDL_DestroyTexture(field_texture);
+                field_texture = NULL;
+            }
+        }
+        free(pixels);
+    }
+    if (field_texture) {
+        SDL_FRect whole = { 0, 0, (float)w, (float)h };
+        if (SDL_RenderTexture(renderer, field_texture, NULL, &whole))
+            return;
+    }
     for (y = 0; y < h; y++) {
         int t = y * 255 / (h > 1 ? h - 1 : 1);
         fill(0, (float)y, (float)w, 1, 20 - t * 10 / 255, 62 - t * 34 / 255, 74 - t * 36 / 255);
@@ -462,10 +636,12 @@ static void handle_event(const SDL_Event *event)
     }
     if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F11)
         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+    if (event->type == SDL_EVENT_RENDER_DEVICE_RESET)
+        make_textures();
     /* the window went to another display, or its display changed mode: who keeps time is decided again */
     if (event->type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || event->type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED
-        || event->type == SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED)
-        set_vsync(option_vsync);
+        || event->type == SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED || event->type == SDL_EVENT_WINDOW_RESTORED)
+        set_vsync(option_vsync);            /* (restored: a minimised window is not paced by its display) */
     /* The options menu. Escape opens and closes it (on Android the system's Back, which SDL hands over as a
      * key), and so does a controller's Guide button unless it was given to one of the console's buttons. In the
      * menu the arrows and the keys bound to the pad move and change, Enter, Space or the A key choose, Backspace
@@ -591,8 +767,8 @@ static const uint8_t *glyph(char c)
  * 1 the letter, 3 its dark outline. The game gives every character eight columns; here the empty columns of a
  * cell are dropped and neighbours share their outline, which reads better in a line of prose.
  * Any other ROM, or one that does not look as expected, gets the 5 x 7 dots above instead, capitals only. */
-static SDL_Texture *font_texture;       /* the cells in a 16 x 16 grid: letters white, outline dark */
-static int font_state;                  /* 0 not looked for, 1 found, -1 not there */
+/* font_texture (declared with make_textures): the cells in a 16 x 16 grid, letters white, outline dark;
+ * font_state: 0 not looked for, 1 found, -1 not there */
 static uint8_t font_left[256], font_wide[256];
 static int block_text;                  /* 1: use the 5 x 7 dots even with the typeface (a very small window) */
 
@@ -835,7 +1011,7 @@ enum { NOTICE_FRAMES = 300, NOTICE_FADE = 20, NOTICE_QUEUE = 16, NOTICE_ICON = 2
 struct notice { char heading[48], text[96]; int rebel, icon_size; uint32_t *icon; };    /* icon: square, ARGB, own copy */
 static struct notice notices[NOTICE_QUEUE];
 static int notice_count, notice_age;
-static SDL_Texture *notice_texture;         /* the icon of the notice being shown */
+/* notice_texture (declared with make_textures): the icon of the notice being shown */
 
 /* The text is kept as it came (UTF-8); control characters become spaces. How it is written is decided when it is
  * drawn: the game's typeface has small letters and accents, the 5 x 7 dots have capitals only. */
@@ -876,7 +1052,7 @@ static void draw_notice(int left, int top, int width)
 
     if (!notice_count)
         return;
-    if (notice->icon && !notice_texture && !notice_age) {
+    if (notice->icon && !notice_texture && (!notice_age || texture_remade)) {
         notice_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, notice->icon_size, notice->icon_size);
         if (notice_texture) {
             SDL_UpdateTexture(notice_texture, NULL, notice->icon, notice->icon_size * 4);
@@ -1046,7 +1222,9 @@ static uint16_t touch_buttons(int width)
  * Tests: SS_TEST_KEYS="picture:key,..." plays the part of the keyboard, where `picture` counts what the window
  * has shown (as SS_WINDOW_SHOT does; game frames stop while the menu is open alone, pictures do not) and key is
  * one of esc up down left right ok back, pad:MASK (a controller holding those buttons from then on, mask as in
- * SS_INPUT) or click:X:Y (a press at that window pixel). With it set, what the menu does is written to stderr. */
+ * SS_INPUT), click:X:Y (a press at that window pixel), min and restore (the window is minimised, brought back), or
+ * reset (the textures are made again, as when the graphics device was reset). With it set, what the menu does is
+ * written to stderr. */
 enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
        ITEM_QUIT, ITEM_KINDS };
 enum { INFO_LINES = 8, INFO_BYTES = 96 };
@@ -1585,7 +1763,7 @@ static void test_report(void)
 /* SS_TEST_KEYS, see "options menu". */
 static void test_keys(void)
 {
-    static const char *const names[] = { "up", "down", "left", "right", "ok", "back", "esc" };
+    static const char *const names[] = { "up", "down", "left", "right", "ok", "back", "esc" };     /* and: min, restore */
     static const char *script;
     static int looked;
     const char *cursor;
@@ -1613,6 +1791,12 @@ static void test_keys(void)
                     menu_command((int)i);           /* the order of the MENU_ commands */
             if (!strncmp(name, "pad:", 4))
                 test_pad = (uint16_t)strtoul(name + 4, NULL, 16);
+            if (!strcmp(name, "reset"))             /* as if the graphics device had been reset */
+                make_textures();
+            if (!strcmp(name, "min"))               /* the window is minimised, and brought back */
+                SDL_MinimizeWindow(window);
+            if (!strcmp(name, "restore"))
+                SDL_RestoreWindow(window);
             if (!strncmp(name, "click:", 6)) {
                 float x = (float)strtol(name + 6, &end, 10), y = *end == ':' ? (float)atol(end + 1) : 0;
                 menu_click(x, y, 0);
@@ -1753,14 +1937,22 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
 {
     SDL_Rect update = { 0, 0, width, SS_SCREEN_H };
     uint16_t held = 0;
-    uint64_t now;
+    uint64_t now, part_from = 0, part_to;
+    uint32_t *part = stat_part_us[PART_UPLOAD] ? stat_part_us[PART_UPLOAD] + stat_part_count % STAT_SLOTS : NULL;
     SDL_Event event;
+    static int unpaced;                 /* frames in a row the display was to pace and did not */
     int waiting;
 
     if (!window)
         return 0;
     game_frames++;
+    if (part)
+        part_from = SDL_GetTicksNS();
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
+    if (part) {
+        part_to = SDL_GetTicksNS();
+        *part = (uint32_t)((part_to - part_from) / 1000);
+    }
     do {                                /* once, or for as long as a game alone waits behind the menu */
         while (SDL_PollEvent(&event))
             handle_event(&event);
@@ -1770,7 +1962,16 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         if (classic < 0)
             read_mode();
         menu_online = menu_open && ss_net_active();
+        if (part)
+            part_from = SDL_GetTicksNS();
+        if (texture_remade)             /* the device was reset: the new texture has not seen this frame */
+            SDL_UpdateTexture(texture, &update, pixels, width * 4);
         held |= show_picture(width);
+        texture_remade = 0;
+        if (part) {
+            part_to = SDL_GetTicksNS();
+            stat_part_us[PART_DRAW][stat_part_count % STAT_SLOTS] = (uint32_t)((part_to - part_from) / 1000);
+        }
         {
             /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N in ss_window.bmp. More numbers
              * after commas save further pictures of the same run, each in ss_window_N.bmp. */
@@ -1796,14 +1997,37 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
                     break;
             }
         }
+        if (part)
+            part_from = SDL_GetTicksNS();
         SDL_RenderPresent(renderer);
+        if (part) {
+            part_to = SDL_GetTicksNS();
+            stat_part_us[PART_PRESENT][stat_part_count % STAT_SLOTS] = (uint32_t)((part_to - part_from) / 1000);
+            if (stat_first_frame_ms < 0)
+                stat_first_frame_ms = process_age_ms();
+        }
 
         /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */
         next_frame_ns += 16742706;
         now = SDL_GetTicksNS();
-        if (display_paced && !overlay_skipping) {
+        if (display_paced && !overlay_skipping && now + 2500000 >= next_frame_ns) {
             next_frame_ns = now;                        /* the display's refresh already spaced this frame */
+            unpaced = 0;
         } else if (next_frame_ns > now) {
+            /* (also when the display was to pace the game and the present call came back well before a frame's
+             * time: a minimised or covered window, a driver told to ignore synchronisation, a display that is
+             * faster than it said. The game's own clock keeps its speed then, instead of running as fast as
+             * pictures can be shown. After half a second of that the display is no longer taken as the pace:
+             * the sound goes back to its own speed too. It is decided again when the window comes back or the
+             * display changes, see handle_event.) */
+            if (display_paced && ++unpaced == 30) {
+                display_paced = 0;
+                audio_ratio = 1.0f;
+                audio_trim = 0;
+                if (audio)
+                    SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio);
+                fprintf(stderr, "video: the display does not space the frames as it said: own pacing\n");
+            }
             SDL_DelayPrecise(next_frame_ns - now);
             stat_waits++;
             stat_wait_ns += next_frame_ns - now;
@@ -1820,6 +2044,8 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         if (waiting && ss_plat_idle)
             ss_plat_idle();
     } while (waiting);
+    if (part)
+        stat_part_count++;
 
     /* The game gets nothing while the menu is open, and afterwards nothing of what was held in it (the B that
      * closed it, the A that chose "resume") until that button has been let go once. */

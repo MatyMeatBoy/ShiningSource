@@ -18,6 +18,15 @@
  *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
  *                   every live enemy (games/ss2: the five records at gUnk_030056F4). tools/enemy_compare.py
  *                   compares the files of the players of one session.
+ *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
+ *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
+ *                   frames F to T. Off, the cost is one test per stage.
+ *   SS_TEST_RENDER=W  without a window (SS_FRAMES): draw and finish every frame W columns wide all the same, as a
+ *                   window of that width would, and print one hash over all those pictures at the end. Measures
+ *                   the picture's cost at full speed and proves that two builds draw the same.
+ *   SS_BENCH=F:N    picture tests without a window (tools/tests/flicker_bench.py): from frame F - 40 on every frame
+ *                   is drawn, and frames F .. F+N-1 are written to ss_bench.bin (SS_BENCH_OUT=path). With
+ *                   SS_BENCH_SCRIPT=path test sprites are put into the sprite table for the picture only.
  */
 #include "shiningsource/runtime.h"
 
@@ -40,6 +49,10 @@ static const uint16_t dispatch_order[14] = {
 static uint32_t *const handler_table = (uint32_t *)(uintptr_t)0x030012A0u;
 
 static unsigned long frame_count, frame_limit, dump_at;
+static int test_render;                 /* SS_TEST_RENDER: the picture's width, 0 if not asked */
+static uint32_t picture_hash = 2166136261u;
+static unsigned long picture_count;
+static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_SCREEN_H];      /* the picture of the frame at hand, with or without a window */
 static const char *input_script;
 static int windowed, forced_width;
 
@@ -62,6 +75,146 @@ uint32_t ss_frame_hash(void)
             hash = (hash ^ bytes[j]) * 16777619u;
     }
     return hash;
+}
+
+/* ---- stage timer (SS_PROF, see the top of this file) ----
+ * Stages nest (the sound and the link run inside the game's part of a frame): a stage's time is its own, without
+ * what ran inside it. Times are kept per frame in a histogram of 16 steps to the octave, so a percentile is
+ * good to about 3%. The clock is the processor's counter; its rate is taken from the milliseconds of the run. */
+enum { PROF_STEPS = 16 * 44 };
+static int prof_on = -1;
+static unsigned long prof_from, prof_to = ~0ul;
+static uint64_t prof_frame[SS_PROF_STAGES], prof_sum[SS_PROF_STAGES], prof_most[SS_PROF_STAGES], prof_first_tick, prof_last_tick;
+static unsigned long prof_most_at[SS_PROF_STAGES];
+static uint32_t prof_count[SS_PROF_STAGES], prof_steps[SS_PROF_STAGES][PROF_STEPS], prof_first_ms, prof_last_ms;
+static struct { int stage; uint64_t from, inner; } prof_open[8];
+static int prof_depth;
+
+static uint64_t prof_clock(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    return __builtin_ia32_rdtsc();
+#elif defined(__aarch64__)
+    uint64_t value;
+    __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
+    return value;
+#else
+    return 0;
+#endif
+}
+
+static int prof_step(uint64_t value)
+{
+    int octave = 4, step;
+    if (value < 16)
+        return (int)value;
+    while (octave < 63 && (value >> (octave + 1)))
+        octave++;
+    step = (octave - 3) * 16 + (int)((value >> (octave - 4)) & 15);
+    return step < PROF_STEPS ? step : PROF_STEPS - 1;
+}
+
+static double prof_value(int step)
+{
+    int octave = step / 16 + 3;
+    return step < 16 ? (double)step : (double)((uint64_t)(16 + step % 16) << (octave - 4)) + (double)((uint64_t)1 << (octave - 4)) / 2;
+}
+
+static void prof_report(void)
+{
+    static const char *const names[SS_PROF_STAGES] = { "game logic", "sound (m4aSoundMain)", "link (flush, MultiSioMain)", "blank handlers, lines",
+                                                       "cheats, achievements", "picture (ss_ppu_render)", "  of it find_flicker", "finish_picture",
+                                                       "present (upload, draw, wait)" };
+    double per_us = prof_last_ms != prof_first_ms ? (double)(prof_last_tick - prof_first_tick) / ((double)(prof_last_ms - prof_first_ms) * 1000.0) : 0;
+    int stage, step;
+    if (per_us <= 0)
+        return;
+    fprintf(stderr, "prof: frames %lu to %lu, %u clock ticks a microsecond; microseconds per frame, share of 16743%c", prof_from,
+            frame_count, (unsigned)per_us, 10);
+    for (stage = 0; stage < SS_PROF_STAGES; stage++) {
+        uint32_t seen = 0, n = prof_count[stage];
+        double p50 = 0, p99 = 0, mean;
+        if (!n)
+            continue;
+        for (step = 0; step < PROF_STEPS; step++) {
+            uint32_t before = seen;
+            seen += prof_steps[stage][step];
+            if (before <= n / 2 && seen > n / 2) p50 = prof_value(step) / per_us;
+            if (before <= n - 1 - n / 100 && seen > n - 1 - n / 100) p99 = prof_value(step) / per_us;
+        }
+        mean = (double)prof_sum[stage] / n / per_us;
+        /* the image's own printf has no floating point: tenths of a microsecond as two whole numbers */
+        fprintf(stderr, "prof: %s: n %u  mean %u.%u  p50 %u.%u  p99 %u.%u  max %u.%u (frame %lu)  share %u.%02u%%%c", names[stage], (unsigned)n,
+                (unsigned)mean, (unsigned)(mean * 10) % 10, (unsigned)p50, (unsigned)(p50 * 10) % 10, (unsigned)p99, (unsigned)(p99 * 10) % 10,
+                (unsigned)((double)prof_most[stage] / per_us), (unsigned)((double)prof_most[stage] / per_us * 10) % 10, prof_most_at[stage],
+                (unsigned)(mean * 100.0 / 16743.0), (unsigned)(mean * 10000.0 / 16743.0) % 100, 10);
+    }
+}
+
+void ss_prof(int stage, int begin)
+{
+    uint64_t now;
+    if (prof_on <= 0) {
+        const char *text, *colon;
+        if (!prof_on)
+            return;
+        text = getenv("SS_PROF");
+        prof_on = text && *text && *text != '0';
+        if (!prof_on)
+            return;
+        colon = text;
+        while (*colon && *colon != ':')
+            colon++;
+        if (*colon == ':') {
+            prof_from = strtoul(text, NULL, 10);
+            prof_to = strtoul(colon + 1, NULL, 10);
+        }
+        atexit(prof_report);
+    }
+    now = prof_clock();
+    if (begin) {
+        if (prof_depth < 8) {
+            prof_open[prof_depth].stage = stage;
+            prof_open[prof_depth].from = now;
+            prof_open[prof_depth].inner = 0;
+        }
+        prof_depth++;
+    } else if (prof_depth > 0 && --prof_depth < 8 && prof_open[prof_depth].stage == stage) {
+        uint64_t whole = now - prof_open[prof_depth].from;
+        prof_frame[stage] += whole - prof_open[prof_depth].inner;
+        if (prof_depth > 0)
+            prof_open[prof_depth - 1].inner += whole;
+    }
+}
+
+/* The frame is over: its stage times go to the histograms. */
+static void prof_frame_end(unsigned long frame)
+{
+    int stage;
+    if (prof_on <= 0)
+        return;
+    if (frame >= prof_from && frame <= prof_to) {
+        prof_last_tick = prof_clock();
+        prof_last_ms = ss_plat_ticks_ms();
+        if (!prof_first_tick) {
+            prof_first_tick = prof_last_tick;
+            prof_first_ms = prof_last_ms;
+        } else {
+            for (stage = 0; stage < SS_PROF_STAGES; stage++) {
+                uint64_t took = prof_frame[stage];
+                if (!took && stage != SS_PROF_LOGIC)
+                    continue;           /* a stage that did not run in this frame */
+                prof_count[stage]++;
+                prof_sum[stage] += took;
+                prof_steps[stage][prof_step(took)]++;
+                if (took > prof_most[stage]) {
+                    prof_most[stage] = took;
+                    prof_most_at[stage] = frame;
+                }
+            }
+        }
+    }
+    memset(prof_frame, 0, sizeof prof_frame);
 }
 
 void ss_raise_interrupt(uint16_t flag)
@@ -313,7 +466,11 @@ static void walk_lines(void)
  * confirmed in a menu, a selection that is redrawn, effects), counting on a slow screen to melt the two pictures
  * together; a modern display shows each one sharply and the eye gets a hard blink. Where a pixel goes A, B, A
  * (or A, A, B, B, A) it is shown as the mix of the two, steadily, for as long as it keeps doing that. A pixel
- * that simply changes is untouched, so movement stays sharp. SS_SMOOTH=0 turns it off.
+ * that simply changes is untouched. So is a pixel that showed something moving in any of the frames compared
+ * (a background that scrolled, a sprite that changed its place; the renderer tells which): a fine pattern
+ * that scrolls, or a small sprite passing, makes a pixel go A, B, A too, and mixing those blurs what moves.
+ * Sprites that alternate are not this function's business: the renderer draws them steadily itself, also
+ * while they move (see "sprites that alternate" in ppu.c). SS_SMOOTH=0 turns it off.
  *
  * The sides. In a scene that keeps the console's composition the columns beside it are left to the platform,
  * which draws its own field there. When the game's picture goes dark (a fade, a loading screen) a bright
@@ -333,36 +490,56 @@ void ss_frame_set_view(int width)
     forced_width = !width ? 0 : width < SS_SCREEN_W ? SS_SCREEN_W : width > SS_MAX_VIEW_W ? SS_MAX_VIEW_W : width;
 }
 
+const uint8_t *ss_ppu_still(void);       /* core/ppu.c: per pixel of the last picture drawn, 1 where what it shows did not move */
+
 static void finish_picture(uint32_t *pixels, int width)
 {
+    /* The last four pictures, as they were drawn. They are kept in a ring: the newest takes the place of the
+     * oldest and `newest` moves on, so a frame costs one copy of the picture, not four. */
     static uint32_t past[4][SS_MAX_VIEW_W * SS_SCREEN_H];
-    static int past_width, shade;
+    static uint8_t calm[SS_MAX_VIEW_W * SS_SCREEN_H];      /* for how many frames in a row the pixel has shown something that stayed in place */
+    const uint8_t *restrict still = ss_ppu_still();
+    static int past_width, shade, newest;
     int count = width * SS_SCREEN_H, i, wanted;
     unsigned long light = 0, sampled = 0;
+    uint32_t *restrict now_at = pixels, *restrict oldest;
+    const uint32_t *restrict a_at, *restrict b_at, *restrict c_at;
 
     if (smooth < 0)
         smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
     if (past_width != width) {          /* the window changed: nothing to compare with */
         for (i = 0; i < 4; i++)
             memcpy(past[i], pixels, (size_t)count * 4);
+        memset(calm, 0, sizeof calm);
         past_width = width;
     }
-    for (i = 0; i < count; i++) {
-        uint32_t now = pixels[i], a = past[0][i], b = past[1][i], c = past[2][i], d = past[3][i], other = now;
-        past[3][i] = c; past[2][i] = b; past[1][i] = a; past[0][i] = now;
-        if (!(now >> 24))
-            continue;                   /* a side column: nothing of the game's there */
-        if ((i & 3) == 0) {
+    a_at = past[newest];
+    b_at = past[(newest + 1) & 3];
+    c_at = past[(newest + 2) & 3];
+    oldest = past[(newest + 3) & 3];
+    newest = (newest + 3) & 3;
+    /* the brightness of the game's part of the picture, from every fourth pixel as drawn */
+    for (i = 0; i < count; i += 4) {
+        uint32_t now = pixels[i];
+        if (now >> 24) {                /* not a side column: there is nothing of the game's there */
             light += ((now >> 16) & 255) + ((now >> 8) & 255) * 2 + (now & 255);
             sampled += 4;
         }
-        if (!smooth)
-            continue;
-        if (now != a && now == b && a == c) other = a;                  /* B A B A: it has kept doing it */
-        else if (now != a && a == b && now == c) other = a;             /* A B B A */
-        else if (now == a && now != b && b == c && now == d) other = b; /* A A B B A A */
-        if (other != now && (other >> 24))
-            pixels[i] = 0xFF000000u | (((now >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + (now & other & 0x010101));
+    }
+    /* No branch in this loop, and no pointer shares memory with another: the compiler turns it into a few
+     * instructions for several pixels at a time. Every pixel is written, most with its own value. A pixel is only
+     * mixed where what it shows has stayed in place for the frames compared: something that moved is not blinking. */
+    for (i = 0; i < count; i++) {
+        uint32_t now = now_at[i], a = a_at[i], b = b_at[i], c = c_at[i], d = oldest[i], other, mixed;
+        unsigned game = (now >> 24) != 0, was = calm[i];
+        unsigned quiet = game ? (still[i] ? (was < 8 ? was + 1 : 8) : 0) : was;    /* a side column keeps its count */
+        calm[i] = (uint8_t)quiet;
+        /* B A B A: it has kept doing it; A B B A; A A B B A A */
+        other = ((quiet >= 4) & (now != a) & (((now == b) & (a == c)) | ((a == b) & (now == c)))) ? a
+                : ((quiet >= 5) & (now == a) & (now != b) & (b == c) & (now == d)) ? b : now;
+        mixed = 0xFF000000u | (((now >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + (now & other & 0x010101));
+        oldest[i] = now;
+        now_at[i] = ((smooth != 0) & (other != now) & ((other >> 24) != 0) & game) ? mixed : now;
     }
     /* How dark the sides are follows how bright the game's picture is as a whole (not its brightest point, which
      * stays until the last moment of a fade): black when the picture is black, clear from a moderately lit
@@ -376,13 +553,159 @@ static void finish_picture(uint32_t *pixels, int width)
     else shade = shade - wanted > 8 ? shade - 8 : wanted;
     if (shade)
         for (i = 0; i < count; i++)
-            if (!(pixels[i] >> 24))
-                pixels[i] = (uint32_t)shade << 24;      /* black, as strong as the picture is dark */
+            pixels[i] = (pixels[i] >> 24) ? pixels[i] : (uint32_t)shade << 24;  /* black, as strong as the picture is dark */
 }
+
+static void picture_report(void)
+{
+    fprintf(stderr, "picture: %lu frames %d wide, hash %08X%c", picture_count, test_render, (unsigned)picture_hash, 10);
+}
+
+/* ---- picture tests (SS_BENCH, see the top of this file and tools/tests/flicker_bench.py) ----
+ *
+ * Without a window only a dumped frame is drawn, but what the renderer does about sprites that alternate depends
+ * on the frames before. So here every frame is drawn, as with a window, and a run of them is written out.
+ * A script can change what is drawn: test sprites, their tiles and colours, registers, a tile map. It is a text
+ * file, one command a line:
+ *     F <frame>                 the commands that follow are for this frame only (before the first F: every frame)
+ *     m <address> <value>       16 bits (hex) of video memory: registers (on every line), palette, VRAM, sprite table
+ *     v <dx> <dy>               move the camera of a field scene by this many pixels (decimal)
+ *     g <address> <bits>        set these bits (hex, 16 of them) in the game's own memory, and leave them set
+ * All but `g` are applied just before the frame is drawn and taken back right after, so the game never sees them
+ * and plays exactly as without the test. `g` is for making the game itself alternate a sprite (a flag of the
+ * player's record, say): the game then plays on with it.
+ * Each frame written: "SSFR", frame, width, whether it is a field scene, the camera's x and y (32-bit each), the
+ * sprite table as drawn (1 KiB), the renderer's picture, the picture as it would be shown (both width x 160 x 4). */
+#ifdef SS_PICTURE_BENCH              /* the development build only (tools/link.py): it needs the full C library */
+static void bench_frame(void)
+{
+    struct command { unsigned long frame; char kind; int a, b; };
+    static const struct { uint32_t base, size; } parts[] = {
+        { SS_IO, SS_LINE_REGISTERS }, { SS_PALETTE, 0x400 }, { SS_VRAM, 0x18000 }, { SS_OAM, 0x400 },
+    };
+    static struct command *commands;
+    static int command_count, state;
+    static unsigned long first, count, drawn;
+    static double seconds;
+    static FILE *out;
+    static uint32_t shot[SS_MAX_VIEW_W * SS_SCREEN_H];
+    static uint8_t kept[SS_LINE_REGISTERS + 0x400 + 0x18000 + 0x400], kept_lines[SS_SCREEN_H][SS_LINE_REGISTERS];
+    struct ss_view view;
+    int width = forced_width ? forced_width : SS_SCREEN_W, i, y, n, dx = 0, dy = 0;
+    uint8_t *save = kept;
+    uint32_t t0;
+
+    if (!state) {
+        const char *text = getenv("SS_BENCH"), *path = getenv("SS_BENCH_SCRIPT");
+        state = -1;
+        if (!text)
+            return;
+        state = 1;
+        first = strtoul(text, (char **)&text, 10);
+        count = *text == ':' ? strtoul(text + 1, NULL, 10) : 0;
+        if (count)
+            out = fopen(getenv("SS_BENCH_OUT") ? getenv("SS_BENCH_OUT") : "ss_bench.bin", "wb");
+        if (path) {
+            FILE *file = fopen(path, "rb");
+            char line[80];
+            unsigned long frame = 0;
+            commands = (struct command *)calloc(0x40000, sizeof *commands);
+            while (file && commands && command_count < 0x40000 && fgets(line, sizeof line, file)) {
+                struct command *c = &commands[command_count];
+                c->frame = frame;
+                c->kind = line[0];
+                if (line[0] == 'F') frame = strtoul(line + 1, NULL, 10);
+                else if ((line[0] == 'm' || line[0] == 'g') && sscanf(line + 1, "%x %x", (unsigned *)&c->a, (unsigned *)&c->b) == 2) command_count++;
+                else if (line[0] == 'v' && sscanf(line + 1, "%d %d", &c->a, &c->b) == 2) command_count++;
+            }
+            if (file) fclose(file);
+        }
+    }
+    if (state < 0 || frame_count + 40 < first)
+        return;
+    for (n = 0; n < 4; n++) {
+        memcpy(save, (const void *)(uintptr_t)parts[n].base, parts[n].size);
+        save += parts[n].size;
+    }
+    memcpy(kept_lines, line_registers, sizeof kept_lines);
+    for (i = 0; i < command_count; i++) {
+        const struct command *c = &commands[i];
+        uint32_t address = (uint32_t)c->a;
+        if (c->frame && c->frame != frame_count)
+            continue;
+        if (c->kind == 'v') {
+            dx += c->a;
+            dy += c->b;
+            continue;
+        }
+        if (c->kind == 'g') {
+            if ((address >= SS_EWRAM && address < SS_EWRAM + 0x3FFFF) || (address >= SS_IWRAM && address < SS_IWRAM + 0x7FFF))
+                *(uint16_t *)(uintptr_t)address |= (uint16_t)c->b;
+            continue;
+        }
+        for (n = 0; n < 4; n++)
+            if (address >= parts[n].base && address + 2 <= parts[n].base + parts[n].size)
+                memcpy((void *)(uintptr_t)address, &c->b, 2);
+        if (address - SS_IO <= SS_LINE_REGISTERS - 2)
+            for (y = 0; y < SS_SCREEN_H; y++)
+                memcpy(&line_registers[y][address - SS_IO], &c->b, 2);
+    }
+    if (!ss_field_view(&view, width)) {
+        memset(&view, 0, sizeof view);
+        view.width = width;
+    }
+    for (n = 0; n < 4 && (dx || dy); n++)
+        if (view.bg[n].map) {           /* the camera moved: the layer's place in its map and its scroll registers */
+            view.bg[n].scroll_x += dx;
+            view.bg[n].scroll_y += dy;
+            REG16(0x10 + n * 4) = (uint16_t)(REG16(0x10 + n * 4) + dx);
+            REG16(0x12 + n * 4) = (uint16_t)(REG16(0x12 + n * 4) + dy);
+            for (y = 0; y < SS_SCREEN_H; y++)
+                memcpy(&line_registers[y][0x10 + n * 4], (const void *)(uintptr_t)(SS_IO + 0x10 + n * 4), 4);
+        }
+    t0 = ss_plat_ticks_ms();
+    ss_ppu_render(shot, width, &view);
+    seconds += (ss_plat_ticks_ms() - t0) / 1000.0;
+    drawn++;
+    if (out && frame_count >= first && frame_count < first + count) {
+        uint32_t head[6] = { 0x52465353u, (uint32_t)frame_count, (uint32_t)width, (uint32_t)view.world, 0, 0 };
+        for (n = 3; n >= 0; n--)
+            if (view.world && view.bg[n].map) {
+                head[4] = (uint32_t)view.bg[n].scroll_x;
+                head[5] = (uint32_t)view.bg[n].scroll_y;
+            }
+        fwrite(head, 4, 6, out);
+        fwrite((const void *)(uintptr_t)SS_OAM, 1, 0x400, out);
+        fwrite(shot, 4, (size_t)width * SS_SCREEN_H, out);
+        finish_picture(shot, width);
+        fwrite(shot, 4, (size_t)width * SS_SCREEN_H, out);
+    } else {
+        finish_picture(shot, width);
+    }
+    for (n = 0, save = kept; n < 4; n++) {
+        memcpy((void *)(uintptr_t)parts[n].base, save, parts[n].size);
+        save += parts[n].size;
+    }
+    memcpy(line_registers, kept_lines, sizeof kept_lines);
+    if (out && frame_count + 1 == first + count) {
+        fclose(out);
+        out = NULL;
+    }
+    if (frame_count == frame_limit)
+        fprintf(stderr, "bench: %lu frames drawn, %.1f microseconds a frame in the renderer%c", drawn, seconds * 1e6 / (double)drawn, 10);
+}
+#else
+static void bench_frame(void) { }
+#endif
 
 void VBlankIntrWait(void)
 {
+    if (frame_count)
+        ss_prof(SS_PROF_LOGIC, 0);
+    prof_frame_end(frame_count);
+    ss_prof(SS_PROF_NET, 1);
     ss_net_flush();             /* online: what this frame wrote goes out before the frame's time is waited out */
+    ss_prof(SS_PROF_NET, 0);
     if (frame_count == 0) {
         const char *text = getenv("SS_FRAMES");
         frame_limit = text ? strtoul(text, NULL, 10) : 0;
@@ -407,19 +730,49 @@ void VBlankIntrWait(void)
         if (forced_width > SS_MAX_VIEW_W) forced_width = SS_MAX_VIEW_W;
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
+        text = getenv("SS_TEST_RENDER");
+        test_render = text && frame_limit ? (int)strtoul(text, NULL, 10) : 0;
+        if (test_render) {
+            test_render = test_render < SS_SCREEN_W ? SS_SCREEN_W : test_render > SS_MAX_VIEW_W ? SS_MAX_VIEW_W : test_render;
+            atexit(picture_report);
+        }
         if (windowed && ss_plat_video_init("ShiningSource") != 0)
             exit(1);
     }
+    ss_prof(SS_PROF_BLANK, 1);
     REG_VCOUNT = 160;
     REG_DISPSTAT |= 1;                  /* in vertical blank */
     if (REG_DISPSTAT & 0x0008)
         ss_raise_interrupt(0x0001);
     walk_lines();
+    ss_prof(SS_PROF_BLANK, 0);
     frame_count++;
     enemy_log();
+    ss_prof(SS_PROF_EXTRAS, 1);
     ss_rebel_frame();                   /* cheats of a Rebel run, then the platform's achievements (core/rebel.c) */
+    ss_prof(SS_PROF_EXTRAS, 0);
+    if (test_render) {                  /* SS_TEST_RENDER: the picture a window would show, drawn and thrown away */
+        uint32_t *pixels = frame_pixels;
+        struct ss_view view;
+        int i, count = test_render * SS_SCREEN_H;
+        if (!ss_field_view(&view, test_render)) {
+            memset(&view, 0, sizeof view);
+            view.width = test_render;
+        }
+        ss_prof(SS_PROF_RENDER, 1);
+        ss_ppu_render(pixels, test_render, &view);
+        ss_prof(SS_PROF_RENDER, 0);
+        ss_prof(SS_PROF_FINISH, 1);
+        finish_picture(pixels, test_render);
+        ss_prof(SS_PROF_FINISH, 0);
+        for (i = 0; i < count; i++)
+            picture_hash = (picture_hash ^ pixels[i]) * 16777619u;
+        picture_count++;
+    }
     if (dump_at && frame_count == dump_at)
         dump_video();
+    if (frame_limit)
+        bench_frame();
     if (frame_limit) {
         static int every = -1;
         if (every < 0)
@@ -449,7 +802,7 @@ void VBlankIntrWait(void)
             exit(0);
     }
     if (windowed) {
-        static uint32_t pixels[SS_MAX_VIEW_W * SS_SCREEN_H];
+        uint32_t *pixels = frame_pixels;
         struct ss_view view;
         int width = forced_width ? forced_width : ss_plat_view_width();
         if (!ss_field_view(&view, width)) {     /* menus and cut-scenes keep the console's composition, centred */
@@ -460,10 +813,16 @@ void VBlankIntrWait(void)
             static uint16_t held;
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
             if (skip.present) {
+                ss_prof(SS_PROF_RENDER, 1);
                 ss_ppu_render(pixels, width, &view);
+                ss_prof(SS_PROF_RENDER, 0);
+                ss_prof(SS_PROF_FINISH, 1);
                 finish_picture(pixels, width);
+                ss_prof(SS_PROF_FINISH, 0);
                 ss_plat_overlay(skip.darkness, skip.text);
+                ss_prof(SS_PROF_PRESENT, 1);
                 held = ss_plat_present(pixels, width);
+                ss_prof(SS_PROF_PRESENT, 0);
             } else if (ss_net_active()) {
                 /* A scene being skipped online. Alone the game runs as fast as the machine allows; with other
                  * players it keeps its normal speed: the game counts its waits for them in frames, and run fast
@@ -524,4 +883,5 @@ void VBlankIntrWait(void)
         if (save_at && frame_count == (unsigned long)save_at)
             fprintf(stderr, "save test: the game's own save routine returned %u (0 = saved and verified)%c", sub_0807A124(), 10);
     }
+    ss_prof(SS_PROF_LOGIC, 1);
 }

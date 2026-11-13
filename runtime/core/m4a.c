@@ -1428,6 +1428,7 @@ void m4aSoundMain(void)
 
     if (!initialised)
         return;
+    ss_prof(SS_PROF_SOUND, 1);
     if (!test_checked)
         test_setup();
     if (test_song >= 0 && main_calls == (unsigned long)test_at) {
@@ -1449,6 +1450,7 @@ void m4aSoundMain(void)
     sample_carry -= frames;
     mix(buffer, frames);
     ss_audio_push(buffer, frames);
+    ss_prof(SS_PROF_SOUND, 0);
 }
 
 void m4aSoundVSync(void) {}

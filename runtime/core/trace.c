@@ -12,8 +12,16 @@
 
 #define NO_TRACE __attribute__((no_instrument_function))
 
+/* Only a call trace build has room for a frame's calls (tools/build.py defines SS_CALL_TRACE with
+ * SHININGSOURCE_TRACE): in any other build no function reports here, and 4 MiB that nobody uses would still be
+ * charged to every player's process. */
+#ifdef SS_CALL_TRACE
+enum { TRACE_SLOTS = 1 << 20 };
+#else
+enum { TRACE_SLOTS = 1 };
+#endif
 static unsigned long target = ~0ul;
-static uint32_t buffer[1 << 20];
+static uint32_t buffer[TRACE_SLOTS];
 static unsigned count;
 static int written;
 

@@ -74,9 +74,16 @@ static void use_rebel_save(void)
     static const char normal[] = "shiningsource.sav", own[] = "shiningsource_rebel.sav";
     static uint8_t bytes[0x10000];
     static const char part[] = "shiningsource_rebel.sav.part";
+    static const char previous[] = "shiningsource_rebel.sav.bak";
     FILE *file = fopen(own, "rb");
     int have = 0;
     if (file) {                         /* a file cut short by a crash during the first copy does not count */
+        have = fread(bytes, 1, sizeof bytes, file) == sizeof bytes;
+        fclose(file);
+    }
+    /* The Rebel save is missing or cut short but the one before it is whole (core/flash.c keeps it and loads it
+     * in that case): the run has been played before, and its progress must not be replaced by the normal save. */
+    if (!have && (file = fopen(previous, "rb")) != NULL) {
         have = fread(bytes, 1, sizeof bytes, file) == sizeof bytes;
         fclose(file);
     }

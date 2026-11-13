@@ -347,6 +347,31 @@ Open:
 - [ ] The crash reported on opening a shop in multiplayer (needs the player's
       `shiningsource_crash.log`).
 
+## Releases 0.4 to 0.7.1 (2026-11-13)
+
+What each added is in `docs/RELEASE_*.md`. In short:
+
+- [x] Online: direct transport (a player's state is handed over as it arrives),
+      a reliable channel for the game's messages in one order for every machine
+      (through player 1), a departed player kept as a standing character, the
+      relay startable from the launcher, connect by IP. Rules version 5.
+- [x] Skip scene: the introduction through the cartridge's own exit, long
+      dialogue sequences, a vote online.
+- [x] Sound engine rewritten after the cartridge's driver; music in multiplayer
+      stages.
+- [x] Options menu in the game (Escape, Select + Start), the game's typeface for
+      the port's texts, pacing at every refresh rate.
+- [x] Sprites the game alternates: rewritten against a bench
+      (`tools/tests/flicker_bench.py`, 49 cases).
+- [x] OptiPort second pass (`docs/OPTIPORT.md`): sound reserve, pacing floor,
+      picture work, memory, logs bounded.
+- [ ] Not confirmed by a person yet: combat online with the single order, the
+      music by ear, a real controller, a phone, RetroAchievements sign-in.
+- [ ] Joining a game in progress and reconnecting.
+- [ ] The renderer on a slow device: `ss_ppu_render` is 1.8 to 2.5 ms of a frame
+      on the development PC, which a core five times slower no longer fits in the
+      wide view. Skipping pictures needs a phone to tune on.
+
 ## M8. Everything else ReKHCoM ships
 
 Web (wasm32): builds and runs from the user's ROM file (`tools/build_web.py`,

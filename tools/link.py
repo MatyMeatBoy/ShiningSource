@@ -79,7 +79,7 @@ def main():
     (out / "rt").mkdir(exist_ok=True)
     for source in sorted((ROOT / "runtime/core").glob("*.c")) + sorted((ROOT / "runtime/win32").glob("*.c")) + sorted((ROOT / "runtime/plat").glob("*.c")):
         target = out / "rt" / (source.stem + ".o")
-        run = subprocess.run([cc, "--target=i686-w64-mingw32", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"),
+        run = subprocess.run([cc, "--target=i686-w64-mingw32", *build.RUNTIME_DEFINES, "-DSS_PICTURE_BENCH=1", "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"),
                               "-I", str(sdl / "include"),
                               "-c", str(source), "-o", str(target)], capture_output=True, text=True)
         if run.returncode:
