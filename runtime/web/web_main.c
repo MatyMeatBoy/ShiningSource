@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 void AgbMain(void);
 
@@ -113,8 +114,42 @@ void ss_net_votes(int *have, int *need) { *have = 0; *need = 1; }
 int ss_net_skip_now(void) { return 0; }
 unsigned long ss_net_label(void) { return 0; }
 void ss_net_leave(void) {}
+int ss_net_msg_online(void) { return 0; }
+int ss_net_msg_send(const void *data, int size) { (void)data; (void)size; return 0; }
+int ss_net_msg_recv(int who, void *data, int capacity) { (void)who; (void)data; (void)capacity; return 0; }
+int ss_net_msg_gone(int who) { (void)who; return 0; }
 void ss_plat_net_wait(int milliseconds) { emscripten_sleep((unsigned)milliseconds); }
 uint32_t ss_plat_ticks_ms(void) { return (uint32_t)emscripten_get_now(); }
+
+/* ---- saves ----
+ * The game's save file (runtime/core/flash.c: shiningsource.sav and its .tmp/.bak, in the current directory)
+ * lives in /save, a folder the browser keeps between visits (IndexedDB). It is read before the game starts.
+ * The page then looks every few seconds whether the game wrote, and once more when the page is hidden or left,
+ * and stores the folder again if it did. */
+EM_ASYNC_JS(int, web_saves_open, (void), {
+    try { FS.mkdir('/save'); } catch (e) {}
+    FS.mount(IDBFS, {}, '/save');
+    var failed = await new Promise(function (resolve) { FS.syncfs(true, function (error) { resolve(error ? 1 : 0); }); });
+    var stored = -1, busy = false;
+    function written() {                /* when the game last put a save in place; 0 before the first one */
+        try { return FS.stat('/save/shiningsource.sav').mtime.getTime(); } catch (e) { return 0; }
+    }
+    function keep() {
+        var now = written();
+        if (busy || now === stored) return;
+        busy = true;
+        FS.syncfs(false, function (error) {
+            busy = false;
+            if (error) console.log('save: the browser did not store the save (' + error + ')');
+            else stored = now;
+        });
+    }
+    stored = written();
+    setInterval(keep, 3000);
+    addEventListener('pagehide', keep);
+    document.addEventListener('visibilitychange', function () { if (document.hidden) keep(); });
+    return failed;
+});
 
 /* ---- start ---- */
 
@@ -126,6 +161,8 @@ int main(int argc, char **argv)
     /* Showing a frame does not wait for the display in a browser (it only hands control back for a moment), so
      * the display cannot pace the game here: the game keeps the console's own 59.7275 Hz. */
     setenv("SS_VSYNC", "0", 0);
+    if (web_saves_open() != 0)
+        fprintf(stderr, "save: the browser's storage could not be read; saves will not outlive this visit\n");
     /* the page puts the user's file there when they choose it */
     while ((probe = fopen("/rom.gba", "rb")) == NULL)
         emscripten_sleep(100);
@@ -135,6 +172,7 @@ int main(int argc, char **argv)
         return 2;
     }
     fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());
+    chdir("/save");
     AgbMain();
     return 0;
 }

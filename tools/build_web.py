@@ -176,10 +176,10 @@ def main():
     for sub in ("ir", "obj"):
         (out / sub).mkdir(parents=True, exist_ok=True)
 
-    def run(cmd, what, cwd=None):
+    def run(cmd, what, cwd=None, keep=2500):
         done = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, env=env, cwd=cwd)
         if done.returncode:
-            return what + "\n" + (done.stdout + done.stderr)[-2500:]
+            return what + "\n" + (done.stdout + done.stderr)[-keep:]
         return None
 
     game_flags = [f for f in build.CFLAGS if not f.startswith("--target") and f != "-mno-ms-bitfields"]
@@ -320,7 +320,8 @@ def main():
     error = run([emcc, "-O2", "@" + str(response), "-o", str(out / "index.html"), "--shell-file", str(ROOT / "runtime/web/shell.html"),
                  "-sASYNCIFY=1", "-sASYNCIFY_STACK_SIZE=131072", "-sEMULATE_FUNCTION_POINTER_CASTS=1",
                  "-sGLOBAL_BASE=167772160", "-sINITIAL_MEMORY=268435456", "-sSTACK_SIZE=1048576",
-                 "-sFORCE_FILESYSTEM=1", "-sENVIRONMENT=web", "-sEXPORTED_RUNTIME_METHODS=[\"FS\"]"], "link")
+                 "-sFORCE_FILESYSTEM=1", "-lidbfs.js", "-sENVIRONMENT=web", "-sEXPORTED_RUNTIME_METHODS=[\"FS\"]"], "link",
+                keep=200000)            # the linker's messages come before its very long command line
     if error:
         (out / "link.log").write_text(error, encoding="utf-8")
         lines = [l for l in error.splitlines() if "error" in l or "mismatch" in l or "undefined" in l]
