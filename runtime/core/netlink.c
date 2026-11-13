@@ -94,6 +94,14 @@ static int configure(void)
     if (getenv("SS_NET_LOG"))
         log_file = fopen(getenv("SS_NET_LOG"), "w");
     room = fnv(2166136261u, room_name, (int)strlen(room_name));
+    {
+        /* Players only meet if they run the same game and the same rules: the room is the name together with
+         * the cartridge's contents and the version of this protocol. Another version of the port or another
+         * ROM lands in another room instead of producing a session that drifts apart. */
+        static const uint32_t rules = 1;        /* raise when the transport or anything the players must agree on changes */
+        room = fnv(room, (const void *)(uintptr_t)SS_ROM, 0x1000000);
+        room = fnv(room, &rules, sizeof rules);
+    }
     token = getenv("SS_NET_TOKEN") ? (uint32_t)strtoul(getenv("SS_NET_TOKEN"), NULL, 10)
                                    : fnv(ss_plat_ticks_ms() * 2654435761u, &text, sizeof text) | 1;
     if (ss_plat_net_open(host, port)) {
