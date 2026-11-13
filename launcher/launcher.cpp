@@ -144,6 +144,77 @@ static void check_rom(const Game &game)
     rom_status = digest.empty() ? "missing" : digest == game.sha1 ? "ok" : "wrong";
 }
 
+/* ---- the game's own picture, made from the user's ROM ----
+ * The program carries no artwork of the game. Once a ROM is chosen the launcher runs the game itself without a
+ * window up to its title screen, lets it write that frame, and shows it. The file stays in the folder "cache"
+ * next to the launcher: it is the user's own copy, made on their machine, and is not part of any release. */
+static GLuint title_texture;
+static std::string title_for;       /* the ROM path the texture was made from */
+
+static void load_title()
+{
+    std::string path = folder + "cache\\ss_frame.raw";
+    FILE *file = fopen(path.c_str(), "rb");
+    static uint32_t pixels[240 * 160];
+    if (!file)
+        return;
+    size_t got = fread(pixels, 4, 240 * 160, file);
+    fclose(file);
+    if (got != 240 * 160)
+        return;
+    for (uint32_t &pixel : pixels)       /* ARGB as the game wrote it, to the RGBA bytes the texture wants */
+        pixel = 0xFF000000u | (pixel & 0xFF00u) | ((pixel >> 16) & 0xFFu) | ((pixel & 0xFFu) << 16);
+    if (!title_texture)
+        glGenTextures(1, &title_texture);
+    glBindTexture(GL_TEXTURE_2D, title_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 240, 160, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+}
+
+static void make_title(const Game &game)
+{
+    std::string rom = setting((std::string("rom_") + game.id).c_str());
+    if (rom.empty() || rom == title_for)
+        return;
+    title_for = rom;
+    std::string cache = folder + "cache", mark = cache + "\\made_from.txt", host = folder + game.host;
+    CreateDirectoryA(cache.c_str(), nullptr);
+    char previous[1024] = "";
+    if (FILE *file = fopen(mark.c_str(), "r")) {
+        fgets(previous, sizeof previous, file);
+        fclose(file);
+    }
+    if (rom != previous) {
+        /* the title screen is up about twelve seconds of game time after power-on; without a window that is an instant */
+        std::string command = "\"" + host + "\" \"" + rom + "\"";
+        STARTUPINFOA startup = {};
+        PROCESS_INFORMATION process = {};
+        startup.cb = sizeof startup;
+        SetEnvironmentVariableA("SS_FRAMES", "780");
+        SetEnvironmentVariableA("SS_DUMP", "760");
+        SetEnvironmentVariableA("SS_INPUT", "420:0001,430:0000");
+        SetEnvironmentVariableA("SS_SKIP", "0");
+        SetEnvironmentVariableA("SS_NET", nullptr);
+        if (CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, cache.c_str(), &startup, &process)) {
+            WaitForSingleObject(process.hProcess, 20000);
+            CloseHandle(process.hThread);
+            CloseHandle(process.hProcess);
+        }
+        SetEnvironmentVariableA("SS_FRAMES", nullptr);
+        SetEnvironmentVariableA("SS_DUMP", nullptr);
+        SetEnvironmentVariableA("SS_INPUT", nullptr);
+        SetEnvironmentVariableA("SS_SKIP", nullptr);
+        DeleteFileA((cache + "\\ss_video_dump.bin").c_str());       /* only the picture is kept */
+        DeleteFileA((cache + "\\ss_ram_dump.bin").c_str());
+        if (FILE *file = fopen(mark.c_str(), "w")) {
+            fputs(rom.c_str(), file);
+            fclose(file);
+        }
+    }
+    load_title();
+}
+
 static void choose_rom(const Game &game)
 {
     char path[MAX_PATH] = "";
@@ -415,6 +486,22 @@ static void interface_frame(bool &running)
                                       "Este juego est\xC3\xA1 cerrado: a\xC3\xBAn no tiene decompilaci\xC3\xB3n, as\xC3\xAD que no hay nada que construir. Se abrir\xC3\xA1 aqu\xC3\xAD cuando exista."));
     } else if (page == 0) {
         std::string rom = setting((std::string("rom_") + game.id).c_str());
+        if (rom_status == "ok" || rom_status == "wrong")
+            make_title(game);
+        if (title_texture && rom_status != "missing" && !rom.empty()) {
+            /* the game's title screen, from the user's own ROM, in a gold frame */
+            /* as large as leaves room for the page below it */
+            ImVec2 room = ImGui::GetContentRegionAvail();
+            float scale = room.x >= 740 && room.y >= 840 ? 3.0f : room.x >= 500 && room.y >= 660 ? 2.0f : 1.0f;
+            ImVec2 at = ImGui::GetCursorScreenPos(), size(240 * scale, 160 * scale);
+            at.x += (ImGui::GetContentRegionAvail().x - size.x) / 2;
+            ImDrawList *draw = ImGui::GetWindowDrawList();
+            draw->AddRectFilled(ImVec2(at.x - 5, at.y - 1), ImVec2(at.x + size.x + 5, at.y + size.y + 9), IM_COL32(96, 58, 16, 255));
+            draw->AddRectFilled(ImVec2(at.x - 4, at.y), ImVec2(at.x + size.x + 4, at.y + size.y + 8), IM_COL32(232, 168, 56, 255));
+            draw->AddRectFilled(ImVec2(at.x - 2, at.y + 2), ImVec2(at.x + size.x + 2, at.y + size.y + 6), IM_COL32(255, 226, 138, 255));
+            draw->AddImage((ImTextureID)(intptr_t)title_texture, ImVec2(at.x, at.y + 4), ImVec2(at.x + size.x, at.y + size.y + 4));
+            ImGui::Dummy(ImVec2(0, size.y + 16));
+        }
         ImGui::TextColored(gold, "%s", game.title);
         ImGui::TextColored(dim, "%s", game.region);
         ImGui::Spacing();
