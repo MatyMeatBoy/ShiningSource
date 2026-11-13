@@ -71,6 +71,12 @@ void ss_net_vote(int wants);
 void ss_net_votes(int *have, int *need);
 int ss_net_skip_now(void);
 unsigned long ss_net_label(void);
+/* The game's one-time messages, online (core/netlink.c, "messages"): whole, in order, once to every player.
+ * Called from the game's own sender and receivers through games/<game>/port/patches.json. */
+int ss_net_msg_online(void);
+int ss_net_msg_send(const void *data, int size);
+int ss_net_msg_recv(int who, void *data, int capacity);
+int ss_net_msg_gone(int who);
 /* What the next presented frame carries over the picture: black of the given strength and one line of text
  * (capital letters, digits and ? = / : . only). */
 void ss_plat_overlay(int darkness, const char *text);

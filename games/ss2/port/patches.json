@@ -84,6 +84,50 @@
    "why": "Wide picture: sub_0801A764 takes the x of a sprite text (the name above a player) as u16, so glyphs left of the console's first column are never drawn. Pass it signed. Drawing only.",
    "find": "sub_08065230(gUnk_03005C60, x, y, 0, count);",
    "replace": "sub_08065230(gUnk_03005C60, (s16)x, y, 0, count);"
+  },
+  {
+   "why": "Online: the parent corrects each enemy's position on the other machines every 300 frames (five seconds); between corrections every machine moves the enemy by itself, and with a network's latency they drift apart (an enemy seen attacking by one player and standing by another). One second keeps them together; the message is one short packet now. Parent only, so no machine computes differently for it.",
+   "find": "if ((s16)arg0->f60++ > 300) {",
+   "replace": "if ((s16)arg0->f60++ > 60) {"
+  }
+ ],
+ "code_080659B0.c": [
+  {
+   "why": "Online: declarations of the network layer's message channel for the two patches below (runtime/core/netlink.c, \"messages\").",
+   "find": "void sub_08066720(u8 *msg)\n{",
+   "replace": "int ss_net_msg_online(void);\nint ss_net_msg_send(const void *data, int size);\nint ss_net_msg_recv(int who, void *data, int capacity);\nvoid sub_08066720(u8 *msg)\n{"
+  },
+  {
+   "why": "Online: the sender of the game's one-time messages (sub_08066720) hands the whole message to the network layer's message channel instead of passing it piece by piece through the block, where every step costs a round trip (runtime/core/netlink.c, \"messages\"). It ends as the original does after its last step: the block's message bytes say idle after a finished message, sub_0800224C, then the queue is popped. It does not wait for the others to have the message: the channel delivers it in order to everybody, and the game never asks whether the queue is empty (its barriers wait for everybody's token, sub_08067C08). Over a cable (not online) the original code runs.",
+   "find": "    n = sub_08002164();\n    for (;;) {\n        do {\n            buf[0] = 0xB1;",
+   "replace": "    n = sub_08002164();\n    if ((gUnk_030027D0 & 2) && ss_net_msg_online()) {\n        u8 whole[2 + 0x80];\n        u32 pieces = msg[1] > 0x10 ? 0x10 : msg[1];     /* a queue entry holds sixteen */\n        whole[0] = msg[0];\n        whole[1] = pieces;\n        memcpy(whole + 2, msg + 8, pieces * 8);\n        buf[0] = state.myId;\n        buf[1] = 0x80;\n        while (!ss_net_msg_send(whole, 2 + pieces * 8))\n            sub_080003F0();     /* the channel is full: a player is not answering */\n        buf[2] = msg[1] * 2 + 1;\n        sub_0800224C();\n        goto ss_net_sent;\n    }\n    for (;;) {\n        do {\n            buf[0] = 0xB1;"
+  },
+  {
+   "why": "Online: where the patched sender above rejoins the original to pop the queue.",
+   "find": "        gUnk_03006338--;\n        if ((s32)gUnk_03006338 < 0)\n            gUnk_03006338 = 0;\n        q = (u8 *)gUnk_03006300;",
+   "replace": "    ss_net_sent:\n        gUnk_03006338--;\n        if ((s32)gUnk_03006338 < 0)\n            gUnk_03006338 = 0;\n        q = (u8 *)gUnk_03006300;"
+  },
+  {
+   "why": "Online: the receiver task of each player (sub_0806690C) takes that player's next whole message from the network layer's message channel, one a frame at most, and puts it where the original assembles the pieces; the dispatch below is the original's. While it waits its acknowledgement byte says idle, as in the original's wait for an announce. Over a cable the original code runs.",
+   "find": "restart:\n    {\n        /* phase A: wait for an announce */\n        j = 1;",
+   "replace": "restart:\n    {\n        if ((gUnk_030027D0 & 2) && ss_net_msg_online()) {\n            u8 whole[2 + 0x80];\n            s32 size;\n            do {\n                sub_080003F0();\n                *ack = 0x80;\n                size = ss_net_msg_recv(peer, whole, sizeof whole);\n            } while (size < 2);\n            tag = whole[0];\n            chunks = whole[1];\n            if (chunks > (u32)(size - 2) / 8)\n                chunks = (u32)(size - 2) / 8;\n            memcpy(d, whole + 2, chunks * 8);\n            goto ss_net_dispatch;\n        }\n        /* phase A: wait for an announce */\n        j = 1;"
+  },
+  {
+   "why": "Online: where the patched receiver above rejoins the original to act on the message.",
+   "find": "        *ack = blk[2];\n        sub_0800224C();\n        switch (tag - 0x81) {",
+   "replace": "        *ack = blk[2];\n        sub_0800224C();\n    ss_net_dispatch:\n        switch (tag - 0x81) {"
+  }
+ ],
+ "code_08067B4C.c": [
+  {
+   "why": "Online: a player that left a game in progress stays as a standing character (runtime/core/netlink.c, drop) and will never send the token the others wait for before a change of map or scene. sub_080682B8, the game's \"does everybody's ring hold this token\", counts such a player as ready.",
+   "find": "s32 sub_080682B8(s32 callback)\n{",
+   "replace": "int ss_net_msg_gone(int who);\ns32 sub_080682B8(s32 callback)\n{"
+  },
+  {
+   "why": "The same: after the scan of one player's ring found nothing (the scan ran to its end), a player that left counts as ready.",
+   "find": "                found++;\n                break;\n            }\n        }\n    }\n    return count == found;\n}",
+   "replace": "                found++;\n                break;\n            }\n        }\n        if (j > counts[i] && ss_net_msg_gone(i))\n            found++;\n    }\n    return count == found;\n}"
   }
  ]
 }

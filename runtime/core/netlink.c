@@ -23,7 +23,8 @@
  * Environment: SS_NET=host:port (the relay), SS_NET_ROOM=name, SS_NET_DELAY=frames (fixed; automatic if unset or 0),
  * SS_NET_TIMEOUT=milliseconds of silence before a player is dropped (default 15000), SS_NET_LOG=file (one line
  * per delivered frame: label, players, hash of the blocks; identical on every player), SS_NET_PLAYERS=n (tests:
- * wait at the start of the session until n players are in the room).
+ * wait at the start of the session until n players are in the room), SS_NET_MSG_WAIT=1 and SS_NET_MSG_LOG=file
+ * (the message channel, see "messages" below).
  */
 #include "shiningsource/runtime.h"
 
@@ -35,6 +36,11 @@
 
 enum { BLOCK = 24, SEATS = 4, RING = 256, MAX_BLOCKS = 40, HEADER = 60, FIRST_LABEL = 1000 };
 enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END };
+/* The relay forwards nothing longer than this, so no packet may be. */
+enum { PACKET_MAX = 1200 };
+/* The message channel (see "messages" below): the longest message, how many each side keeps, and the fixed
+ * start of its part of a packet. */
+enum { MSG_BYTES = 2 + 0x80, MSG_OUT = 512, MSG_IN = 64, MSG_MARK = 0x5A, MSG_HEAD = 6 + (SEATS - 1) * 8 };
 #define MAGIC 0x314E5353u       /* "SSN1" */
 
 void sub_0800170C(void);
@@ -58,6 +64,15 @@ struct stream {                 /* the blocks of one seat, by label */
     uint32_t cursor;            /* next label to hand to the game */
     uint8_t last[BLOCK];        /* the block handed over last, repeated while nothing newer has come */
     int has_last, repeats;
+    /* messages (see "messages" below). Of mine, to that seat: */
+    uint32_t msg_start;         /* the first of my messages that seat is to have: it was not here for older ones */
+    uint32_t msg_acked;         /* the next of my messages that seat expects */
+    /* and of that seat's, to me: */
+    int in_valid;               /* that seat has said where its messages to me start */
+    uint32_t in_next;           /* the next number expected from it */
+    uint32_t in_head, in_tail;  /* messages put into the ring below, and messages the game has taken */
+    uint8_t in_size[MSG_IN];
+    uint8_t in_data[MSG_IN][MSG_BYTES];
 };
 
 static int configured = -1, gather, seat = -1, synced, delay = 4, timeout_ms = 15000;
@@ -74,6 +89,18 @@ static uint32_t skip_at, skip_done;
 enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
 enum { DIRECT_HOLD = 30 };
 static int direct = 1;          /* the default transport; a fixed SS_NET_DELAY selects the stepped one */
+/* my own messages, by number: kept until every player has them and my own game has taken its copy */
+static uint32_t out_base = 1, out_next = 1, out_own = 1;
+static uint8_t out_size[MSG_OUT], out_data[MSG_OUT][MSG_BYTES];
+static int msg_wait;            /* SS_NET_MSG_WAIT=1: my own copy of a message waits until every player has it */
+static FILE *msg_log;
+static void msg_reset(void);
+/* players that left a game in progress (see drop): the seats, and the block the game keeps being given for each */
+static uint32_t gone;
+static uint8_t gone_block[SEATS][BLOCK];
+static int in_play;             /* a message has passed in this session: the game is past its lobby */
+static uint32_t old_epoch[SEATS];       /* the stream each seat had before its current one */
+static uint32_t host_lost;      /* the host left a game in progress: the connected bits the game had then, else 0 */
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static void wr32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
@@ -113,12 +140,15 @@ static int configure(void)
         gather = (int)strtoul(getenv("SS_NET_PLAYERS"), NULL, 10);
     if (getenv("SS_NET_LOG"))
         log_file = fopen(getenv("SS_NET_LOG"), "w");
+    msg_wait = getenv("SS_NET_MSG_WAIT") && getenv("SS_NET_MSG_WAIT")[0] == '1';
+    if (getenv("SS_NET_MSG_LOG"))
+        msg_log = fopen(getenv("SS_NET_MSG_LOG"), "w");
     room = fnv(2166136261u, room_name, (int)strlen(room_name));
     {
         /* Players only meet if they run the same game and the same rules: the room is the name together with
          * the cartridge's contents and the version of this protocol. Another version of the port or another
          * ROM lands in another room instead of producing a session that drifts apart. */
-        static const uint32_t rules = 3;        /* raise when the transport or anything the players must agree on changes */
+        static const uint32_t rules = 4;        /* raise when the transport or anything the players must agree on changes */
         room = fnv(room, (const void *)(uintptr_t)SS_ROM, 0x1000000);
         room = fnv(room, &rules, sizeof rules);
         room = fnv(room, &direct, sizeof direct);      /* the two transports do not mix */
@@ -167,9 +197,9 @@ static void send_hello(void)
 /* Everything the others have not acknowledged, up to the block of the current frame. */
 static void send_data(void)
 {
-    uint8_t packet[HEADER + MAX_BLOCKS * BLOCK + TRAILER];
+    uint8_t packet[PACKET_MAX];
     uint32_t from = frame_label, label;
-    int i, count = 0;
+    int i, count = 0, size;
 
     if (!synced)
         return;
@@ -193,7 +223,42 @@ static void send_data(void)
         wr32(trailer + 8, seat == 0 ? change_at : 0);
         wr32(trailer + 4, seat == 0 ? skip_at : 0);
     }
-    ss_plat_net_send(packet, HEADER + count * BLOCK + TRAILER);
+    size = HEADER + count * BLOCK + TRAILER;
+    {   /* after the trailer: the message channel. For every other seat, where my messages to it start and which
+         * of its messages I expect next (that is the acknowledgement); then every message of mine that some
+         * player has not acknowledged, oldest first, as many as fit. They are repeated in every packet until
+         * acknowledged, like the blocks, so a lost packet costs nothing. A player that has been silent for
+         * half a second is not sent to: what it lacks may be more than a packet holds, and the players that
+         * are listening must not wait behind it. It gets everything when it speaks again. */
+        uint8_t *part = packet + size, *entry = part + 6;
+        uint32_t first = out_next, number, now = ss_plat_ticks_ms();
+        int carried = 0;
+        for (i = 0; i < SEATS; i++) {
+            struct stream *s = &streams[i];
+            if (i == seat)
+                continue;
+            wr32(entry, s->known ? s->msg_start : 0);
+            wr32(entry + 4, s->known && s->in_valid ? s->in_next : 0);
+            entry += 8;
+            if (s->known && now - s->heard < 500 && s->msg_acked < first)
+                first = s->msg_acked;
+        }
+        if (first < out_base)
+            first = out_base;
+        size += MSG_HEAD;
+        for (number = first; number != out_next && carried < 255; number++, carried++) {
+            int length = out_size[number % MSG_OUT];
+            if (size + 1 + length > PACKET_MAX)
+                break;
+            packet[size] = (uint8_t)length;
+            memcpy(packet + size + 1, out_data[number % MSG_OUT], (size_t)length);
+            size += 1 + length;
+        }
+        part[0] = MSG_MARK;
+        part[1] = (uint8_t)carried;
+        wr32(part + 2, first);
+    }
+    ss_plat_net_send(packet, size);
     last_send = ss_plat_ticks_ms();
 }
 
@@ -217,19 +282,225 @@ static void status(int waiting_for)
     }
 }
 
+/* A player left, crashed or fell silent.
+ *
+ * In the lobby the game is simply told: the seat's bits go and the lobby shows one player fewer. Once the game
+ * is being played that would end it for everybody: the game counts the connected bits and takes the players to
+ * be seats 0..n-1, so a missing bit in the middle hides the last player, and a seat that is counted but no
+ * longer heard runs the link task into its error screen after 80 frames. So a player that leaves a game in
+ * progress stays as it was last seen: its seat keeps its connected bit and the game is given its last block
+ * every frame, with the message bytes saying "idle". The others see its character stand where it was and play
+ * on. Its messages already here are still handed over; the channel stops waiting for its acknowledgements
+ * (its stream is forgotten); the game's "is everybody ready" check passes over it (ss_net_msg_gone, used from
+ * games/<game>/port/patches.json). A stream that later shows up on that seat is ignored until this player's
+ * own session ends: the game has no way to let somebody in halfway.
+ *
+ * Seat 0 is the exception. It is the game's parent: only it decides enemies and items, and the seat numbers
+ * cannot change during a game, so nobody can take that over. When the host leaves a game in progress the others
+ * are told what a cable tells when the parent console is pulled out: everybody still counted, nobody heard, and
+ * the driver's error bit. The game's link task then runs into its own link error handling. */
 static void drop(int who, const char *why)
 {
-    if (streams[who].known)
-        fprintf(stderr, "net: player %d %s\n", who + 1, why);
-    memset(&streams[who], 0, sizeof streams[who]);
+    struct stream *s = &streams[who];
+    /* the block it was last seen with: the one handed over last (direct), or the newest received (stepped) */
+    const uint8_t *seen = s->has_last ? s->last : s->next > s->floor ? s->block[(s->next - 1) % RING] : NULL;
+    int stays = in_play && who != 0 && who != seat && s->known && seen && (connected & 1u << who);
+
+    if (s->known)
+        fprintf(stderr, "net: player %d %s%s\n", who + 1, why, stays ? " (its character stays)" : "");
+    if (stays) {
+        memcpy(gone_block[who], seen, BLOCK);
+        gone_block[who][8] = (uint8_t)who;      /* the message bytes as a sender leaves them between messages */
+        gone_block[who][9] = 0x80;
+        memset(gone_block[who] + 10, 0, 10);
+        memset(gone_block[who] + 20, 0x80, 4);  /* and as a receiver leaves them while it waits */
+        gone |= 1u << who;
+        /* forget the stream but keep the messages that came before it left */
+        s->known = 0;
+        s->epoch = s->first = s->floor = s->next = s->cursor = s->heard = s->acked = 0;
+        memset(s->label, 0, sizeof s->label);
+        s->vote = s->raise = s->raise_seen = 0;
+        s->has_last = s->repeats = 0;
+        s->in_valid = 0;
+        s->msg_start = s->msg_acked = 0;
+        return;
+    }
+    if (who == 0 && seat > 0 && in_play && s->known)
+        host_lost = connected;
+    memset(s, 0, sizeof *s);
     connected &= ~(1u << who);
     if (who == 0 && seat > 0)
         synced = 0;             /* the timeline is the host's */
 }
 
+/* ---- messages ----
+ * What the game sends once (an enemy appears, an item is dropped or taken, a hit, a player's name and stats,
+ * a change of map) it passes over the cable as a message of up to sixteen 8-byte pieces, one step a frame in
+ * bytes 8..23 of the block: announce, wait for every player's answer, a piece, wait again, and so on (games/ss2:
+ * sub_08066720 and sub_0806690C). Over a cable a step is a frame; over the network each one is a trip there and
+ * back, so a four-piece message took about five round trips and the next one of that player waited behind it.
+ *
+ * Here a whole message travels at once. The game's sender hands it over (ss_net_msg_send) and the game's
+ * receivers, one per player, take it (ss_net_msg_recv); the game's own code for both is patched to do so when
+ * a session is online (games/<game>/port/patches.json). The channel keeps what the cable protocol promised:
+ *   - per sender the messages arrive in the order they were sent, each exactly once, on every player;
+ *   - nothing is lost: a message is repeated in every packet until that player has acknowledged it;
+ *   - the sender is given its own messages too, in the same order, as its own receiver always was.
+ * Messages are numbered per sender from 1, anew for every stream (epoch). A player that joins a stream late is
+ * told the number it starts at: what was sent before it was there was never meant for it. A player that left
+ * is no longer waited for (drop() forgets its stream, and with it what it had acknowledged).
+ *
+ * When is the sender given its own copy? At once, by default. The cable protocol gave it when every player had
+ * all the pieces but, as here, before they had acted on them: the others act one trip later either way. Nothing
+ * in the game asks whether the queue is empty; where it needs everybody to be ready it sends a token and waits
+ * until it holds everybody's (sub_08067C18 and sub_08067C08), and a token arrives after everything its sender
+ * sent before it. SS_NET_MSG_WAIT=1 holds the own copy back until every player has acknowledged the message,
+ * which is the cable's order of events at the price of a round trip for everything a player does to itself. */
+
+static void msg_note(char what, int who, const uint8_t *data, int size)
+{
+    if (msg_log) {
+        fprintf(msg_log, "%u %u %c %d %02X %d\n", (unsigned)ss_plat_ticks_ms(), (unsigned)frame_label, what, who,
+                size > 0 ? data[0] : 0, size);
+        fflush(msg_log);
+    }
+}
+
+/* A new stream of mine: its messages are numbered from 1 and nobody has any, and what the others sent to the
+ * old one is forgotten (they start again where they tell me to). */
+static void msg_reset(void)
+{
+    int i;
+    out_base = out_next = out_own = 1;
+    gone = 0;
+    in_play = 0;
+    host_lost = 0;
+    for (i = 0; i < SEATS; i++) {
+        streams[i].msg_start = streams[i].msg_acked = 1;
+        streams[i].in_valid = 0;
+        streams[i].in_head = streams[i].in_tail = 0;
+    }
+}
+
+/* The first of my messages that some player still lacks. */
+static uint32_t msg_everywhere(void)
+{
+    uint32_t have = out_next;
+    int i;
+    for (i = 0; i < SEATS; i++)
+        if (i != seat && streams[i].known && streams[i].msg_acked < have)
+            have = streams[i].msg_acked;
+    return have;
+}
+
+/* Is a session online, so that the game's messages go through this channel? It stays true while the session
+ * waits for the host or for a seat: the messages wait too, and both ends of the game keep to one protocol. */
+int ss_net_msg_online(void)
+{
+    return configured == 1;
+}
+
+/* Did that player leave the game in progress (its character stays, see drop)? It will send nothing more. */
+int ss_net_msg_gone(int who)
+{
+    return configured == 1 && who >= 0 && who < SEATS && (gone >> who & 1);
+}
+
+/* One whole message of this player, for everybody. 0 if there is no room: the caller tries again next frame. */
+int ss_net_msg_send(const void *data, int size)
+{
+    uint32_t have;
+
+    if (configured != 1 || !synced || size < 1 || size > MSG_BYTES)
+        return 0;
+    /* forget the messages every player has, my own game included */
+    have = msg_everywhere();
+    out_base = have < out_own ? have : out_own;
+    if (out_next - out_base >= MSG_OUT)
+        return 0;
+    out_size[out_next % MSG_OUT] = (uint8_t)size;
+    memcpy(out_data[out_next % MSG_OUT], data, (size_t)size);
+    msg_note('S', seat, data, size);
+    out_next++;
+    in_play = 1;
+    return 1;
+}
+
+/* The next message of player `who` (this player included) that the game has not been given: its size, 0 if
+ * there is none yet. */
+int ss_net_msg_recv(int who, void *data, int capacity)
+{
+    const uint8_t *message;
+    int size;
+
+    if (configured != 1 || who < 0 || who >= SEATS)
+        return 0;
+    if (who == seat) {
+        if (out_own == out_next || (msg_wait && out_own >= msg_everywhere()))
+            return 0;
+        message = out_data[out_own % MSG_OUT];
+        size = out_size[out_own % MSG_OUT];
+        out_own++;
+    } else {
+        struct stream *s = &streams[who];
+        if ((!s->known && !(gone >> who & 1)) || s->in_tail == s->in_head)
+            return 0;
+        message = s->in_data[s->in_tail % MSG_IN];
+        size = s->in_size[s->in_tail % MSG_IN];
+        s->in_tail++;
+    }
+    if (size > capacity)
+        size = capacity;
+    memcpy(data, message, (size_t)size);
+    msg_note('R', who, message, size);
+    in_play = 1;
+    return size;
+}
+
+/* The message part of a packet from seat `from` (s is its stream). `mine` says the sender knows my current
+ * stream: only then do its acknowledgement and its starting number mean this stream. */
+static void receive_messages(struct stream *s, int from, const uint8_t *part, int size, int mine)
+{
+    const uint8_t *entry;
+    uint32_t number, start, acked;
+    int carried, at = MSG_HEAD, i;
+
+    if (size < MSG_HEAD || part[0] != MSG_MARK || seat < 0)
+        return;
+    /* the entries are for every seat but the sender's own, in order */
+    entry = part + 6 + (seat - (seat > from)) * 8;
+    start = rd32(entry);
+    acked = rd32(entry + 4);
+    if (!mine || !start)
+        return;                 /* it does not know me yet: its messages are not for me */
+    if (acked > s->msg_acked && acked <= out_next)
+        s->msg_acked = acked;
+    if (!s->in_valid || start > s->in_next) {
+        /* the first word from it, or it gave me up for a while and starts again further on */
+        s->in_valid = 1;
+        s->in_next = start;
+    }
+    carried = part[1];
+    number = rd32(part + 2);
+    for (i = 0; i < carried && at < size; i++, number++) {
+        int length = part[at];
+        if (at + 1 + length > size || length > MSG_BYTES)
+            break;
+        /* in order only: a later one is repeated until the ones before it are here; a full ring takes nothing,
+         * so the sender repeats until the game has made room */
+        if (number == s->in_next && s->in_head - s->in_tail < MSG_IN) {
+            s->in_size[s->in_head % MSG_IN] = (uint8_t)length;
+            memcpy(s->in_data[s->in_head % MSG_IN], part + at + 1, (size_t)length);
+            s->in_head++;
+            s->in_next++;
+        }
+        at += 1 + length;
+    }
+}
+
 static void receive(void)
 {
-    uint8_t packet[HEADER + MAX_BLOCKS * BLOCK + TRAILER + 64];
+    uint8_t packet[PACKET_MAX + 64];
     int size, i;
 
     while ((size = ss_plat_net_recv(packet, sizeof packet)) >= HEADER) {
@@ -249,15 +520,23 @@ static void receive(void)
         }
         if (from >= SEATS || from == seat || seat < 0)
             continue;
+        if (gone >> from & 1)
+            continue;           /* it left the game; whoever sits there now is not part of it */
         s = &streams[from];
         if (type == T_END) {
-            if (s->known && s->epoch == rd32(packet + 16))
+            if (s->known && s->epoch == rd32(packet + 16)) {
+                old_epoch[from] = s->epoch;     /* a packet of it that arrives after the goodbye is not a return */
                 drop(from, "left");
+            }
             continue;
         }
         if (type != T_DATA || size < HEADER + count * BLOCK)
             continue;
+        if (rd32(packet + 16) == old_epoch[from])
+            continue;           /* a late packet of the stream it had before: taking it for a new one would
+                                 * restart that player, and with it the numbering of its messages */
         if (!s->known || s->epoch != rd32(packet + 16)) {       /* a new stream of that seat */
+            old_epoch[from] = s->known ? s->epoch : 0;
             if (s->known)
                 drop(from, "restarted");
             s->known = 1;
@@ -269,6 +548,7 @@ static void receive(void)
             s->next = s->floor;
             s->cursor = 0;
             s->has_last = s->repeats = 0;
+            s->msg_start = s->msg_acked = out_next;     /* it was not here for what I sent before */
             fprintf(stderr, "net: player %d connected\n", from + 1);
         }
         s->heard = ss_plat_ticks_ms();
@@ -284,6 +564,8 @@ static void receive(void)
             }
             if (from == 0 && rd32(trailer + 4) > skip_done)
                 skip_at = rd32(trailer + 4);
+            receive_messages(s, from, trailer + TRAILER, size - (HEADER + count * BLOCK + TRAILER),
+                             rd32(packet + 44 + seat * 4) == epoch);
         }
         first = rd32(packet + 24);
         if (from == 0 && !synced && first > s->next)
@@ -303,6 +585,7 @@ static void receive(void)
             frame_label = own_first = s->next;
             last_target = 0;
             epoch = fnv(epoch + 1, &s->heard, 4) | 1;
+            msg_reset();
             for (i = 0; i < SEATS; i++)
                 if (streams[i].known) {
                     struct stream *o = &streams[i];
@@ -330,6 +613,7 @@ static void start_session(void)
     for (i = 0; i < SEATS; i++)
         streams[i].acked = 0;
     epoch = fnv(epoch + 1, &token, 4) | 1;
+    msg_reset();
     connected = available = 0;
     frame_label = own_first = FIRST_LABEL;
     last_target = 0;
@@ -419,19 +703,19 @@ void ss_net_leave(void)
  * The game is not a simulation every machine must step in unison: each machine decides for its own character
  * and tells the others (bytes 0..7 of the block: position, facing, animation, rewritten every frame), and
  * everything that happens once (an enemy appears, an item is dropped or taken, a hit, a change of map) is a
- * message passed step by step in bytes 8..23, each step repeated until every player's block answers it
- * (games/ss2: sub_08066720 and sub_0806690C). So nothing has to arrive on a particular frame, and the cable
- * never promised that either. What matters is how long one question and its answer take, because every step
- * of every message costs exactly that: with a shared timeline it was twice the delay plus two frames; here it
- * is the network's own round trip and nothing more. No player waits for another.
+ * message. Over a cable the game passes a message step by step in bytes 8..23, each step repeated until every
+ * player's block answers it (games/ss2: sub_08066720 and sub_0806690C); online it travels whole through the
+ * message channel above. So nothing has to arrive on a particular frame, and the cable never promised that
+ * either. No player waits for another.
  *
- * Per player the blocks are handed over in order, one a frame, the moment they are here. The message steps
- * must all be seen in order (the end of one message is told from the start of the next by one of them), so a
- * block is never skipped for being late: it is asked for again (the acknowledgements in every packet do
- * that). When several are waiting because they came in a burst, the ones that only repeat the message bytes
- * of the block before them are dropped, which is how the game catches up without missing a step. When nothing
- * new has come the last block is given again, as the unchanged state it is, for up to DIRECT_HOLD frames
- * before the game is told that player is silent. A player's own block is in its own place at once. */
+ * Per player the blocks are handed over in order, one a frame, the moment they are here. Whatever is passed
+ * step by step in bytes 8..23 must be seen in order (the lobby's handshakes, and the messages if a game's
+ * sender is not patched), so a block is never skipped for being late: it is asked for again (the
+ * acknowledgements in every packet do that). When several are waiting because they came in a burst, the ones
+ * that only repeat the message bytes of the block before them are dropped, which is how the game catches up
+ * without missing a step. When nothing new has come the last block is given again, as the unchanged state it
+ * is, for up to DIRECT_HOLD frames before the game is told that player is silent (not during a game in
+ * progress, see below). A player's own block is in its own place at once. */
 static uint32_t deliver_direct(void *sendp, void *recvp)
 {
     uint32_t received = 0, now = ss_plat_ticks_ms();
@@ -453,13 +737,18 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
                 s->has_last = 1;
                 s->repeats = 0;
                 block = s->last;
-            } else if (s->has_last && s->repeats < DIRECT_HOLD) {
+            } else if (s->has_last && (s->repeats < DIRECT_HOLD || in_play)) {
+                /* in a game in progress the last block stands for as long as the player is in the room: told
+                 * that it is silent, the game would end the session for everybody after 80 frames; this way
+                 * a pause of the connection only freezes that character until it is back or given up (drop) */
                 s->repeats++;
                 block = s->last;
             }
             if (now - s->heard > (uint32_t)timeout_ms)
                 drop(i, "timed out");
         }
+        if (gone >> i & 1)
+            block = gone_block[i];
         if (block) {
             memcpy((uint8_t *)recvp + i * BLOCK, block, BLOCK);
             received |= 1u << i;
@@ -509,6 +798,8 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
     }
     IO16(0x128) = (uint16_t)(0x6003 | (seat > 0 ? seat << 4 | 4 : 0) | (seat >= 0 ? 8 : 0));
     status(-1);
+    if (!synced && host_lost)
+        return host_lost << 8 | 0x1000;         /* see drop: the parent is gone */
     if (!synced)
         return 0;               /* a console with no parent on the cable hears nothing, itself included */
 
@@ -598,6 +889,8 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
         const uint8_t *block = NULL;
         if (i == seat)
             block = target >= own_first ? own[target % RING] : sendp;
+        else if (gone >> i & 1)
+            block = gone_block[i];
         else if (due(i, target))
             block = streams[i].block[target % RING];
         if (block) {
