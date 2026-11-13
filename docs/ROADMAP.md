@@ -456,7 +456,7 @@ What each added is in `docs/RELEASE_*.md`. In short:
       forwarding on one machine), a host away for more than a minute (the
       session still ends).
 - [x] After 0.8.1, on main: a dungeon level online by script
-      (: three players fight, enemies fall, items drop
+      (`tools/net_exit_test.sh`: three players fight, enemies fall, items drop
       and are taken, the exit is passed together). With it: the others pass
       the exit when a player's program was ended in the fight; a player cut
       off 30 seconds during fights is whole again with the same enemies. A
