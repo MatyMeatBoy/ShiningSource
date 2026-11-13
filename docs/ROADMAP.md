@@ -53,8 +53,10 @@ Open from this milestone:
 - [ ] Compare the frame hashes with an emulator running the cartridge (the
       port's `make compare`). Needs a script for an emulator that can dump the
       same four memory areas.
-- [ ] `ObjAffineSet` uses the C library's sine; replace by the BIOS table so
-      every platform computes the same values (required for online).
+- [x] `ObjAffineSet` takes its sines from a table of whole numbers
+      (`runtime/core/bios.c`, `sine_of`), so every platform computes the same
+      values. The table holds what the C library gave on the tested builds
+      (all 256 angles compared); it was not compared with the console's own.
 - [ ] `IntrMain`, `sub_080004B8`, `sub_080004F8`: start-up leftovers and the
       link-cable interrupt routines, stubbed until M7.
 

@@ -122,14 +122,35 @@ void LZ77UnCompVram(const uint8_t *source, uint8_t *destination)
     LZ77UnCompWram(source, destination);
 }
 
+/* The sine of angle/256 of a turn, in 2.14. A table of whole numbers (a quarter wave, the values of
+ * round(sin(i * pi / 128) * 16384)) and not the C library's sin: every processor and every library then gives
+ * the same parameters, which players online and the frame hashes need. The values are the ones the library
+ * gave on the tested builds; they were not compared with the console's own table. */
+static int32_t sine_of(unsigned angle)
+{
+    static const int16_t quarter[65] = {
+            0,   402,   804,  1205,  1606,  2006,  2404,  2801,  3196,  3590,  3981,  4370,  4756,
+         5139,  5520,  5897,  6270,  6639,  7005,  7366,  7723,  8076,  8423,  8765,  9102,  9434,
+         9760, 10080, 10394, 10702, 11003, 11297, 11585, 11866, 12140, 12406, 12665, 12916, 13160,
+        13395, 13623, 13842, 14053, 14256, 14449, 14635, 14811, 14978, 15137, 15286, 15426, 15557,
+        15679, 15791, 15893, 15986, 16069, 16143, 16207, 16261, 16305, 16340, 16364, 16379, 16384,
+    };
+    unsigned step = angle & 63;
+    switch ((angle >> 6) & 3) {
+    case 0: return quarter[step];
+    case 1: return quarter[64 - step];
+    case 2: return -quarter[step];
+    default: return -quarter[64 - step];
+    }
+}
+
 /* Scale/rotate parameters for sprites: sx, sy in 8.8, angle in the top 8 bits of a 16-bit turn. */
 void ObjAffineSet(const void *source, void *destination, int32_t count, int32_t offset)
 {
     const int16_t *in = source;
     uint8_t *out = destination;
     while (count-- > 0) {
-        double angle = (double)((uint16_t)in[2] >> 8) * (3.14159265358979323846 / 128.0);
-        int32_t sine = (int32_t)lround(sin(angle) * 16384.0), cosine = (int32_t)lround(cos(angle) * 16384.0);
+        int32_t sine = sine_of((uint16_t)in[2] >> 8), cosine = sine_of(((uint16_t)in[2] >> 8) + 64);
         int32_t sx = in[0], sy = in[1];
         *(int16_t *)(out) = (int16_t)((sx * cosine) >> 14);
         *(int16_t *)(out + offset) = (int16_t)(-(sx * sine) >> 14);
