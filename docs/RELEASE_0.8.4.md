@@ -61,6 +61,15 @@ player's program.
   speed, no picture left out; the layer was inspected in dumps and window
   shots of the first field, the town's hall, a message, the status page and
   the L and R menus.
+- After the release, the Linux x64 package as published, in a Debian 12
+  virtual machine (no window): the play-through gives the same hash and the
+  same sound, a two-player session runs to its end, and a player cut off for
+  30 seconds is taken in again.
+- After the release, the Android emulator (x86_64): the play-through gives
+  the same hash and the same sound, twice. A first attempt right after the
+  emulator had started left no result, as with 0.7.4; with the status display
+  option on and the picture shown, the game ran at 58 frames a second on that
+  slow device, leaving pictures out.
 
 ## Not checked
 
@@ -74,8 +83,6 @@ player's program.
 - A player that quits cleanly in the dungeon (one run ended before it could
   tell), a 10-second outage in the dungeon, what a departed character looks
   like on screen once it counts as defeated.
-- The Android and Linux packages of this version had not been run when it was
-  published; results are added here when they are in.
 - Everything listed as not checked in 0.8.
 
 ## Known problems
