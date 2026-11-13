@@ -1,0 +1,89 @@
+#!/bin/sh
+# net_outage_test.sh TAG PORT PLAYERS WHO SECONDS [NAME=value ...]: a player's connection is gone for a while.
+#
+# PLAYERS (2 to 4) play one session on this machine through a relay of their own on UDP port PORT, headless and
+# in real time, with the direct transport and the message channel (as a released game plays). The scripted
+# input takes them from the title into the first field and keeps them walking there; every player also hands
+# over a numbered test message three times a second (SS_NET_TEST_CHATTER), so every stream carries messages.
+# Once they are in the field the relay cuts player WHO (1 = the host) off for SECONDS: nothing from it or to it
+# passes (SS_RELAY_OUTAGE, relay/ss_relay.c). WHO = 0: nobody is cut off. WHO = 9: everybody, as when the
+# relay cannot be reached for a while.
+# The session then runs AFTER more seconds and tools/net_outage_report.py says what became of it.
+#
+# The way into the field (23,400 frames, six and a half minutes) is run at four times the speed (SS_PACE_FAST;
+# FAST=1 for real time all the way, which a relay that holds packets needs: the game counts its waits in frames).
+# Everything is written to build/outage/TAG: relay.log and, per player, pN/run.log (what the program said),
+# msg.log (messages handed over and dispatched), enemy.log, net.log (what it was given of each player).
+# Several of these can run side by side when each has its own TAG and PORT. Never the public relay.
+#
+# Settings (environment, or NAME=value after SECONDS; those also reach the players, e.g. SS_NET_TIMEOUT=5000):
+#   SS_EXE     the program (default: the dev32 build)          BEFORE  seconds in the field before the cut (20)
+#   AFTER      seconds the session runs on after the cut (60)  FIELD   frame by which all walk in the field (23400)
+#   LOSS LAG JITTER  a bad network besides: percent of packets lost, milliseconds each is held (relay/ss_relay.c)
+set -u
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROM=${SS_ROM_PATH:-D:/01Claude/GBA/ss2-nov03-w6/baserom.gba}
+TAG=$1 PORT=$2 PLAYERS=$3 WHO=$4 SECONDS_OUT=$5
+shift 5
+for setting in "$@"; do export "$setting"; done
+EXE=${SS_EXE:-$ROOT/build/dev32/ss2/ss2_dev32.exe}
+RELAY_EXE=${SS_RELAY_EXE:-$ROOT/build/relay/ss_relay.exe}
+BEFORE=${BEFORE:-20} AFTER=${AFTER:-60} FIELD=${FIELD:-23400} FAST=${FAST:-4}
+OUT=$ROOT/build/outage/$TAG
+rm -rf "$OUT"; mkdir -p "$OUT"
+# The relay counts an outage from the moment the seat was taken, which is when the game opens its link (about
+# frame 500). Up to FIELD the frames pass at FAST times the speed.
+START_MS=$(( (FIELD - 500) * 1000 / (60 * FAST) + BEFORE * 1000 ))
+FRAMES=$(( FIELD + (BEFORE + SECONDS_OUT + AFTER) * 60 ))
+OUTAGE=
+if [ "$WHO" = 9 ]; then
+    i=1
+    while [ $i -le "$PLAYERS" ]; do
+        OUTAGE="$OUTAGE$i:$START_MS:$((SECONDS_OUT * 1000)),"
+        i=$((i + 1))
+    done
+elif [ "$WHO" != 0 ]; then
+    OUTAGE=$WHO:$START_MS:$((SECONDS_OUT * 1000))
+fi
+SS_RELAY_OUTAGE=$OUTAGE SS_RELAY_LOSS=${LOSS:-0} SS_RELAY_LAG=${LAG:-0} SS_RELAY_JITTER=${JITTER:-0} "$RELAY_EXE" "$PORT" > "$OUT/relay.log" 2>&1 &
+RELAY=$!
+PIDS=
+trap 'kill $RELAY $PIDS 2>/dev/null' EXIT INT TERM
+sleep 1
+export SS_PACE=1 SS_PACE_FAST=$FIELD:$FAST SS_SKIP=0 SS_FRAMES=$FRAMES
+export SS_NET=127.0.0.1:$PORT SS_NET_ROOM=outage$TAG SS_NET_DELAY=0 SS_NET_PLAYERS=$PLAYERS
+export SS_NET_MSG_LOG=msg.log SS_ENEMY_LOG=enemy.log SS_NET_LOG=net.log SS_NET_TEST_CHATTER=${CHATTER:-20}
+# The buttons: tools/tests/net_outage_input.txt goes from the title into the field (it is the start of the
+# script the long online sessions were run with). From FIELD on every player walks half a second and stands
+# three quarters of one, right, down, left, up in turn: the report needs players that move, and that stand
+# long enough for two programs to be compared on where.
+{
+    tr ',' '\n' < "$ROOT/tools/tests/net_outage_input.txt" | awk -F: -v field="$FIELD" '$1 + 0 < field'
+    awk -v from="$FIELD" -v to="$FRAMES" 'BEGIN { split("0010 0080 0020 0040", way, " ");
+        for (f = from; f < to; f += 75) { print f ":" way[1 + (n++ % 4)]; print f + 30 ":0000" } }'
+} | tr '\n' ',' | sed 's/,$//' > "$OUT/input.txt"
+export SS_INPUT_FILE=$(cygpath -m "$OUT/input.txt" 2>/dev/null || echo "$OUT/input.txt")
+echo "tag $TAG players $PLAYERS who $WHO seconds $SECONDS_OUT before $BEFORE after $AFTER field $FIELD frames $FRAMES" > "$OUT/case.txt"
+i=1
+while [ $i -le "$PLAYERS" ]; do
+    mkdir -p "$OUT/p$i"
+    eval "program=\${SS_EXE_$i:-\$EXE}"      # SS_EXE_2=...: another build for player 2 (two versions in one session)
+    ( cd "$OUT/p$i" && exec "$program" "$ROM" > run.log 2>&1 ) &
+    eval "PID$i=$!"
+    PIDS="$PIDS $!"
+    # a second apart in the game's time, as in tools/net_test.sh
+    sleep "$(awk -v fast="$FAST" 'BEGIN { print 1 / fast }')"
+    i=$((i + 1))
+done
+i=1
+while [ $i -le "$PLAYERS" ]; do
+    eval "wait \$PID$i"
+    i=$((i + 1))
+done
+kill $RELAY 2>/dev/null
+trap - EXIT INT TERM
+# (on Windows "python3" may be a stub that only points to the store: take the first one that really runs)
+for PYTHON in python3 python /c/msys64/ucrt64/bin/python3; do
+    "$PYTHON" -c "" > /dev/null 2>&1 && break
+done
+"$PYTHON" "$ROOT/tools/net_outage_report.py" "$OUT" | tee "$OUT/report.txt"

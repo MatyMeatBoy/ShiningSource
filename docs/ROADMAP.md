@@ -367,7 +367,24 @@ What each added is in `docs/RELEASE_*.md`. In short:
       picture work, memory, logs bounded.
 - [ ] Not confirmed by a person yet: combat online with the single order, the
       music by ear, a real controller, a phone, RetroAchievements sign-in.
-- [ ] Joining a game in progress and reconnecting.
+- [x] A connection that is gone for a while (`runtime/core/netlink.c`, "a
+      connection that was gone"; nothing in the packets changed, rules stay 5).
+      Measured first (`tools/net_outage_test.sh`, the relay's
+      `SS_RELAY_OUTAGE`): any silence longer than 40 frames, below the timeout
+      too, left that player frozen on the others' screens and them on its own
+      for the rest of the session, though the messages went on; after the
+      timeout the two sides had given each other up for good. Now: a stream
+      steps over the blocks a packet no longer reaches back to; a player that
+      hears nothing at all from the relay gives nobody up; a player the others
+      gave up is taken in again when its packets return and is sent every
+      message it missed, in order; the host is waited for a minute instead of
+      15 seconds. Two and three players, a player or the host cut off for 3, 10
+      and 30 seconds: 60 of 60 sessions whole again (before: 0 of 36).
+- [ ] After a return: a change of map while a player was away (the others pass
+      the game's barrier without it; untested), a real network (the tests cut
+      the relay's forwarding on one machine), a host away for more than a
+      minute (the session still ends).
+- [ ] Joining a game in progress with a freshly started program.
 - [x] The renderer on a slow device (0.7.2): `ss_ppu_render` costs a third less
       (0.9 ms classic, 1.4 ms at 480 columns on the development PC), and a
       machine that still cannot draw every picture leaves pictures out instead

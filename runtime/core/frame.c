@@ -18,6 +18,7 @@
  *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
  *                   every live enemy (games/ss2: the five records at gUnk_030056F4). tools/enemy_compare.py
  *                   compares the files of the players of one session.
+ *   SS_PACE_FAST=F:K  with SS_PACE: the first F frames at K times the speed.
  *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
  *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
  *                   frames F to T. Off, the cost is one test per stage.
@@ -786,11 +787,27 @@ void VBlankIntrWait(void)
         {                               /* SS_PACE=1: real time without a window, for network tests */
             static int paced = -1;
             static uint32_t started;
+            static unsigned long fast_until, fast_by = 1;
+            unsigned long due;
             if (paced < 0) {
+                /* SS_PACE_FAST=F:K: the first F frames at K times the speed. A session takes five minutes to
+                 * get from the title into the field; tests of what happens there do not have to sit them out. */
+                const char *text = getenv("SS_PACE_FAST");
+                char *end = NULL;
                 paced = getenv("SS_PACE") != NULL;
+                fast_until = text ? strtoul(text, &end, 10) : 0;
+                if (end && *end == ':' && strtoul(end + 1, NULL, 10) > 1)
+                    fast_by = strtoul(end + 1, NULL, 10);
                 started = ss_plat_ticks_ms() - (uint32_t)(frame_count * 1000 / 60);
             }
-            while (paced && ss_plat_ticks_ms() - started < frame_count * 1000 / 60)
+            due = frame_count <= fast_until ? frame_count * 1000 / (60 * fast_by)
+                                            : fast_until * 1000 / (60 * fast_by) + (frame_count - fast_until) * 1000 / 60;
+            /* With SS_PACE_FAST time that was lost is not made up for (a test session waits at its start until
+             * every player is seated): the frames owed would all run in a few milliseconds, hundreds of blocks
+             * in a burst no real player produces. */
+            if (paced && fast_until && ss_plat_ticks_ms() - started > due + 100)
+                started = ss_plat_ticks_ms() - (uint32_t)due - 100;
+            while (paced && ss_plat_ticks_ms() - started < due)
                 ss_plat_net_wait(1);
         }
     }

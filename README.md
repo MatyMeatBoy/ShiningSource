@@ -89,9 +89,12 @@ display stays at the left edge.*
   slow player, and the game's one-time events (an enemy appears, an item is
   dropped or taken, a change of map) travel whole on a reliable channel instead
   of step by step. A message measured 16 ms between players on one machine.
-- A player who leaves, crashes or loses the connection stays as a standing
-  character and the others play on. (When player 1 leaves, the session ends:
-  the game gives player 1 the enemies and the items.)
+- A player who leaves or crashes stays as a standing character and the others
+  play on. (When player 1 leaves, the session ends: the game gives player 1
+  the enemies and the items.)
+- **A connection that drops comes back.** A player whose connection is gone
+  for a while (up to two minutes; the host, up to one) is taken in again and
+  receives everything it missed, in order.
 - Crossplay between Windows, Linux and Android.
 
 ![Online settings](docs/img/launcher-online.png)
@@ -141,7 +144,9 @@ and by a small group of players. Known and open at the time of writing:
   have not been confirmed in a real session yet. The release notes say which.
 - Some areas have no music yet (the port has its own implementation of the
   cartridge's sound engine, and it does not cover everything).
-- Joining a game that is already in progress is not possible.
+- Joining a game that is already in progress is not possible. Returning after
+  a lost connection is (0.7.4), tested on one machine with the relay cutting a
+  player off, not yet on a real network.
 
 The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md); the design and its
 reasons in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); measurements of

@@ -53,6 +53,15 @@ drops 10% of the forwarded packets and holds each one 120 to 160 ms, which also
 reorders them. `tools/net_test.sh` in the repository starts the relay this way
 and runs 2 to 4 players against it.
 
+```
+SS_RELAY_OUTAGE=3:90000:30000 ./ss_relay 47970
+```
+
+cuts player 3 off for 30 seconds, starting 90 seconds after its seat was first
+taken: everything from that player's address is thrown away and nothing is sent
+to it, as when its connection is gone. Several windows are separated by commas.
+`tools/net_outage_test.sh` uses it.
+
 ## Protocol
 
 Every packet starts with the same 60-byte header (little-endian):

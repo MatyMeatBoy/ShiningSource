@@ -12,6 +12,10 @@
  *
  * Testing a bad network on one machine: SS_RELAY_LOSS=percent of forwarded packets dropped, SS_RELAY_LAG=ms each
  * packet is held, SS_RELAY_JITTER=ms of extra random hold (packets then also arrive out of order).
+ * SS_RELAY_OUTAGE=player:start_ms:length_ms[,...] cuts one player off for a while, as a connection that is gone
+ * and comes back: from start_ms after that seat (1 to 4) was first taken, for length_ms, everything from that
+ * player's address is thrown away unread and nothing is sent to it. The relay then behaves as it does for any
+ * silent player (its seat is freed after 30 seconds and given back when it says HELLO again).
  *
  * Build: cc -O2 -o ss_relay ss_relay.c        (Windows: add -lws2_32)
  */
@@ -66,6 +70,17 @@ struct held {
 static struct held *held;
 static int held_count, sim_loss, sim_lag, sim_jitter;
 
+/* SS_RELAY_OUTAGE: per seat up to OUTAGES windows, counted from the moment the seat was first taken; the address
+ * that took it is the player that is cut off (its seat may be freed in between). */
+enum { OUTAGES = 4 };
+struct outage {
+    uint32_t start, length;
+};
+static struct outage outages[SEATS][OUTAGES];
+static int outage_any, outage_seated[SEATS], outage_now[SEATS];
+static uint32_t outage_origin[SEATS];
+static struct sockaddr_in outage_address[SEATS];
+
 static uint32_t ticks(void)
 {
 #ifdef _WIN32
@@ -77,9 +92,13 @@ static uint32_t ticks(void)
 #endif
 }
 
+static int cut_off(const struct sockaddr_in *address);
+
 static void forward(socket_t sock, const uint8_t *packet, int size, const struct sockaddr_in *to)
 {
     forwarded++;
+    if (cut_off(to))
+        return;
     if (sim_loss && rand() % 100 < sim_loss)
         return;
     if ((sim_lag || sim_jitter) && held && held_count < HELD) {
@@ -93,13 +112,44 @@ static void forward(socket_t sock, const uint8_t *packet, int size, const struct
     sendto(sock, (const char *)packet, size, 0, (const struct sockaddr *)to, sizeof *to);
 }
 
+static int same_address(const struct sockaddr_in *a, const struct sockaddr_in *b);
+
+/* Is that address cut off right now (SS_RELAY_OUTAGE)? Says so on the console when a window opens or closes. */
+static int cut_off(const struct sockaddr_in *address)
+{
+    uint32_t now = ticks();
+    int seat, i, cut = 0;
+    if (!outage_any)
+        return 0;
+    for (seat = 0; seat < SEATS; seat++) {
+        int inside = 0;
+        if (!outage_seated[seat])
+            continue;
+        for (i = 0; i < OUTAGES; i++)
+            if (outages[seat][i].length && now - outage_origin[seat] >= outages[seat][i].start
+                && now - outage_origin[seat] - outages[seat][i].start < outages[seat][i].length)
+                inside = 1;
+        if (inside != outage_now[seat]) {
+            outage_now[seat] = inside;
+            /* the clock is the one the players' test logs use on the same machine */
+            fprintf(stderr, "outage: seat %d %s at %u ms (clock %u)\n", seat + 1, inside ? "cut off" : "back",
+                    (unsigned)(now - outage_origin[seat]), (unsigned)now);
+            fflush(stderr);
+        }
+        if (inside && same_address(&outage_address[seat], address))
+            cut = 1;
+    }
+    return cut;
+}
+
 static void release_held(socket_t sock)
 {
     uint32_t now = ticks();
     int i = 0;
     while (i < held_count) {
         if ((int32_t)(now - held[i].due) >= 0) {
-            sendto(sock, (const char *)held[i].data, held[i].size, 0, (const struct sockaddr *)&held[i].to, sizeof held[i].to);
+            if (!cut_off(&held[i].to))
+                sendto(sock, (const char *)held[i].data, held[i].size, 0, (const struct sockaddr *)&held[i].to, sizeof held[i].to);
             held[i] = held[--held_count];
         }
         else
@@ -169,6 +219,27 @@ int main(int argc, char **argv)
     sim_jitter = getenv("SS_RELAY_JITTER") ? atoi(getenv("SS_RELAY_JITTER")) : 0;
     if (sim_lag || sim_jitter)
         held = malloc(sizeof *held * HELD);
+    if (getenv("SS_RELAY_OUTAGE")) {
+        const char *text = getenv("SS_RELAY_OUTAGE");
+        while (*text) {
+            char *end;
+            unsigned long player = strtoul(text, &end, 10), start = 0, length = 0;
+            int i;
+            if (*end == ':')
+                start = strtoul(end + 1, &end, 10);
+            if (*end == ':')
+                length = strtoul(end + 1, &end, 10);
+            for (i = 0; player >= 1 && player <= SEATS && length && i < OUTAGES; i++)
+                if (!outages[player - 1][i].length) {
+                    outages[player - 1][i].start = (uint32_t)start;
+                    outages[player - 1][i].length = (uint32_t)length;
+                    outage_any = 1;
+                    fprintf(stderr, "outage: seat %lu will be cut off from %lu ms after it joined, for %lu ms\n", player, start, length);
+                    break;
+                }
+            text = *end == ',' ? end + 1 : "";
+        }
+    }
     if (sim_loss || sim_lag || sim_jitter)
         fprintf(stderr, "simulating a bad network: %d%% loss, %d ms lag, %d ms jitter\n", sim_loss, sim_lag, sim_jitter);
     sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -215,6 +286,8 @@ int main(int argc, char **argv)
         }
         if (size < HEADER || size > MAX_PACKET || rd32(packet) != MAGIC)
             continue;
+        if (cut_off(&from))
+            continue;                               /* SS_RELAY_OUTAGE: this player's connection is "gone" */
         if (packet[4] == T_PING) {                  /* echo: lets a player measure its way to the relay */
             sendto(sock, (const char *)packet, HEADER, 0, (struct sockaddr *)&from, sizeof from);
             continue;
@@ -240,6 +313,11 @@ int main(int argc, char **argv)
                 room->players++;
                 room->seat[seat].address = from;
                 note("joined", room, seat);
+                if (outage_any && !outage_seated[seat]) {
+                    outage_seated[seat] = 1;
+                    outage_origin[seat] = ticks();
+                    outage_address[seat] = from;
+                }
             }
             room->seat[seat].address = from;        /* follows a player whose router changed the mapping */
             room->seat[seat].heard = now;
