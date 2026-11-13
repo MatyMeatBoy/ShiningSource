@@ -25,6 +25,7 @@ enum { KEY_A = 0x001, KEY_B = 0x002, KEY_START = 0x008 };
 enum { IDLE, PROMPT, VOTING, FADE_OUT, SKIPPING, FADE_IN };
 enum { FADE_STEP = 13, PROMPT_FRAMES = 180, SKIP_LIMIT = 36000, ONLINE_LIMIT = 3600 };
 
+uint32_t ss_frame_hash(void);   /* frame.c: a hash of the video state */
 void sub_08086860(void);        /* TaskPlayStoryIntroduction */
 void sub_08087A5C(void);        /* TaskDisplayCenteredSceneMessage */
 void sub_080887D4(void);        /* TaskPlayScriptedSpriteRouteSequence */
@@ -65,7 +66,7 @@ static int spanish(void)
 /* One frame. `held` are the buttons the player holds; the result are the buttons the game is given. */
 uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
 {
-    static int state = IDLE, timer, darkness, quiet, voted, kind;
+    static int state = IDLE, timer, darkness, quiet, voted, kind, still;
     static unsigned long frames, test_at = ~0ul;
     static uint16_t previous;
     static char line[48];
@@ -147,6 +148,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
             timer = 0;
             quiet = 0;
             kind = active;
+            still = 0;
         }
         view->darkness = darkness;
         break;
@@ -155,17 +157,23 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         unsigned long beat = online ? ss_net_label() : frames;
         /* Online the game reads the buttons once every few frames: a press of two frames in four can fall on
          * the same phase every time and look held for ever. A longer, odd rhythm cannot. */
-        /* Only the scene that was asked about is skipped: when another kind of scene follows it, or the same
-         * one does not end, the player gets the picture back instead of a dark screen. */
-        int same = online ? active == kind : active != 0;
-        game = same && (online ? beat % 14 < 7 : (beat & 3) < 2) ? KEY_A : 0;
+        int same = active != 0;         /* a story is told by scenes of several kinds, one after another: all of it is skipped */
+        game = same && (online ? beat % 10 < 5 : (beat & 3) < 2) ? KEY_A : 0;
         quiet = same ? 0 : quiet + 1;
         timer++;
         view->darkness = 255;
         view->mute = 1;
         view->present = timer % 30 == 0;        /* a black frame now and then keeps the window answering */
         view->text = spanish() ? "SALTANDO..." : "SKIPPING...";
-        if (quiet >= (active ? 2 : 20) || timer > (online ? ONLINE_LIMIT : SKIP_LIMIT)) {
+        /* Online a player can reach, before the others, a point where the game waits for them (it shows that
+         * itself). Nothing changes on the screen then: give the picture back instead of a dark wait. */
+        if (online && (timer & 7) == 0) {
+            static uint32_t seen;
+            uint32_t now = ss_frame_hash();
+            still = now == seen ? still + 8 : 0;
+            seen = now;
+        }
+        if (quiet >= 20 || timer > (online ? ONLINE_LIMIT : SKIP_LIMIT) || (online && still >= 160)) {
             state = FADE_IN;
             view->present = 1;
         }

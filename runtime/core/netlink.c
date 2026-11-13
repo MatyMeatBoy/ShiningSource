@@ -86,6 +86,8 @@ static int my_vote;
 static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_delay, quiet_windows;
 static uint32_t change_at, change_done, last_target;
 static uint32_t skip_at, skip_done;
+static const void *last_sendp;         /* the game's send block, while its link task runs */
+static uint32_t flushed_label;          /* the label whose block went out at the end of its frame, 0 if none */
 enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
 enum { DIRECT_HOLD = 30 };
 static int direct = 1;          /* the default transport; a fixed SS_NET_DELAY selects the stepped one */
@@ -696,7 +698,21 @@ void __wrap_sub_0800170C(void)
 /* The link task ended its session (called from the game through games/<game>/port/patches.json). */
 void ss_net_leave(void)
 {
+    last_sendp = NULL;
     leave();
+}
+
+/* End of a frame of the game (called from VBlankIntrWait). The game has just written its block for this frame;
+ * the link task would only pass it to MultiSioMain in the next frame, after the picture has been shown and the
+ * frame's time waited out. Sending it now takes that frame off everything the other players see of this one,
+ * and off every message handed over during the frame. The next MultiSioMain call finds its block already sent. */
+void ss_net_flush(void)
+{
+    if (configured != 1 || !synced || !last_sendp || flushed_label == frame_label)
+        return;
+    memcpy(own[frame_label % RING], last_sendp, BLOCK);
+    send_data();
+    flushed_label = frame_label;
 }
 
 /* ---- direct mode ----
@@ -809,8 +825,11 @@ uint32_t __wrap_sub_08001804(void *sendp, void *recvp)
         ss_plat_net_farewell(packet, HEADER);
         farewell_epoch = epoch;
     }
-    memcpy(own[frame_label % RING], sendp, BLOCK);
-    send_data();
+    last_sendp = sendp;
+    if (flushed_label != frame_label) {         /* not already sent at the end of the frame that wrote it */
+        memcpy(own[frame_label % RING], sendp, BLOCK);
+        send_data();
+    }
     if (direct)
         return deliver_direct(sendp, recvp);
     /* a longer delay, decided by the host, takes effect at the announced frame on every player */

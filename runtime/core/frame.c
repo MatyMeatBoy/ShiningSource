@@ -194,6 +194,7 @@ static void walk_lines(void)
 
 void VBlankIntrWait(void)
 {
+    ss_net_flush();             /* online: what this frame wrote goes out before the frame's time is waited out */
     if (frame_count == 0) {
         const char *text = getenv("SS_FRAMES");
         frame_limit = text ? strtoul(text, NULL, 10) : 0;
@@ -273,6 +274,18 @@ void VBlankIntrWait(void)
                 ss_ppu_render(pixels, width, &view);
                 ss_plat_overlay(skip.darkness, skip.text);
                 held = ss_plat_present(pixels, width);
+            } else if (ss_net_active()) {
+                /* A scene being skipped online. Alone the game runs as fast as the machine allows; with other
+                 * players it may not: the game counts its waits for them in frames, and at a thousand frames a
+                 * second every one of them runs out at once (it then reports a communication error). Twice
+                 * the normal speed is what those waits can take. */
+                static uint32_t due;
+                uint32_t now = ss_plat_ticks_ms();
+                if (now - due > 200u)
+                    due = now;
+                while ((int32_t)(ss_plat_ticks_ms() - due) < 0)
+                    ss_plat_net_wait(1);
+                due += 8;
             }
             if (input_script) {                 /* tests: the script plays the part of the player */
                 scripted_input();
@@ -290,6 +303,26 @@ void VBlankIntrWait(void)
     }
     REG_DISPSTAT &= ~1;
     REG_VCOUNT = 0;
+    {                                   /* SS_TEST_SHOP=N, SS_TEST_SHOP_KIND=K: at frame N start the game's item collection menu K (1 shop) as an event task */
+        static long shop_at = -1;
+        static uint32_t record[10];
+        void sub_08031B54(void); void sub_0803188C(void); void sub_080319F0(void); void sub_0805782C(uint32_t);
+        uint32_t sub_08000274(uint32_t, uint32_t, uint32_t);
+        if (shop_at < 0)
+            shop_at = getenv("SS_TEST_SHOP") ? (long)strtoul(getenv("SS_TEST_SHOP"), NULL, 10) : 0;
+        if (shop_at && frame_count == (unsigned long)shop_at && getenv("SS_TEST_SHOP_ONLY")) {   /* online tests: only the player whose folder holds this file */
+            FILE *mark = fopen(getenv("SS_TEST_SHOP_ONLY"), "rb");
+            if (mark) fclose(mark); else shop_at = 0;
+        }
+        if (shop_at && frame_count == (unsigned long)shop_at) {
+            int kind = getenv("SS_TEST_SHOP_KIND") ? (int)strtoul(getenv("SS_TEST_SHOP_KIND"), NULL, 10) : 1;
+            memset(record, 0, sizeof record);
+            record[2] = 0x50;
+            record[3] = kind == 1 ? (uint32_t)(uintptr_t)sub_08031B54 : kind == 5 ? (uint32_t)(uintptr_t)sub_0803188C
+                        : kind == 6 ? (uint32_t)(uintptr_t)sub_080319F0 : (uint32_t)(uintptr_t)sub_0805782C;
+            fprintf(stderr, "shop test: kind %d started, result %u%c", kind, (unsigned)sub_08000274((uint32_t)(uintptr_t)record, (uint32_t)kind, 0), 10);
+        }
+    }
     {                                   /* (after the blanking flag is cleared: the game waits for that before it writes) SS_TEST_SAVE=N: at frame N make the game save the current character, report its answer */
         static long save_at = -1;
         unsigned int sub_0807A124(void);        /* SaveCurrentCharacterSlot: 0 means written and verified */

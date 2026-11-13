@@ -114,6 +114,7 @@ void ss_net_votes(int *have, int *need) { *have = 0; *need = 1; }
 int ss_net_skip_now(void) { return 0; }
 unsigned long ss_net_label(void) { return 0; }
 void ss_net_leave(void) {}
+void ss_net_flush(void) {}
 int ss_net_msg_online(void) { return 0; }
 int ss_net_msg_send(const void *data, int size) { (void)data; (void)size; return 0; }
 int ss_net_msg_recv(int who, void *data, int capacity) { (void)who; (void)data; (void)capacity; return 0; }

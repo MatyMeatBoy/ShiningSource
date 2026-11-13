@@ -151,7 +151,7 @@ static SYSV void b_exit(int code)
     if (code == SS_EXIT_RESTART) {      /* the game reset itself: the same program again, same settings */
         STARTUPINFOA start = { sizeof start };
         PROCESS_INFORMATION made;
-        if (CreateProcessA(NULL, GetCommandLineA(), NULL, NULL, FALSE, 0, NULL, NULL, &start, &made)) {
+        if (CreateProcessA(NULL, GetCommandLineA(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &start, &made)) {
             CloseHandle(made.hThread);
             CloseHandle(made.hProcess);
         }

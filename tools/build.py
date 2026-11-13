@@ -25,6 +25,9 @@ TOOLCHAIN_HINTS = [os.environ.get("SHININGSOURCE_LLVM_MINGW", ""), "D:/01Claude/
 
 # `register T x asm("r4")` (or asm(MACRO_ARGUMENT)) only steers the original ARM compiler.
 ARM_PIN = re.compile(r'\bregister\s+([^;=(){}]*?)\s+asm\s*\(\s*(?:"(?:r\d+|sl|sb|fp|ip|lr|sp)"|[A-Za-z_]\w*)\s*\)')
+# `register T *stack asm("sp")` is different: the function addresses its original stack frame through it. Stripped, it is an
+# uninitialized (zeroed) pointer, so every such function needs a patch in port/patches.json that gives it a real frame.
+SP_PIN = re.compile(r'\bregister\s+([^;=(){}]*?)\s+asm\s*\(\s*"sp"\s*\)\s*;')
 ARM_PIN_FUNCPTR = re.compile(r'\bregister\s+([\w\s\*]*\(\s*\*\s*\w+\s*\)\s*\([^()]*\))\s+asm\s*\(\s*"(?:r\d+|sl|sb|fp|ip|lr|sp)"\s*\)')
 # asm("") with operands or clobbers emits no instruction: it is an allocation barrier for agbcc only.
 EMPTY_ASM = re.compile(r'\basm(?:\s+volatile)?\s*\(\s*""\s*(?::[^;]*?)?\)\s*;')
@@ -127,11 +130,13 @@ def prepare(game, prefix=True, abi_flags=None, variant=None, prefix_after=False,
     patch_file = ROOT / "games" / game / "port/patches.json"
     patches = json.loads(patch_file.read_text(encoding="utf-8")) if patch_file.exists() else {}
     pending = {}
+    replaced_modules = port_config(game)["runtime"]
     for sub in ("src", "include"):
         for path in sorted((src / sub).rglob("*")):
             if path.suffix not in (".c", ".h", ".inc"):
                 continue
             text = path.read_bytes().decode("utf-8", errors="replace")
+            sp_pins = {m[1] + ";" for m in SP_PIN.finditer(text)} if sub == "src" and path.stem not in replaced_modules else ()
             for label, step in PREPARE_STEPS:
                 if prefix or not label.startswith("assembler names"):
                     text = step(text)
@@ -139,6 +144,10 @@ def prepare(game, prefix=True, abi_flags=None, variant=None, prefix_after=False,
                 if text.count(patch["find"]) != 1:
                     sys.exit("%s: patch no longer applies exactly once: %s" % (path.name, patch["why"]))
                 text = text.replace(patch["find"], patch["replace"])
+            for left in sp_pins:
+                if left in text:
+                    sys.exit("%s: `%s` was pinned to the ARM stack pointer and has no frame here: it would be a null pointer. "
+                             "Add a patch to port/patches.json that points it at a local frame." % (path.name, left))
             names = hoist.get(path.stem, []) if sub == "src" else []
             found = [(n, prototype(text, n)) for n in names]
             protos = [p for _, p in found if p]

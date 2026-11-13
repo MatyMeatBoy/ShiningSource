@@ -80,6 +80,7 @@ int ss_net_msg_online(void);
 int ss_net_msg_send(const void *data, int size);
 int ss_net_msg_recv(int who, void *data, int capacity);
 int ss_net_msg_gone(int who);
+void ss_net_flush(void);       /* end of a game frame: send this frame's block now */
 /* What the next presented frame carries over the picture: black of the given strength and one line of text
  * (capital letters, digits and ? = / : . only). */
 void ss_plat_overlay(int darkness, const char *text);

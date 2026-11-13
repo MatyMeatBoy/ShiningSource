@@ -673,8 +673,12 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
 
 static std::string launch_error;
 
+static bool launched;            /* the game was started: the launcher's work is done and it closes */
+static Uint64 saved_at;          /* when "Save settings" was last pressed, for its short answer */
+
 static void play(const Game &game)
 {
+    save_settings();            /* always, whether or not the player pressed "Save settings" */
     std::string host = folder + game.host, rom = setting((std::string("rom_") + game.id).c_str());
     std::string command = "\"" + host + "\" \"" + rom + "\"";
     STARTUPINFOA startup = {};
@@ -704,12 +708,14 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_RA_SUBMIT", setting("ra_submit", "0") == "1" ? "1" : nullptr);
     startup.cb = sizeof startup;
     launch_error.clear();
-    if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process)) {
+    /* no console window beside the game: its messages go to the files it writes */
+    if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, folder.c_str(), &startup, &process)) {
         launch_error = text("The game program could not be started: ", "No se pudo iniciar el programa del juego: ") + host;
         return;
     }
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
+    launched = true;
 }
 
 /* ---- interface ---- */
@@ -888,6 +894,15 @@ static void interface_frame(bool &running)
             if (ImGui::Button(text("PLAY", "JUGAR"), ImVec2(220, 54)))
                 play(game);
             ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::Button(text("Save settings", "Guardar ajustes"), ImVec2(0, 54))) {
+                save_settings();
+                saved_at = SDL_GetTicks();
+            }
+            if (saved_at && SDL_GetTicks() - saved_at < 2500) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1), "%s", text("Saved", "Guardado"));
+            }
             ImGui::SameLine();
             ImGui::TextColored(dim, "%s", setting("mode") == "classic" ? text("Classic mode", "Modo cl\xC3\xA1sico") : text("Enhanced mode", "Modo mejorado"));
             if (!cheat_list().empty()) {
@@ -1088,7 +1103,7 @@ static void interface_frame(bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.3.1", "Versión 0.3.1"));
+        ImGui::TextColored(gold, "%s", text("Version 0.4", "Versión 0.4"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
     }
     ImGui::EndChild();
@@ -1140,7 +1155,7 @@ int main(int, char **)
     bool running = true;
     const char *frames = getenv("SS_LAUNCHER_FRAMES");      /* tests: draw N frames and leave */
     long remaining = frames ? atol(frames) : -1;
-    while (running && remaining != 0) {
+    while (running && remaining != 0 && !launched) {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             ImGui_ImplSDL3_ProcessEvent(&event);
