@@ -327,6 +327,7 @@ def main():
         print("\n".join(l[-160:] for l in lines[:25]))
         sys.exit("link failed (full output in %s)" % (out / "link.log").relative_to(ROOT))
     (out / "link.log").unlink(missing_ok=True)
+    shutil.copyfile(ROOT / "runtime/web/favicon.png", out / "favicon.png")
     print("%s: %d fixed addresses as constants, %d divisions guarded, %d declarations given the real signature "
           "(%d of a function declared as a variable), %d kinds of call adapted to it, %d functions still stubbed"
           % ((out / "index.html").relative_to(ROOT), counts["addresses"], counts["divisions"], counts["declarations"] + counts["kinds"],
