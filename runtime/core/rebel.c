@@ -73,15 +73,26 @@ static void use_rebel_save(void)
 {
     static const char normal[] = "shiningsource.sav", own[] = "shiningsource_rebel.sav";
     static uint8_t bytes[0x10000];
+    static const char part[] = "shiningsource_rebel.sav.part";
     FILE *file = fopen(own, "rb");
-    if (file) {
+    int have = 0;
+    if (file) {                         /* a file cut short by a crash during the first copy does not count */
+        have = fread(bytes, 1, sizeof bytes, file) == sizeof bytes;
         fclose(file);
-    } else if ((file = fopen(normal, "rb")) != NULL) {
+    }
+    if (!have && (file = fopen(normal, "rb")) != NULL) {
         size_t got = fread(bytes, 1, sizeof bytes, file);
         fclose(file);
-        if (got == sizeof bytes && (file = fopen(own, "wb")) != NULL) {
-            fwrite(bytes, 1, sizeof bytes, file);
-            fclose(file);
+        /* written beside it and renamed when whole, so there is never half a save under the real name */
+        if (got == sizeof bytes && (file = fopen(part, "wb")) != NULL) {
+            int whole = fwrite(bytes, 1, sizeof bytes, file) == sizeof bytes;
+            whole = fclose(file) == 0 && whole;
+            if (whole) {
+                remove(own);
+                rename(part, own);
+            } else {
+                remove(part);
+            }
         }
     }
     ss_flash_set_path(own);
@@ -127,6 +138,8 @@ static void fill_purse(void)
     }
 }
 
+static uint32_t protected_player;      /* the player record whose protection bit a cheat set, 0 if none */
+
 static void apply_cheats(void)
 {
     uint32_t seat = (U32(LINK_FLAGS) & 2) ? (U32(REG_SIOCNT) >> 4) & 3 : 0;
@@ -134,8 +147,11 @@ static void apply_cheats(void)
     uint16_t most = U16(player + 0x62);
     if (!most || most > 0x7FFF)
         return;         /* no character in play: the game zeroes the maxima when it resets the players */
-    if (cheats & (CHEAT_HP | CHEAT_NODEATH))
+    if (cheats & (CHEAT_HP | CHEAT_NODEATH)) {
+        if (!(U32(player + 0x30) & 0x100000))
+            protected_player = player;  /* this cheat set the bit: it takes it back when cheats stop */
         U32(player + 0x30) |= 0x100000;
+    }
     if ((cheats & CHEAT_HP) && U16(player + 0x20) != 11)
         U16(player + 0xC4) = most;
     if (cheats & CHEAT_SP)
@@ -149,11 +165,16 @@ void ss_rebel_frame(void)
     int online, flags;
     if (!started)
         ss_rebel_start();       /* a build whose entry does not call it: the save file was already chosen */
-    online = ss_net_active();
+    /* Online for the cheats is the game's own link running, not only a session the transport has joined: the
+     * moments before the host is heard and after it left count too, because every machine must compute alike. */
+    online = ss_net_active() || (U32(LINK_FLAGS) & 2);
     flags = (rebel ? SS_RUN_REBEL : 0) | (online ? SS_RUN_ONLINE : 0);
     if (cheats && !online) {
         apply_cheats();
         flags |= SS_RUN_CHEATING;
+    } else if (protected_player) {
+        U32(protected_player + 0x30) &= ~0x100000u;     /* no protection the other players do not have */
+        protected_player = 0;
     }
     if (host_frame)
         host_frame(flags);

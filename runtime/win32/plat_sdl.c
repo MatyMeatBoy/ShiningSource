@@ -464,7 +464,7 @@ static void draw_overlay(int width, int height)
 /* ---- notices: a heading and one line, over the top of the picture for a few seconds ----
  * Used for achievements (runtime/achievements). They wait in a short queue, so two unlocked in the same frame are
  * both read. Time is counted in frames shown. A line longer than the picture slides to its end while it shows. */
-enum { NOTICE_FRAMES = 300, NOTICE_FADE = 20, NOTICE_QUEUE = 4, NOTICE_ICON = 20, NOTICE_ICON_MAX = 128 };
+enum { NOTICE_FRAMES = 300, NOTICE_FADE = 20, NOTICE_QUEUE = 16, NOTICE_ICON = 20, NOTICE_ICON_MAX = 128 };
 struct notice { char heading[48], text[96]; int rebel, icon_size; uint32_t *icon; };    /* icon: square, ARGB, own copy */
 static struct notice notices[NOTICE_QUEUE];
 static int notice_count, notice_age;

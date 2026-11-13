@@ -211,7 +211,11 @@ static void account_start(void)
     ra = KhRaCreate(folder_utf8, read_memory, NULL, pretend ? test_transport : NULL);
     if (!ra)
         return;
-    if (pretend || !scripted)
+    /* Unlocks are sent to the account only when the player asked for it (SS_RA_SUBMIT=1, a switch in the
+     * launcher). RetroAchievements counts unlocks from the programs it has approved, the set was written for the
+     * cartridge in an emulator and has not been checked against this port, and an unlock on an account cannot be
+     * taken back. Without the switch the set is still evaluated and kept in the local record. */
+    if (pretend || (!scripted && getenv("SS_RA_SUBMIT") && getenv("SS_RA_SUBMIT")[0] == '1'))
         KhRaStartOfficial(ra, NULL, 0);         /* the whole set; unlocks are submitted, softcore */
     if (pretend && getenv("SS_RA_TEST_LOGIN")) {
         KhRaSetEnabled(ra, 1);
@@ -387,8 +391,12 @@ static void port_frame(int run_flags)
     uint16_t most = U16(player + 0x62), health = U16(player + 0xC4);
     int held = 0, met[SS_PORT_COUNT] = { 0 };
 
-    if (run_flags & SS_RUN_ONLINE)
-        online_frames++;
+    if (run_flags & SS_RUN_ONLINE) {
+        /* with somebody: two or more of the link's connected bits (the game's link state, bits 8 to 11) */
+        uint32_t state = *(const uint32_t *)(uintptr_t)0x03002730u, seats = (state >> 8) & 15;
+        if (seats & (seats - 1))
+            online_frames++;
+    }
     if (!local_list || frames % 30 || !most || most > 0x7FFF || shared < SS_EWRAM || shared > SS_EWRAM + 0x40000 - 0xCA4)
         return;                 /* twice a second is enough, and only with a character in play */
     level = U32(shared + 0x20) + 1;
@@ -410,7 +418,7 @@ static void port_frame(int run_flags)
     met[SS_PORT_FULL_PACK] = held == 25;
     met[SS_PORT_CLOSE_CALL] = most >= 20 && health > 0 && health <= most / 10 && U16(player + 0x20) != 11;
     met[SS_PORT_STURDY] = most >= 200;
-    met[SS_PORT_ONLINE] = online_frames >= 5 * 60 * 60;
+    met[SS_PORT_ONLINE] = online_frames >= 5 * 60 * 60;        /* counted only with a companion, see below */
     for (i = 0; i < SS_PORT_COUNT; i++)
         if (met[i])
             local_unlock(&local_list[set_total + i]);

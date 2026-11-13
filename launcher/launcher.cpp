@@ -607,6 +607,19 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
         ImGui::SameLine();
         if (ImGui::Button(text("Sign out", "Cerrar sesi\xC3\xB3n")))
             KhRaLogout(ra);
+        {
+            /* off unless the player turns it on: an unlock on the account cannot be taken back, and the set was
+             * written for the cartridge in an approved emulator, not checked against this port */
+            bool submit = setting("ra_submit", "0") == "1";
+            if (ImGui::Checkbox(text("Send my unlocks to this account", "Enviar mis logros a esta cuenta"), &submit)) {
+                settings["ra_submit"] = submit ? "1" : "0";
+                save_settings();
+            }
+            ImGui::TextWrapped("%s", text("Off: the list is still followed while you play and kept on this PC. On: unlocks are sent as softcore. "
+                                          "RetroAchievements only counts programs it has approved, and this port is not one of them yet: use it at your own judgement.",
+                                          "Desactivado: la lista se sigue igualmente mientras juegas y se guarda en este PC. Activado: los logros se env\xC3\xADan como softcore. "
+                                          "RetroAchievements solo cuenta los programas que ha aprobado y este port a\xC3\xBAn no lo es: \xC3\xBAsalo bajo tu criterio."));
+        }
     } else {
         ImGui::TextWrapped("%s", text("Sign in with your RetroAchievements account to see this game's achievements.",
                                       "Inicia sesi\xC3\xB3n con tu cuenta de RetroAchievements para ver los logros de este juego."));
@@ -688,6 +701,7 @@ static void play(const Game &game)
      * the cheats of a Rebel run */
     SetEnvironmentVariableA("SS_RA_DIR", folder.substr(0, folder.size() - 1).c_str());
     SetEnvironmentVariableA("SS_CHEATS", cheat_list().empty() ? nullptr : cheat_list().c_str());
+    SetEnvironmentVariableA("SS_RA_SUBMIT", setting("ra_submit", "0") == "1" ? "1" : nullptr);
     startup.cb = sizeof startup;
     launch_error.clear();
     if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process)) {
