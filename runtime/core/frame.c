@@ -229,7 +229,7 @@ static void finish_picture(uint32_t *pixels, int width)
         }
         if (!smooth)
             continue;
-        if (now != a && now == b) other = a;                            /* A B A */
+        if (now != a && now == b && a == c) other = a;                  /* B A B A: it has kept doing it */
         else if (now != a && a == b && now == c) other = a;             /* A B B A */
         else if (now == a && now != b && b == c && now == d) other = b; /* A A B B A A */
         if (other != now && (other >> 24))

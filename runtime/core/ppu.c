@@ -219,6 +219,8 @@ static int obj_box(const uint16_t *e, int *x, int *y)
  * still recognised while the view moves: on the screen it shifts by what the camera moved. Sprites that do not
  * belong to the world (the status display) stay put, so both places are tried. */
 static int camera_history[4][2];
+/* how far a sprite of the last frame that is drawn again has moved on by now, in pixels (see find_flicker) */
+static int8_t gone_dx[128], gone_dy[128];
 
 static int obj_in(const uint16_t *e, int from, int in)
 {
@@ -234,9 +236,9 @@ static int obj_in(const uint16_t *e, int from, int in)
         if (((o[0] ^ e[0]) & 0xC000) || ((o[1] ^ e[1]) & 0xC000) || ((o[2] ^ e[2]) & 0xFC00) || !obj_box(o, &x2, &y2))
             continue;
         if (x2 - x <= 8 && x - x2 <= 8 && y2 - y <= 8 && y - y2 <= 8)
-            return 1;
+            return j + 1;
         if (x2 - x - dx <= 8 && x + dx - x2 <= 8 && y2 - y - dy <= 8 && y + dy - y2 <= 8)
-            return 1;
+            return j + 1;
     }
     return 0;
 }
@@ -261,7 +263,18 @@ static void find_flicker(void)
     for (i = 0; i < 128; i++) {
         const uint16_t *now = oam_history[0][i], *last = oam_history[1][i];
         flicker_here[i] = obj_box(now, &x, &y) && !obj_in(now, 0, 1) && obj_in(now, 0, 2);
-        flicker_gone[i] = obj_box(last, &x, &y) && !obj_in(last, 1, 0) && !obj_in(last, 1, 2) && obj_in(last, 1, 3);
+        flicker_gone[i] = 0;
+        if (obj_box(last, &x, &y) && !obj_in(last, 1, 0) && !obj_in(last, 1, 2)) {
+            int before = obj_in(last, 1, 3), x3, y3;
+            if (before && obj_box(oam_history[3][before - 1], &x3, &y3)) {
+                /* It was here two frames before the last one too, so it moves (with its character, with the
+                 * camera) by half of that difference a frame, and that is where its copy belongs now. Drawn
+                 * where it was, the copy of anything that moves trails a step behind: a blur. */
+                flicker_gone[i] = 1;
+                gone_dx[i] = (int8_t)((x - x3) / 2);
+                gone_dy[i] = (int8_t)((y - y3) / 2);
+            }
+        }
     }
 }
 
@@ -368,13 +381,9 @@ static void sprites(int y)
     memset(line_ghost, 0, sizeof line_ghost);
     for (i = 127; i >= 0; i--) {
         if (flicker_gone[i]) {
-            /* where it would be now: a sprite of the world moved on the screen by what the camera moved */
             uint16_t a0 = oam_history[1][i][0], a1 = oam_history[1][i][1];
-            int moved_x = camera_history[1][0] - camera_history[0][0], moved_y = camera_history[1][1] - camera_history[0][1];
-            if (((oam_history[1][i][2] >> 10) & 3) != 0 && moved_x > -16 && moved_x < 16 && moved_y > -16 && moved_y < 16) {
-                a0 = (uint16_t)((a0 & 0xFF00) | ((a0 + moved_y) & 0xFF));
-                a1 = (uint16_t)((a1 & 0xFE00) | ((a1 + moved_x) & 0x1FF));
-            }
+            a0 = (uint16_t)((a0 & 0xFF00) | ((a0 + gone_dy[i]) & 0xFF));
+            a1 = (uint16_t)((a1 & 0xFE00) | ((a1 + gone_dx[i]) & 0x1FF));
             sprite(y, a0, a1, oam_history[1][i][2], i, 2);
         }
         sprite(y, OAM[i * 4], OAM[i * 4 + 1], OAM[i * 4 + 2], i, flicker_here[i]);
