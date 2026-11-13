@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShiningSource</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #0a1c26; color: #f4f4ea; font-family: system-ui, sans-serif; }
+  #start { max-width: 34rem; margin: 0 auto; padding: 2rem 1rem; }
+  h1 { color: #e8a838; font-weight: 600; margin: 0 0 0.5rem; }
+  p { line-height: 1.5; color: #c8ced8; }
+  label { display: inline-block; margin-top: 1rem; padding: 0.7rem 1.2rem; border: 2px solid #e8a838; cursor: pointer; }
+  input { display: none; }
+  #status { margin-top: 1rem; color: #8ca8ac; min-height: 1.5em; }
+  canvas { display: none; width: 100vw; height: 100vh; object-fit: contain; image-rendering: pixelated; background: #000; }
+</style>
+</head>
+<body>
+<div id="start">
+  <h1>ShiningSource</h1>
+  <p>Native port of Shining Soul II, running in your browser. The game is not included: choose your own
+     cartridge dump (Europe). The file stays on your device; nothing is uploaded.</p>
+  <label>Choose ROM...<input id="rom" type="file" accept=".gba"></label>
+  <div id="status"></div>
+  <p>Keys: arrows, X = A, Z = B, C = L, V = R, Enter = Start, right Shift = Select.</p>
+</div>
+<canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas>
+<script>
+  var status = document.getElementById('status');
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    print: function (text) { console.log(text); },
+    printErr: function (text) { console.log(text); },
+    setStatus: function (text) { if (text) status.textContent = text; }
+  };
+  document.getElementById('rom').addEventListener('change', function (event) {
+    var file = event.target.files[0];
+    if (!file) return;
+    file.arrayBuffer().then(function (buffer) {
+      Module.FS.writeFile('/rom.gba', new Uint8Array(buffer));     // the program is waiting for this file
+      document.getElementById('start').style.display = 'none';
+      Module.canvas.style.display = 'block';
+      Module.canvas.focus();
+    });
+  });
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

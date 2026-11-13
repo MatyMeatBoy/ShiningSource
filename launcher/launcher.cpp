@@ -434,7 +434,7 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
-    bool online = setting("online", "0") == "1";
+    bool online = setting("online", "1") == "1";
     SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_DELAY", online && setting("delay_auto", "1") == "0" ? setting("delay", "6").c_str() : nullptr);
@@ -761,7 +761,7 @@ static void interface_frame(bool &running)
             ImGui::BulletText("%s", SDL_GetGamepadNameForID(pads[i]));
         SDL_free(pads);
     } else if (page == 4) {
-        bool online = setting("online", "0") == "1";
+        bool online = setting("online", "1") == "1";
         int delay = atoi(setting("delay", "6").c_str());
         char room[32], server[96];
         snprintf(room, sizeof room, "%s", setting("room", "shining").c_str());

@@ -3,7 +3,8 @@
  * Draws one frame from the video registers, palette, VRAM and OAM into a 32-bit buffer. Implemented: text
  * backgrounds (modes 0-2), affine background 2 (modes 1-2) and 3 (mode 2), regular and affine sprites,
  * priorities, the two windows and the sprite window, alpha blending and brightness fades.
- * Whole-frame rendering for now: effects that change registers per scanline are a later step.
+ * Registers that the game changes at a scanline (its line-match interrupt, see frame.c) take effect from that
+ * line on: each line is drawn with the registers as they were on it.
  *
  * Wide view. The picture can be wider than the console's 240 pixels (struct ss_view). A background can be given
  * its full source map, so the extra columns show real scenery instead of the 256-pixel hardware ring; the
@@ -252,10 +253,11 @@ static int inside(int low, int high, int value)
 
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
 {
-    uint16_t dispcnt = IO16(0), bldcnt = IO16(0x50);
-    int mode = dispcnt & 7, eva = IO16(0x52) & 31, evb = (IO16(0x52) >> 8) & 31, evy = IO16(0x54) & 31;
-    int windows = dispcnt & 0xE000, y, X, n;
+    uint16_t dispcnt, bldcnt;
+    int mode, eva, evb, evy, windows, y, X, n;
     int prio[4], enabled[4];
+    uint8_t end_of_frame[SS_LINE_REGISTERS];
+    int per_line = ss_line_registers(0) != NULL;
 
     if (requested) {
         view = *requested;
@@ -266,15 +268,23 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     if (!view.hud_right) view.hud_right = view.width;
     if (view.width < W) view.width = W;
     if (view.width > MAXW) view.width = MAXW;
-    if (eva > 16) eva = 16;
-    if (evb > 16) evb = 16;
-    if (evy > 16) evy = 16;
-    for (n = 0; n < 4; n++) {
-        prio[n] = IO16(0x08 + n * 2) & 3;
-        enabled[n] = (dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
-    }
+    memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     for (y = 0; y < H; y++) {
         uint32_t *out = pixels + y * pitch_pixels;
+        if (per_line)
+            memcpy((void *)(uintptr_t)SS_IO, ss_line_registers(y), SS_LINE_REGISTERS);
+        if (y == 0 || per_line) {
+            dispcnt = IO16(0); bldcnt = IO16(0x50);
+            mode = dispcnt & 7; eva = IO16(0x52) & 31; evb = (IO16(0x52) >> 8) & 31; evy = IO16(0x54) & 31;
+            windows = dispcnt & 0xE000;
+            if (eva > 16) eva = 16;
+            if (evb > 16) evb = 16;
+            if (evy > 16) evy = 16;
+            for (n = 0; n < 4; n++) {
+                prio[n] = IO16(0x08 + n * 2) & 3;
+                enabled[n] = (dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
+            }
+        }
         if (dispcnt & 0x80) {
             for (X = 0; X < view.width; X++) out[X] = 0xFFFFFFFFu;
             continue;
@@ -343,4 +353,6 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
             out[X] = to_rgb(top_colour);
         }
     }
+    if (per_line)
+        memcpy((void *)(uintptr_t)SS_IO, end_of_frame, sizeof end_of_frame);
 }

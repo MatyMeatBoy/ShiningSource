@@ -96,6 +96,15 @@ void ss_co_delete(void *coroutine)
     free(co);
 }
 
+/* ---- the cartridge's division helpers ----
+ * The game's own divisions are compiled inline (tools/division_ir.py gives them the cartridge's results); these
+ * names remain in the table of functions the ROM's data can point to. Same contract: zero for a zero divisor,
+ * the dividend for the most negative number divided by -1. */
+int __divsi3(int a, int b) { return b == 0 ? 0 : (b == -1 ? (int)(0u - (unsigned)a) : a / b); }
+int __modsi3(int a, int b) { return b == 0 || b == -1 ? 0 : a % b; }
+unsigned __udivsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a / b; }
+unsigned __umodsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a % b; }
+
 /* ---- no network in a browser ---- */
 
 int ss_net_active(void) { return 0; }

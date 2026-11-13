@@ -38,6 +38,10 @@ struct ss_view {
 
 /* Draw the current frame into 32-bit ARGB pixels, `view->width` wide (240 when view is NULL). */
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *view);
+/* The video registers as they were on scanline y of the frame being shown, or NULL when the game changed
+ * nothing during the frame (then the registers themselves are the whole frame's). */
+enum { SS_LINE_REGISTERS = 0x58 };
+const uint8_t *ss_line_registers(int y);
 /* Shining Soul engine: describe the field scene's maps for a picture `width` wide. 0 if not a field scene. */
 int ss_field_view(struct ss_view *view, int width);
 

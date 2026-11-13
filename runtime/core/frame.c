@@ -158,6 +158,40 @@ static void dump_video(void)
     }
 }
 
+/* The picture's lines. The game can ask for an interrupt when the console reaches a line (the description that
+ * scrolls across the character selection moves its background only for its own lines that way). The lines
+ * are walked here, after the vertical-blank handler as on the console; the handler runs at its line and the
+ * registers of every line are kept for the renderer. This runs with or without a window: the handler is game
+ * code, and every player must run the same. */
+static uint8_t line_registers[SS_SCREEN_H][SS_LINE_REGISTERS];
+static int lines_vary;
+
+const uint8_t *ss_line_registers(int y)
+{
+    return lines_vary ? line_registers[y] : NULL;
+}
+
+static void walk_lines(void)
+{
+    int y;
+    lines_vary = 0;
+    if (!(REG_DISPSTAT & 0x0020))
+        return;
+    for (y = 0; y < SS_SCREEN_H; y++) {
+        REG_VCOUNT = (uint16_t)y;
+        if ((REG_DISPSTAT & 0x0020) && (REG_DISPSTAT >> 8) == y) {
+            REG_DISPSTAT |= 4;
+            ss_raise_interrupt(0x0004);
+            lines_vary = 1;
+        } else {
+            REG_DISPSTAT &= ~4;
+        }
+        memcpy(line_registers[y], (const void *)(uintptr_t)SS_IO, SS_LINE_REGISTERS);
+    }
+    REG_DISPSTAT &= ~4;
+    REG_VCOUNT = 160;
+}
+
 void VBlankIntrWait(void)
 {
     if (frame_count == 0) {
@@ -191,6 +225,7 @@ void VBlankIntrWait(void)
     REG_DISPSTAT |= 1;                  /* in vertical blank */
     if (REG_DISPSTAT & 0x0008)
         ss_raise_interrupt(0x0001);
+    walk_lines();
     frame_count++;
     if (dump_at && frame_count == dump_at)
         dump_video();

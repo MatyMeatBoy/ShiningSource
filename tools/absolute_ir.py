@@ -10,7 +10,8 @@ such a variable is removed and every use of it becomes `inttoptr (i32 ADDRESS to
 """
 import re
 
-DECLARATION = re.compile(r'^@(?:"((?:[^"\\]|\\.)+)"|([\w.$]+)) = external [^\n]*$', re.M)
+# LLVM writes a name without quotes when it only has letters, digits and - $ . _ ("gUnk_03005DDC-28" included)
+DECLARATION = re.compile(r'^@(?:"((?:[^"\\]|\\.)+)"|([-\w.$]+)) = external [^\n]*$', re.M)
 
 
 def lower(text, resolve):
@@ -32,7 +33,7 @@ def lower(text, resolve):
     text = "\n".join(lines)
     for raw, address in sorted(replaced.items(), key=lambda item: -len(item[0])):
         constant = "inttoptr (i32 %d to ptr)" % (address if address < 0x80000000 else address - 0x100000000)
-        if re.fullmatch(r'[\w.$]+', raw):
-            text = re.sub(r'@%s(?![\w.$])' % re.escape(raw), constant, text)
+        if re.fullmatch(r'[-\w.$]+', raw):
+            text = re.sub(r'@%s(?![-\w.$])' % re.escape(raw), constant, text)
         text = text.replace('@"%s"' % raw, constant)
     return text, len(replaced)

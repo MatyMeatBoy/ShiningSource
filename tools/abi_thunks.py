@@ -68,7 +68,7 @@ def measure(cc, flags, include, path, text, types):
     sizes = {}
     for i, t in enumerate(types):
         # Mach-O prefixes the symbol with an underscore
-        m = re.search(r'^_?ss_size_probe_%d:\s*\n\s*\.(?:long|int)\s+(\d+)' % i, done.stdout, re.M)
+        m = re.search(r'^_?ss_size_probe_%d:\s*\n\s*\.(?:long|int32|int)\s+(\d+)' % i, done.stdout, re.M)
         if m:
             sizes[t] = int(m[1])
     return sizes

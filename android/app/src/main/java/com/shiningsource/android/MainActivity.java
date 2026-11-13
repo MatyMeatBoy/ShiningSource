@@ -112,7 +112,7 @@ public class MainActivity extends Activity {
         online = new CheckBox(this);
         online.setText(text("Play online (2 to 4 players)", "Jugar en línea (2 a 4 jugadores)"));
         online.setTextColor(Color.WHITE);
-        online.setChecked(saved.getBoolean("online", false));
+        online.setChecked(saved.getBoolean("online", true));
         page.addView(online);
         room = field(text("Room (the same for everyone)", "Sala (la misma para todos)"), saved.getString("room", "shining"), false, page);
         delay = field(text("Delay in frames, the host decides. 0 = automatic (recommended)",
