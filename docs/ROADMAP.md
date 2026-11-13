@@ -275,7 +275,7 @@ Open:
 - [x] HUD at the edges: the top 16 lines (backgrounds and sprites) are split in
       the middle and each half goes to its edge of the visible picture.
 - [x] HUD scale option (draw the HUD layer larger on big windows). Off by
-      default (`SS_HUD_SCALE=1`, `hud_scale=1` in `shiningsource.ini`, "Larger
+      default (`SS_HUD_SCALE=1`, `hud_scale=1` in `shiningsource.ini`, "Experimental: larger
       status display" in the options menu and on the launcher's Video page;
       enhanced mode only). The renderer leaves the status display out of the
       picture and hands it over as a layer of 240 x 56 pixels (`ss_ppu_hud`);

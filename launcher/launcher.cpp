@@ -1207,7 +1207,7 @@ static void interface_frame(bool &running)
                                       "En las escenas de campo las columnas extra muestran m\xC3\xA1s del mapa real; los men\xC3\xBAs y escenas de historia conservan la imagen original, centrada. Nada se estira."));
         {
             bool hud = setting("hud_scale", "0") == "1";
-            if (ImGui::Checkbox(text("Larger status display (HP, SP, Soul and the L and R menus)", "Indicadores m\xC3\xA1s grandes (HP, SP, Soul y los men\xC3\xBAs L y R)"), &hud)) {
+            if (ImGui::Checkbox(text("Experimental: larger status display (HP, SP, Soul and the L and R menus)", "Experimental: indicadores m\xC3\xA1s grandes (HP, SP, Soul y los men\xC3\xBAs L y R)"), &hud)) {
                 settings["hud_scale"] = hud ? "1" : "0";
                 save_settings();
             }
@@ -1402,7 +1402,7 @@ static void interface_frame(bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.8.1", "Versi\xC3\xB3n 0.7.4"));
+        ImGui::TextColored(gold, "%s", text("Version 0.8.4", "Versi\xC3\xB3n 0.7.4"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
     }
     ImGui::EndChild();

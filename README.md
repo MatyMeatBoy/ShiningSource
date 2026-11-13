@@ -66,6 +66,8 @@ Each release's notes say what was checked and, just as plainly, what was not.
 - Where a map ends beside the view, the picture fades into black; around a
   dark screen (a fade, a loading screen) the sides darken with it.
 - VSync, variable refresh (G-Sync / FreeSync) or neither.
+- Experimental, off by default: the status display drawn larger on a big
+  window.
 - A machine that cannot draw every picture in time leaves pictures out, never
   game time: the game and its sound keep their speed.
 

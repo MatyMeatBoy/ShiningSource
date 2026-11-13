@@ -1304,7 +1304,7 @@ static const char *item_label(int item)
         { "Border style", "Aspecto del borde" }, { "Sides", "Lados" }, { "Full screen", "Pantalla completa" }, { "VSync", "VSync" },
         { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
         { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
-        { "Larger status display", "Indicadores m\xC3\xA1s grandes" },
+        { "Experimental: larger status", "Experimental: indicadores grandes" },
         { "Quit game", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)
@@ -1890,6 +1890,7 @@ static uint16_t read_buttons(void)
  * no layer for them. A window too small for a larger display (scale 1, or the classic mode) gets the picture
  * whole, as with the option off. */
 static int hud_asked, hud_have;         /* the core was asked for the layer; the frame at hand came with one */
+static int hud_failed;                  /* the layer could not be put in its texture: the picture stays whole from then on */
 
 /* The size of one pixel of the status display, in window pixels, when the picture is `view` columns wide and one
  * of its pixels is `scale` window pixels. */
@@ -1906,12 +1907,19 @@ static void draw_hud(const SDL_FRect *inside, int view)
     float by;
     SDL_FRect from, to;
 
-    if (!SDL_GetCurrentRenderOutputSize(renderer, &out_w, &out_h))
+    /* The core leaves the status display out of the picture only while this side can draw it: without the
+     * texture, or once an upload failed, the picture is asked for whole again, so the display is never lost. */
+    if (!SDL_GetCurrentRenderOutputSize(renderer, &out_w, &out_h) || view < 1) {
+        if (hud_asked) {
+            hud_asked = 0;
+            ss_frame_set_hud(0);
+        }
         return;
+    }
     scale = out_h / SS_SCREEN_H < out_w / view ? out_h / SS_SCREEN_H : out_w / view;
     if (scale < 1)
         scale = 1;
-    wanted = option_hud && !classic && hud_scale(view, scale) > scale;
+    wanted = option_hud && !classic && hud_texture && !hud_failed && hud_scale(view, scale) > scale;
     if (wanted != hud_asked) {          /* the picture after this one comes with the layer, or whole again */
         hud_asked = wanted;
         ss_frame_set_hud(wanted);
@@ -2079,8 +2087,12 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         part_from = SDL_GetTicksNS();
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
     hud_have = hud != 0;
-    if (hud && hud_texture)             /* the status display's layer follows the picture (runtime.h) */
-        SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4);
+    if (hud && (!hud_texture || !SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4))) {
+        hud_have = 0;                   /* the status display's layer follows the picture (runtime.h) */
+        if (!hud_failed)
+            fprintf(stderr, "video: the status display's layer could not be drawn (%s); the option is off for this run\n", SDL_GetError());
+        hud_failed = 1;
+    }
     if (part) {
         part_to = SDL_GetTicksNS();
         *part = (uint32_t)((part_to - part_from) / 1000);
