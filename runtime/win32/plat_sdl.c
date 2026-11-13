@@ -17,8 +17,10 @@ static uint64_t next_frame_ns;
 /* Who keeps time (SS_VSYNC): 1, the default, synchronises with the display; when its refresh rate is a whole
  * multiple of about 60 Hz the display itself paces the game (no tearing, no stutter; the game then runs 0.45%
  * fast and the sound is resampled by the same amount). 2 is for variable-refresh displays: the game keeps its own
- * 59.7275 Hz and the display follows. 0 turns synchronisation off. Online, every player keeps the console's own
- * rate so that nobody has to wait for anybody: the display only removes tearing. */
+ * 59.7275 Hz and the display follows. 0 turns synchronisation off. Online is no different: the players' machines
+ * do not step together (core/netlink.c, direct transport), so each may follow its own display. (Until 0.6 a
+ * network address being set kept the game on its own clock; with online on by default that was everybody, and
+ * a 60 Hz display then repeated a frame every few seconds.) */
 static int display_paced;
 
 /* ---- measurements (SS_STATS=1): how regular the frames were and how much memory the process used ----
@@ -147,7 +149,7 @@ int ss_plat_video_init(const char *title)
                 SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
         } else if (wanted == 1) {
             float rate = every > 0 ? refresh / (float)every : 0.0f;
-            if (every >= 1 && rate > 58.5f && rate < 61.5f && !getenv("SS_NET") && SDL_SetRenderVSync(renderer, every)) {
+            if (every >= 1 && rate > 58.5f && rate < 61.5f && SDL_SetRenderVSync(renderer, every)) {
                 display_paced = 1;
                 if (audio)
                     SDL_SetAudioStreamFrequencyRatio(audio, rate / 59.7275f);
