@@ -27,10 +27,10 @@ static int display_paced;
  * Each has an environment variable (the launcher and the tests set those) and a key in shiningsource.ini, the
  * launcher's settings file in the working folder ("key=value" lines). At start the variable decides when it is
  * set, else the file, else the default; the menu writes what it changes back to the file (see "options menu"). */
-enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_COUNT };
-static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip" };
+enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_COUNT };
+static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip", "qol_bars" };
 static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_FULLSCREEN", "SS_VSYNC",
-                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP" };
+                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS" };
 static char setting_file[SET_COUNT][16];        /* what the file said at start ("" if nothing) */
 static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, option_fullscreen, vsync_refused;
 static int view_forced;                         /* SS_VIEW: the enhanced picture's width, 0 to follow the window */
@@ -1240,7 +1240,7 @@ static uint16_t touch_buttons(int width)
  * reset (the textures are made again, as when the graphics device was reset). With it set, what the menu does is
  * written to stderr. */
 enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
-       ITEM_QUIT, ITEM_KINDS };
+       ITEM_BARS, ITEM_QUIT, ITEM_KINDS };
 enum { INFO_LINES = 8, INFO_BYTES = 96 };
 static int menu_row, menu_quit_armed, menu_online;
 static uint16_t menu_swallow;           /* buttons still held from the menu: not the game's until they are let go */
@@ -1280,6 +1280,7 @@ static int menu_items(int *items)
     items[n++] = ITEM_VOLUME;
     items[n++] = ITEM_SMOOTH;
     items[n++] = ITEM_SKIP;
+    items[n++] = ITEM_BARS;             /* experimental: the triggers step the L and R bars backwards */
     items[n++] = ITEM_QUIT;
     return n;
 }
@@ -1290,7 +1291,8 @@ static const char *item_label(int item)
         { "Resume", "Continuar" }, { "Screen mode", "Modo de pantalla" }, { "Border size", "Grosor del borde" },
         { "Border style", "Aspecto del borde" }, { "Sides", "Lados" }, { "Full screen", "Pantalla completa" }, { "VSync", "VSync" },
         { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
-        { "Skip scene with Start", "Saltar escena con Start" }, { "Quit game", "Salir del juego" },
+        { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
+        { "Quit game", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)
         return spanish() ? "Pulsa otra vez para salir" : "Press again to quit";
@@ -1317,6 +1319,7 @@ static const char *item_value(int item, char *buffer, size_t capacity)
     case ITEM_VOLUME: SDL_snprintf(buffer, capacity, "%d%%", option_volume); return buffer;
     case ITEM_SMOOTH: return option_smooth ? on : off;
     case ITEM_SKIP: return option_skip ? on : off;
+    case ITEM_BARS: return ss_qol_bars() ? on : off;
     }
     return NULL;
 }
@@ -1326,7 +1329,7 @@ static void setting_value(int which, char *out, size_t capacity)
 {
     int number = which == SET_BORDER ? border : which == SET_STYLE ? border_style : which == SET_SIDES ? sides_field
                  : which == SET_FULLSCREEN ? option_fullscreen : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
-                 : which == SET_SMOOTH ? option_smooth : option_skip;
+                 : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : option_skip;
     if (which == SET_MODE)
         SDL_snprintf(out, capacity, "%s", classic ? "classic" : "enhanced");
     else
@@ -1460,6 +1463,10 @@ static void item_change(int item, int step)
         option_skip = !option_skip;
         ss_skip_set_enabled(option_skip);
         which = SET_SKIP;
+        break;
+    case ITEM_BARS:
+        ss_qol_set_bars(!ss_qol_bars());
+        which = SET_BARS;
         break;
     }
     if (which < 0)
@@ -1902,7 +1909,7 @@ static int qol_bars = -1;
 int ss_qol_bars(void)
 {
     if (qol_bars < 0) {
-        const char *text = getenv("SS_QOL_BARS");
+        const char *text = setting_text(SET_BARS);      /* SS_QOL_BARS, else qol_bars of the settings file */
         qol_bars = text && text[0] == '1';
     }
     return qol_bars;
