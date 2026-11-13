@@ -25,7 +25,7 @@
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
 
 /* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
-enum { HUD_BAND = 56, HUD_SPLIT = 176, EDGE_FADE = 12 };
+enum { HUD_BAND = 56, HUD_SPLIT = 176, EDGE_FADE = 32 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
 /* per scanline, per layer: palette index + 1 (0 = transparent); sprites also carry priority and flags */
@@ -535,7 +535,11 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 if (view.hud_left > 0 && from_left >= 0 && from_left < EDGE_FADE) by = from_left;
                 if (view.hud_right < view.width && from_right >= 0 && from_right < EDGE_FADE) by = from_right;
                 if (by >= 0)
-                    top_colour = fade(top_colour, 16 - (by + 1) * 16 / (EDGE_FADE + 1), 0);
+{
+                    /* a soft curve: most of the darkening in the last few columns, a hint of it further in */
+                    int rest = EDGE_FADE - by;                  /* 1 at the inner end .. EDGE_FADE at the edge */
+                    top_colour = fade(top_colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
+                }
             }
             out[X] = to_rgb(top_colour);
         }
