@@ -106,7 +106,8 @@ display stays at the left edge.*
   a vote of all players, and the game's own exits are used so nothing runs
   fast.
 - **Launcher**: verifies your ROM (and finds one that sits beside it), screen
-  mode, sound, every key and controller button reassignable, online, language
+  mode, sound, every key and controller button reassignable, online, dated copies of your
+  save, language
   (English / Spanish). It closes when the game starts.
 - **Touch controls** on Android.
 - **Reports**: a crash or a hang on Windows writes `shiningsource_crash.log`,
@@ -146,8 +147,8 @@ and by a small group of players. Known and open at the time of writing:
 - Some areas have no music yet (the port has its own implementation of the
   cartridge's sound engine, and it does not cover everything).
 - Joining a game that is already in progress is not possible. Returning after
-  a lost connection is (0.7.4), tested on one machine with the relay cutting a
-  player off, not yet on a real network.
+  a lost connection is (0.7.4, 0.7.5), tested on one machine with the relay
+  cutting a player off, not yet on a real network.
 
 The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md); the design and its
 reasons in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); measurements of
