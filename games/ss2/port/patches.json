@@ -158,5 +158,22 @@
    "find": "    struct T47EFrame frame;\n    s32 *stack;",
    "replace": "    struct T47EFrame frame;\n    s32 *stack = (s32 *)((u32)&frame.pos[3] - 20);"
   }
+ ],
+ "code_0805D094.c": [
+  {
+   "why": "Skip scene online, story sequences told in timed dialogue windows (runtime/core/scene.c): the declaration of the question the dialogue task asks the port.",
+   "find": "struct Window0C4 { u8 pad[0x30]; u8 state; u8 index; };",
+   "replace": "int ss_skip_talk(void);\nstruct Window0C4 { u8 pad[0x30]; u8 state; u8 index; };"
+  },
+  {
+   "why": "The same: a full page of a timed window waits 141 frames before it turns. While the skip every player voted for is under way the page turns at once (only timed windows: one the player dismisses with A, or a question, still waits for the player).",
+   "find": "            if (skip != 0 && hold++ > 0x8C) {",
+   "replace": "            if (skip != 0 && (hold++ > 0x8C || (task->timer >= 0 && ss_skip_talk()))) {"
+  },
+  {
+   "why": "The same for the last page of a timed window, which counts its frames down before the window closes: it closes at once during that skip.",
+   "find": "            if (task->timer-- <= 0) {",
+   "replace": "            if (task->timer-- <= 0 || ss_skip_talk()) {"
+  }
  ]
 }
