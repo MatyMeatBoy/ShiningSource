@@ -153,12 +153,32 @@ static uint32_t rd32(const void *p)
  * SS_M4A_LOG=1        one line on stderr for every sound call the game makes (number of the frame, call,
  *                     arguments in hexadecimal), and what a start-or-continue did.
  * With SS_TEST_SONG the run ends with one line per track: notes started, notes that found no channel, the kind
- * of voice, and the energy that track put into the mix. tools/tests/m4a_audit.py does this for every song. */
+ * of voice, and the energy that track put into the mix. tools/tests/m4a_audit.py does this for every song.
+ * SS_SONG_SURVEY=f    instead of running the game, play every entry of the song table alone for f frames through
+ *                     this engine and print one line per song (survey_run below), then end the program.
+ *                     SS_SURVEY_SONGS=a-b limits it to a range. tools/tests/m4a_survey.py makes the table. */
 void m4aSongNumStart(uint16_t number);
 
-static int test_song = -1, test_at, test_log, test_checked, test_inside;
+/* Why a track ended, for the survey: the code of the command that ended it (0xB1 is FINE, the regular end), or */
+enum { END_PATT = 0x100, END_XCMD = 0x200 /* + sub-command */, END_GUARD = 0x300, END_DATA = 0x301 };
+/* Why a note found no voice */
+enum { DROP_CHANNEL, DROP_NESTED, DROP_TYPE, DROP_SAMPLE, DROP_REASONS };
+
+static int test_song = -1, test_at, test_log, test_checked, test_inside, survey_frames;
 static unsigned long main_calls;
-static struct { unsigned long notes, dropped, kinds[5]; double energy; } test_stats[MAX_PLAYERS][MAX_TRACKS];
+static struct {
+    unsigned long notes, dropped, kinds[5];
+    double energy;
+    int ended, end_reason;
+    unsigned long end_frame;
+} test_stats[MAX_PLAYERS][MAX_TRACKS];
+static struct {
+    unsigned long not_done[256];        /* commands met that the engine does not carry out, by code */
+    unsigned long commands[256];        /* every command met, by code */
+    unsigned long xcmd[256];            /* XCMD sub-commands met */
+    unsigned long drops[DROP_REASONS];
+    unsigned long flagged_voices;       /* notes on a voice whose type has bits the driver does not know (0x10, 0x20) */
+} survey;
 
 static void test_report(void)
 {
@@ -183,6 +203,9 @@ static void test_setup(void)
         test_at = text ? (int)strtol(text, NULL, 0) : 0;
         atexit(test_report);
     }
+    text = getenv("SS_SONG_SURVEY");
+    if (text && *text)
+        survey_frames = (int)strtol(text, NULL, 10);    /* base 10: the 64-bit builds' small libc has no base 0 */
     test_log = getenv("SS_M4A_LOG") != NULL;
 }
 
@@ -408,7 +431,7 @@ static void note(struct Player *p, int index, int command)
     struct Track *t = &p->tracks[index];
     const uint8_t *tone = t->tone;
     struct Channel *c = NULL;
-    int player = (int)(p - players), key, kind, priority, rhythm = 0, i, final_key;
+    int player = (int)(p - players), key, kind, priority, rhythm = 0, i, final_key, drop = DROP_CHANNEL;
     uint32_t order = track_order(player, index);
 
     t->gate = clock_table[command];
@@ -424,6 +447,7 @@ static void note(struct Player *p, int index, int command)
     if (tone[0] & 0xC0) {                           /* key split or rhythm set: the voice comes from a second group */
         int sub = (tone[0] & 0x40) ? P8(rd32(t->tone + 8))[t->key] : t->key;
         tone = P8(rd32(t->tone + 4)) + sub * 12;
+        drop = DROP_NESTED;
         if (tone[0] & 0xC0)
             goto dropped;
         if (t->tone[0] & 0x80) {
@@ -435,9 +459,11 @@ static void note(struct Player *p, int index, int command)
     priority = p->priority + t->priority;
     if (priority > 255) priority = 255;
     kind = tone[0] & 7;
+    drop = DROP_TYPE;
     if (kind) {
         if (kind > 4)
             goto dropped;
+        drop = DROP_CHANNEL;
         c = &channels[PCM_CHANNELS + kind - 1];
         if ((c->status & CH_ON) && !(c->status & CH_STOP)) {
             if (c->priority > priority || (c->priority == priority && track_order(c->player, c->track) < order))
@@ -446,6 +472,7 @@ static void note(struct Player *p, int index, int command)
     } else {
         int best_priority = priority, releasing = 0;
         uint32_t best_order = order;
+        drop = DROP_CHANNEL;
         for (i = 0; i < sound.max_channels && i < PCM_CHANNELS; i++) {
             struct Channel *x = &channels[i];
             uint32_t x_order = track_order(x->player, x->track);
@@ -475,6 +502,7 @@ static void note(struct Player *p, int index, int command)
     }
     if (!kind) {
         uint32_t wav = rd32(tone + 4);
+        drop = DROP_SAMPLE;
         if (wav < 0x08000000u || wav >= 0x0A000000u)
             goto dropped;                           /* a voice with no sample */
         channel_silence(c);                         /* the channel is taken over */
@@ -517,14 +545,21 @@ static void note(struct Player *p, int index, int command)
     t->flags &= 0xF0;
     test_stats[player][index].notes++;
     test_stats[player][index].kinds[kind]++;
+    if (tone[0] & 0x30)
+        survey.flagged_voices++;
     return;
 dropped:
     test_stats[player][index].dropped++;
+    survey.drops[drop]++;
 }
 
-static void track_fine(struct Player *p, int index)
+/* ply_fine. `why` is only for the survey: what ended the track. */
+static void track_fine(struct Player *p, int index, int why)
 {
     int i, player = (int)(p - players);
+    test_stats[player][index].ended = 1;
+    test_stats[player][index].end_reason = why;
+    test_stats[player][index].end_frame = main_calls;
     for (i = 0; i < CHANNELS; i++) {
         struct Channel *c = &channels[i];
         if (c->player == player && c->track == index) {
@@ -541,6 +576,7 @@ static void command(struct Player *p, int index, int code)
     struct Track *t = &p->tracks[index];
     int player = (int)(p - players), i, value;
 
+    survey.commands[code]++;
     switch (code) {
     case 0xB2: t->cursor = P8(rd32(t->cursor)); break;                      /* GOTO */
     case 0xB3:                                                              /* PATT */
@@ -548,7 +584,7 @@ static void command(struct Player *p, int index, int code)
             t->stack[t->pattern_level++] = t->cursor + 4;
             t->cursor = P8(rd32(t->cursor));
         } else {
-            track_fine(p, index);
+            track_fine(p, index, END_PATT);
         }
         break;
     case 0xB4:                                                              /* PEND */
@@ -621,21 +657,22 @@ static void command(struct Player *p, int index, int code)
         }
         break;
     case 0xC8: t->tune = (int8_t)(*t->cursor++ - 64); t->flags |= PITCHG; break;
-    case 0xCC: t->cursor += 2; break;                                       /* PORT: a register write, not done */
+    case 0xCC: t->cursor += 2; survey.not_done[code]++; break;                                      /* PORT: a register write, not done */
     case 0xCD:                                                              /* XCMD */
         value = *t->cursor++;
-        switch (value) {
-        case 0: memcpy(t->tone + 4, t->cursor, 4); t->cursor += 4; break;   /* xWAVE */
-        case 1: t->tone[0] = *t->cursor++; break;                           /* xTYPE */
-        case 3: t->tone[8] = *t->cursor++; break;                           /* xATTA */
-        case 4: t->tone[9] = *t->cursor++; break;                           /* xDECA */
-        case 5: t->tone[10] = *t->cursor++; break;                          /* xSUST */
-        case 6: t->tone[11] = *t->cursor++; break;                          /* xRELE */
-        case 7: t->echo_volume = *t->cursor++; break;                       /* xIECV */
-        case 8: t->echo_length = *t->cursor++; break;                       /* xIECL */
-        case 9: t->tone[2] = *t->cursor++; break;                           /* xLENG */
-        case 10: t->tone[3] = *t->cursor++; break;                          /* xSWEE */
-        default: track_fine(p, index); break;
+        survey.xcmd[value]++;
+        switch (value) {                    /* gXcmdTable: 12 entries, 0 and 3 are ply_xxx, which ends the track */
+        case 1: memcpy(t->tone + 4, t->cursor, 4); t->cursor += 4; break;   /* xWAVE */
+        case 2: t->tone[0] = *t->cursor++; break;                           /* xTYPE */
+        case 4: t->tone[8] = *t->cursor++; break;                           /* xATTA */
+        case 5: t->tone[9] = *t->cursor++; break;                           /* xDECA */
+        case 6: t->tone[10] = *t->cursor++; break;                          /* xSUST */
+        case 7: t->tone[11] = *t->cursor++; break;                          /* xRELE */
+        case 8: t->echo_volume = *t->cursor++; break;                       /* xIECV */
+        case 9: t->echo_length = *t->cursor++; break;                       /* xIECL */
+        case 10: t->tone[2] = *t->cursor++; break;                          /* xLENG */
+        case 11: t->tone[3] = *t->cursor++; break;                          /* xSWEE */
+        default: track_fine(p, index, END_XCMD + value); break;
         }
         break;
     case 0xCE: {                                                            /* EOT: the newest note of that key */
@@ -653,7 +690,7 @@ static void command(struct Player *p, int index, int code)
         break;
     }
     default:                                                                /* FINE, and the codes the engine ends on */
-        track_fine(p, index);
+        track_fine(p, index, code);
         break;
     }
 }
@@ -730,11 +767,11 @@ static void player_main(struct Player *p)
                 } else if (code >= 0x80) {
                     t->wait = clock_table[code - 0x80];
                 } else {
-                    track_fine(p, i);               /* data with no command before it */
+                    track_fine(p, i, END_DATA);     /* data with no command before it */
                     break;
                 }
                 if (guard > 20000) {                /* a stream that never rests would hang the game */
-                    track_fine(p, i);
+                    track_fine(p, i, END_GUARD);
                     break;
                 }
             }
@@ -1421,21 +1458,12 @@ void m4aSoundInit(void)
     initialised = 1;
 }
 
-void m4aSoundMain(void)
+/* One frame of the engine (SoundMain): the sequencers, the Game Boy channels, the mix. Returns the sample
+ * frames written to `buffer`. */
+static int engine_frame(int16_t *buffer)
 {
-    static int16_t buffer[2048 * 2];
     int frames, i;
 
-    if (!initialised)
-        return;
-    ss_prof(SS_PROF_SOUND, 1);
-    if (!test_checked)
-        test_setup();
-    if (test_song >= 0 && main_calls == (unsigned long)test_at) {
-        test_inside = 1;
-        m4aSongNumStart((uint16_t)test_song);
-        test_inside = 0;
-    }
     main_calls++;
     for (i = 0; i < player_count; i++) {            /* each MPlayMain calls the player opened before it first */
         if (players[i].status < 0)
@@ -1449,6 +1477,126 @@ void m4aSoundMain(void)
     frames = (int)sample_carry;
     sample_carry -= frames;
     mix(buffer, frames);
+    return frames;
+}
+
+/* The survey (SS_SONG_SURVEY=frames): every entry of the song table is started alone on a freshly initialised
+ * engine and played for that many frames; nothing reaches the sound device. One line per song on stderr:
+ *   survey song N player P tracks T/H frames F stopped S peak K power W loud L notes n dropped a/b/c/d flagged v
+ *          notdone <code:count,...> xcmd <sub:count,...> early <track:reason@frame,...> mute <track,...>
+ * tracks T of the H the header has (the player has no room for the rest); stopped: the frame the player ran out
+ * of tracks, -1 while it still plays; power: mean square of the output; loud: samples above the noise floor
+ * the run's `audio:` line uses (256); dropped: notes with no free channel / a split inside a split / a voice
+ * type the engine does not have / no sample; notdone: commands met that the engine skips; early: tracks that
+ * ended on anything but FINE (a command code in hexadecimal, PATT for a fourth nested pattern, Xn for an XCMD
+ * outside the table, GUARD, DATA); mute: tracks that started notes and put nothing into the mix. */
+static struct Player *song_player(uint16_t number, uint32_t *header);
+
+static void survey_run(void)
+{
+    static int16_t buffer[2048 * 2];
+    const char *range = getenv("SS_SURVEY_SONGS");
+    int first = 0, last = -1, number, frame, i, n, frames;
+
+    if (range && *range) {
+        char *end;
+        first = (int)strtol(range, &end, 10);
+        last = *end == '-' ? (int)strtol(end + 1, NULL, 10) : first;
+    }
+    for (number = first; last < 0 || number <= last; number++) {
+        const uint8_t *entry = gSongTable + number * 8;
+        uint32_t header = rd32(entry);
+        unsigned long loud = 0, notes = 0, dropped = 0, samples = 0;
+        double power = 0;
+        int peak = 0, stopped = -1, comma;
+        struct Player *p;
+
+        /* the table has no end mark: it is over at the first entry that is not a song header in the ROM */
+        if (header < 0x08000000u || header >= 0x0A000000u || (entry[4] | entry[5] << 8) >= MAX_PLAYERS)
+            break;
+        m4aSoundInit();
+        memset(test_stats, 0, sizeof test_stats);
+        memset(&survey, 0, sizeof survey);
+        sample_carry = sequencer_carry = 0;
+        sequencer_step = 0;
+        main_calls = 0;
+        test_song = number;
+        p = song_player((uint16_t)number, &header);
+        if (!p)
+            break;
+        start_player(p, header);
+        for (frame = 0; frame < survey_frames; frame++) {
+            frames = engine_frame(buffer);
+            for (n = 0; n < frames * 2; n++) {
+                int s = buffer[n] < 0 ? -buffer[n] : buffer[n];
+                if (s > peak) peak = s;
+                if (s > 256) loud++;
+                power += (double)s * s;
+            }
+            samples += (unsigned long)frames * 2;
+            if (stopped < 0 && p->status < 0)
+                stopped = frame;
+        }
+        for (i = 0; i < MAX_TRACKS; i++) {
+            notes += test_stats[p - players][i].notes;
+            dropped += test_stats[p - players][i].dropped;
+        }
+        fprintf(stderr, "survey song %d player %d tracks %d/%d frames %d stopped %d peak %d power %lu loud %lu notes %lu dropped %lu/%lu/%lu/%lu flagged %lu",
+                number, (int)(p - players), P8(header)[0] < p->track_count ? P8(header)[0] : p->track_count, P8(header)[0],
+                survey_frames, stopped, peak, (unsigned long)(samples ? power / samples : 0.0), loud, notes, survey.drops[DROP_CHANNEL],
+                survey.drops[DROP_NESTED], survey.drops[DROP_TYPE], survey.drops[DROP_SAMPLE], survey.flagged_voices);
+        fprintf(stderr, " notdone ");
+        for (i = 0, comma = 0; i < 256; i++)
+            if (survey.not_done[i])
+                fprintf(stderr, "%s%X:%lu", comma++ ? "," : "", i, survey.not_done[i]);
+        fprintf(stderr, "%s xcmd ", comma ? "" : "-");
+        for (i = 0, comma = 0; i < 256; i++)
+            if (survey.xcmd[i])
+                fprintf(stderr, "%s%d:%lu", comma++ ? "," : "", i, survey.xcmd[i]);
+        fprintf(stderr, "%s cmds ", comma ? "" : "-");
+        for (i = 0, comma = 0; i < 256; i++)
+            if (survey.commands[i])
+                fprintf(stderr, "%s%X:%lu", comma++ ? "," : "", i, survey.commands[i]);
+        fprintf(stderr, "%s early ", comma ? "" : "-");
+        for (i = 0, comma = 0; i < MAX_TRACKS; i++) {
+            int why = test_stats[p - players][i].end_reason;
+            if (!test_stats[p - players][i].ended || why == 0xB1)
+                continue;
+            fprintf(stderr, "%s%d:", comma++ ? "," : "", i);
+            if (why == END_PATT) fprintf(stderr, "PATT");
+            else if (why == END_GUARD) fprintf(stderr, "GUARD");
+            else if (why == END_DATA) fprintf(stderr, "DATA");
+            else if (why >= END_XCMD) fprintf(stderr, "X%d", why - END_XCMD);
+            else fprintf(stderr, "%X", why);
+            fprintf(stderr, "@%lu", test_stats[p - players][i].end_frame);
+        }
+        fprintf(stderr, "%s mute ", comma ? "" : "-");
+        for (i = 0, comma = 0; i < MAX_TRACKS; i++)
+            if (test_stats[p - players][i].notes && test_stats[p - players][i].energy == 0)
+                fprintf(stderr, "%s%d", comma++ ? "," : "", i);
+        fprintf(stderr, "%s%c", comma ? "" : "-", 10);
+    }
+    exit(0);
+}
+
+void m4aSoundMain(void)
+{
+    static int16_t buffer[2048 * 2];
+    int frames;
+
+    if (!initialised)
+        return;
+    ss_prof(SS_PROF_SOUND, 1);
+    if (!test_checked)
+        test_setup();
+    if (survey_frames > 0)
+        survey_run();
+    if (test_song >= 0 && main_calls == (unsigned long)test_at) {
+        test_inside = 1;
+        m4aSongNumStart((uint16_t)test_song);
+        test_inside = 0;
+    }
+    frames = engine_frame(buffer);
     ss_audio_push(buffer, frames);
     ss_prof(SS_PROF_SOUND, 0);
 }
@@ -1525,8 +1673,12 @@ void m4aSongNumStartOrContinue(uint16_t number)
         fprintf(stderr, "m4a   song %u on player %d: %s%s%c", number, (int)(p - players),
                 p->header != header ? "started (another song was there)" : !(p->status & 0xFFFF) ? "started (it had ended)"
                 : p->status < 0 ? "continued from its pause" : "left playing",
-                p->header == header && (p->status & 0xFFFF) && p->fade_interval ? ", and it is fading out" : "", 10);
-    if (p->header != header || !(p->status & 0xFFFF))
+                p->header == header && (p->status & 0xFFFF) && p->fade_interval ? ", and it was fading out: started again" : "", 10);
+    /* The song asked for is the one playing, and it is fading out. On the cartridge the sound engine runs in
+     * the VBlank interrupt, so a fade goes on while the game loads the next map, and by the time the map asks
+     * for its song the old one has ended: the same song then starts again. Here a map loads within one frame,
+     * the fade is still under way, and leaving it alone lets the area's music fade into silence for good. */
+    if (p->header != header || !(p->status & 0xFFFF) || (p->status >= 0 && p->fade_interval))
         start_player(p, header);
     else if (p->status < 0)
         continue_player(p);

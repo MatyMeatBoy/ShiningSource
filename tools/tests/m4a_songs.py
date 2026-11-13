@@ -18,7 +18,9 @@ NAMES = {0xB1: 'FINE', 0xB2: 'GOTO', 0xB3: 'PATT', 0xB4: 'PEND', 0xB5: 'REPT', 0
          0xCE: 'EOT', 0xCF: 'TIE'}
 ARGS = {0xBA: 1, 0xBB: 1, 0xBC: 1, 0xBD: 1, 0xBE: 1, 0xBF: 1, 0xC0: 1, 0xC1: 1, 0xC2: 1, 0xC3: 1, 0xC4: 1,
         0xC5: 1, 0xC8: 1, 0xCC: 2}
-XCMD_ARGS = {0: 4, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 2, 13: 4}
+# gXcmdTable of the driver: 1 xWAVE (a pointer), 2 xTYPE, 4..11 xATTA xDECA xSUST xRELE xIECV xIECL xLENG xSWEE;
+# 0 and 3 end the track, and the table has nothing after 11
+XCMD_ARGS = {1: 4, 2: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1}
 TYPES = {0: 'pcm', 8: 'pcm-fixed', 1: 'sq1', 2: 'sq2', 3: 'wave', 4: 'noise', 9: 'sq1', 10: 'sq2', 11: 'wave', 12: 'noise'}
 
 

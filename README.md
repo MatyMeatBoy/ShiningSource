@@ -144,8 +144,12 @@ and by a small group of players. Known and open at the time of writing:
 - Online has been played by three and four people, and each release answers
   what they found; several of those fixes come from reading the game's code and
   have not been confirmed in a real session yet. The release notes say which.
-- Some areas have no music yet (the port has its own implementation of the
-  cartridge's sound engine, and it does not cover everything).
+- Players reported areas without music. A survey of all 399 songs
+  (`tools/tests/m4a_survey.py`) found none silent and no command the sound
+  engine lacks, so the cause is in when the game asks for a song, not in how
+  it is played. One likely cause is changed after 0.7.5 (a song asked for
+  again while it was still fading out stayed silent); it was never seen
+  happening in a test, so tell us where the music is missing.
 - Joining a game that is already in progress is not possible. Returning after
   a lost connection is (0.7.4, 0.7.5), tested on one machine with the relay
   cutting a player off, not yet on a real network.

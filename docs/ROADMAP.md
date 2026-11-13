@@ -110,7 +110,7 @@ Check: run with a window and listen; headless, `SS_FRAMES=N` ends with an
 `audio:` line (sample frames produced, peak), and `SS_AUDIO_FILE=1` writes
 `ss_audio.raw` (48 kHz stereo, 16-bit).
 
-- Native m4a sequencer and mixer (`runtime/src/m4a.c`) reading the song table,
+- Native m4a sequencer and mixer (`runtime/core/m4a.c`) reading the song table,
   headers, tracks, voice groups and samples from the ROM; driven once per frame
   by the game's own `m4aSoundMain`; SDL3 audio stream (`runtime/src/video_sdl.c`).
 - Flash save file with atomic replace: done in M2.
@@ -120,11 +120,50 @@ Open:
 - [ ] Compare against the cartridge by ear and by waveform: nobody has listened
       to it yet. Likely differences: envelope timing of the synthesised
       channels, loudness balance between voices, fixed-rate samples.
-- [ ] LFO modulation (vibrato, tremolo), reverb, `MEMACC` conditionals.
-- [ ] Voice priority and the engine's channel limit (the mixer allows 48 voices
-      and steals the oldest).
-- [ ] The game reads only the player's status word today; check whether any
-      code reads other fields of `MusicPlayerInfo` or the track structures.
+- [x] LFO modulation (vibrato, tremolo), reverb, `MEMACC` conditionals, voice
+      priority and the engine's channel limit: in the engine since the rewrite
+      of 0.7 (`runtime/core/m4a.c`), after `MPlayMain`, `TrkVolPitSet`,
+      `ply_memacc`, `ply_note` and `SoundMainRAM` of the decompiled driver.
+- [x] Survey of the song table (2026-11-13): `SS_SONG_SURVEY=7200` plays each
+      of the 428 entries alone for two minutes inside the engine, without a
+      window, and `tools/tests/m4a_survey.py` makes the table. 399 entries
+      have tracks, 29 are empty. No song is silent, no track ends on anything
+      but `FINE`, no track is mute, no voice type is missing, every track fits
+      its player. The songs use FINE GOTO PATT PEND TEMPO KEYSH VOICE VOL PAN
+      BEND MOD MODT EOT and nothing else (the same from a static walk of every
+      track, `tools/tests/m4a_songs.py`): no XCMD, MEMACC, LFOS, LFODL, PRIO,
+      REPT, BENDR, TUNE or PORT anywhere. 47 songs set a reverb. Five pieces
+      of music (1, 3, 9, 13, 197) lose 72 notes in two minutes to the
+      driver's own limit of 8 sampled channels, by the driver's own rule.
+      The numbers are the same on dev32 and win64.
+- [x] `XCMD` read its sub-command one place off the driver's table
+      (`gXcmdTable`: 1 xWAVE, 2 xTYPE, 4 to 11 xATTA xDECA xSUST xRELE xIECV
+      xIECL xLENG xSWEE; 0 and 3 end the track). No song has the command, so
+      nothing audible changed.
+- [x] Game code reads no field of `MusicPlayerInfo`, of the tracks, of
+      `SoundInfo` or of the channels: it only passes the four players'
+      addresses to the library (`sub_08006B70`, `sub_08006C30`, `sub_08006E64`,
+      `sub_08006EC8` and the wrappers in `code_08006D24.c`). The status word is
+      read by the library's own `m4aSongNum*`, which the runtime replaces.
+- [ ] "Some areas have no music" is not a missing command or voice: every
+      song plays. What is left to look at is which song the game asks for and
+      when. Read in the game's code, not yet seen happening:
+      - online, `gUnk_030027D0` bit 0x20 (a player not heard for 60 link
+        frames, `code_08001A50.c`) stops the area's song, forgets it
+        (`sub_080586B4`) and holds every song start back while it is set;
+        when the link is back nothing asks for the song again until the next
+        area change. On a cable that is rare; over a network it is not.
+      - the selector `sub_0800A34C` asks for nothing in several states (the
+        prologue until enemies appear, a stage entered while its encounter
+        flag is set), on the cartridge too; in multiplayer the port sends the
+        stages through the single-player branch, which has those states.
+      - the cartridge runs the sound engine from the vertical-blank interrupt,
+        so a fade-out (`m4aMPlayFadeOut`, 32 to 160 frames) keeps going while
+        the game is busy loading; here loading takes no frames. A stage that
+        asks for the song that is still fading gets "left playing" from
+        `m4aSongNumStartOrContinue`, and the song fades away. `SS_M4A_LOG=1`
+        prints "and it is fading out" when that happens.
+- [ ] `PORT` (a raw write to a sound register) is skipped; no song has it.
 
 ## M5. 64-bit (working on Windows, 2026-11-12)
 
