@@ -6,6 +6,7 @@
  * Test controls (environment):
  *   SS_FRAMES=N     run N frames without a window, print frame hashes, exit (SS_PACE=1: at 60 frames a second)
  *   SS_QUIT=N       with a window: end the program at frame N (timed test runs; SS_STATS=1 prints the measurements)
+ *   SS_TEST_SAVE=N  at frame N call the game's save routine for the current character and print its result
  *   SS_DUMP=N       at frame N write ss_video_dump.bin (registers, palette, VRAM, OAM) and ss_frame.raw (rendered)
  *   SS_INPUT=...    scripted buttons (SS_INPUT_FILE=path reads the script from a file): "300:0001,310:0000,..." = from frame 300 hold mask 0x0001 (A), then release.
  *                   Mask bits: A B Select Start Right Left Up Down R L.
@@ -253,4 +254,12 @@ void VBlankIntrWait(void)
     }
     REG_DISPSTAT &= ~1;
     REG_VCOUNT = 0;
+    {                                   /* (after the blanking flag is cleared: the game waits for that before it writes) SS_TEST_SAVE=N: at frame N make the game save the current character, report its answer */
+        static long save_at = -1;
+        unsigned int sub_0807A124(void);        /* SaveCurrentCharacterSlot: 0 means written and verified */
+        if (save_at < 0)
+            save_at = getenv("SS_TEST_SAVE") ? (long)strtoul(getenv("SS_TEST_SAVE"), NULL, 10) : 0;
+        if (save_at && frame_count == (unsigned long)save_at)
+            fprintf(stderr, "save test: the game's own save routine returned %u (0 = saved and verified)%c", sub_0807A124(), 10);
+    }
 }
