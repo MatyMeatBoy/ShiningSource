@@ -195,5 +195,12 @@
    "find": "            if (task->timer-- <= 0) {",
    "replace": "            if (task->timer-- <= 0 || ss_skip_talk()) {"
   }
+ ],
+ "code_08009088.c": [
+  {
+   "why": "Music in multiplayer. In a game started from the multiplayer lobby the cartridge's area-music selector stops the music in every stage except the town and the first field (its second branch ends in a stop); the port lets the stages play the song they have in a single-player game (ss_music_everywhere, on unless SS_MP_MUSIC=0). Music is local to each machine: nothing the players share depends on it.",
+   "find": "void sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0) {",
+   "replace": "int ss_music_everywhere(void);\nvoid sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0 || (music != 0 && music != 12 && ss_music_everywhere())) {"
+  }
  ]
 }
