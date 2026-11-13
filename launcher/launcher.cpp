@@ -758,6 +758,8 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
 
 /* ---- start the game ---- */
 
+#include "qol.h"                    /* the "Quality of life" page: qol_page, qol_environment */
+
 static std::string launch_error;
 
 static bool launched;            /* the game was started: the launcher's work is done and it closes */
@@ -784,6 +786,7 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
+    qol_environment();          /* the experimental quality-of-life options (qol.h) */
     bool online = setting("online", "1") == "1";
     if (online && setting("connection", "official") == "host")
         start_relay();          /* hosting: the server must be there before the game looks for it */
@@ -916,9 +919,9 @@ static void interface_frame(bool &running)
     }
     ImGui::Spacing();
     ImGui::TextColored(dim, "%s", text("PAGES", "SECCIONES"));
-    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "About" };
-    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Acerca de" };
-    for (int i = 0; i < 7; i++)
+    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "Quality of life", "About" };
+    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Calidad de vida", "Acerca de" };
+    for (int i = 0; i < 8; i++)
         if (ImGui::Selectable(language ? pages_es[i] : pages_en[i], page == i))
             page = i;
     ImGui::EndChild();
@@ -1228,6 +1231,8 @@ static void interface_frame(bool &running)
         ImGui::EndDisabled();
     } else if (page == 5) {
         achievements_page(game, gold, dim, red, green);
+    } else if (page == 6) {
+        qol_page(gold, dim);
     } else {
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",

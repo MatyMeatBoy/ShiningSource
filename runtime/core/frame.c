@@ -119,6 +119,8 @@ void ss_audio_report(void)
         fclose(audio_file);
 }
 
+static uint16_t script_extra;       /* the extra buttons the script holds (core/qol.c), SS_QOL_BARS=1 only */
+
 static void scripted_input(void)
 {
     static unsigned long shift_from = ~0ul, shift_by;
@@ -191,6 +193,7 @@ static void scripted_input(void)
         }
     }
     REG_KEYINPUT = (uint16_t)(~held & 0x03FF);
+    script_extra = ss_qol_scripted(held);
 }
 
 /* SS_ENEMY_LOG (tests): the live enemies as this machine has them, sampled when the clock passes a quarter of a
@@ -476,16 +479,18 @@ void VBlankIntrWait(void)
             }
             if (input_script) {                 /* tests: the script plays the part of the player */
                 scripted_input();
-                held = (uint16_t)(~REG_KEYINPUT & 0x03FF);
+                /* the script holds the ten buttons; the extra ones may also come from the platform */
+                held = (uint16_t)((~REG_KEYINPUT & 0x03FF) | script_extra | (held & (SS_KEY_L_BACK | SS_KEY_R_BACK)));
             }
-            REG_KEYINPUT = (uint16_t)(~ss_skip_update(held, &skip) & 0x03FF);   /* the register is active low */
+            /* the platform's extra buttons become L and R here (core/qol.c); the register is active low */
+            REG_KEYINPUT = (uint16_t)(~ss_skip_update(ss_qol_keys(held), &skip) & 0x03FF);
             skip_mute = skip.mute;
         }
     } else {
         static struct ss_skip_view skip;        /* without a window the skip still plays, so tests can drive it */
         if (input_script)
             scripted_input();
-        REG_KEYINPUT = (uint16_t)(~ss_skip_update((uint16_t)(~REG_KEYINPUT & 0x03FF), &skip) & 0x03FF);
+        REG_KEYINPUT = (uint16_t)(~ss_skip_update(ss_qol_keys((uint16_t)((~REG_KEYINPUT & 0x03FF) | script_extra)), &skip) & 0x03FF);
         skip_mute = skip.mute;
         skip_fast = skip.mute;
     }

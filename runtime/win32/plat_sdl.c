@@ -1626,6 +1626,8 @@ static void test_keys(void)
 }
 
 /* The buttons the keyboard and the controller hold for the game (bit order above). */
+static uint16_t qol_buttons(const bool *state);    /* further down, with the option it belongs to */
+
 static uint16_t read_buttons(void)
 {
     const bool *state = SDL_GetKeyboardState(NULL);
@@ -1649,6 +1651,7 @@ static uint16_t read_buttons(void)
     menu_buttons(pad);
     if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
     if ((held & 0xC0) == 0xC0) held &= ~0xC0;
+    held |= qol_buttons(state);         /* experimental: the triggers, as two buttons above the console's ten */
     return held;
 }
 
@@ -1688,6 +1691,60 @@ static uint16_t show_picture(int width)
     held = touch_buttons(w);
     if (menu_open)
         draw_menu();
+    return held;
+}
+
+/* ---- quality of life, experimental: the L and R bars step backwards (core/qol.c) ----
+ * Two buttons the console does not have, reported above its ten: the left trigger (LT, L2) moves the L bar one
+ * slot backwards and the right trigger (RT, R2) the R bar. On the keyboard they are D and F, or the two SDL
+ * scancodes of SS_KEYS_QOL ("7,9"). Only reported while the option is on: SS_QOL_BARS=1 at the start, and
+ * ss_qol_set_bars while the game runs. */
+static int qol_bars = -1;
+
+int ss_qol_bars(void)
+{
+    if (qol_bars < 0) {
+        const char *text = getenv("SS_QOL_BARS");
+        qol_bars = text && text[0] == '1';
+    }
+    return qol_bars;
+}
+
+void ss_qol_set_bars(int on)
+{
+    qol_bars = on != 0;
+}
+
+static uint16_t qol_buttons(const bool *state)
+{
+    static int scancode[2] = { SDL_SCANCODE_D, SDL_SCANCODE_F }, read, pulled[2];
+    static const SDL_GamepadAxis trigger[2] = { SDL_GAMEPAD_AXIS_LEFT_TRIGGER, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER };
+    uint16_t held = 0;
+    int i;
+    if (!read) {
+        const char *text = getenv("SS_KEYS_QOL");
+        for (i = 0; text && *text && i < 2; i++) {
+            char *end;
+            long value = strtol(text, &end, 10);
+            if (end == text)
+                break;
+            if (value >= 1 && value < SDL_SCANCODE_COUNT)
+                scancode[i] = (int)value;
+            text = *end == ',' ? end + 1 : end;
+        }
+        read = 1;
+    }
+    if (!ss_qol_bars())
+        return 0;
+    for (i = 0; i < 2; i++) {
+        if (gamepad) {      /* a trigger is an axis, 0 to 32767: pulled past half, let go under a quarter */
+            int value = SDL_GetGamepadAxis(gamepad, trigger[i]);
+            pulled[i] = value > 16000 || (pulled[i] && value > 8000);
+        } else
+            pulled[i] = 0;
+        if (state[scancode[i]] || pulled[i])
+            held |= (uint16_t)(SS_KEY_L_BACK << i);
+    }
     return held;
 }
 

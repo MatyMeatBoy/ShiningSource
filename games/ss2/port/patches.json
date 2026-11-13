@@ -77,6 +77,16 @@
    "why": "Wide picture: sub_0806171C keeps the screen x of the experience number unsigned, so a number left of the console's first column is never drawn. Signed x lets it show in the left margin. Drawing only.",
    "find": "    u16 screenX,screenY;\n    u32 second;",
    "replace": "    s16 screenX; u16 screenY;\n    u32 second;"
+  },
+  {
+   "why": "Quality of life, experimental (runtime/core/qol.c): sub_080605D0 moves the L bar's selection one slot forwards on a press of L. When the port says this press is its \"backwards\" button, step forwards (slots - 1) times instead, which ends one slot back with the same wrap-around; everything after it (the weapon is activated, link message 0x83 carries its type to the other players) runs once on the result, as after that many presses. Otherwise one step, as in the game.",
+   "find": "                    if (++mgr->sel >= pl->count)\n                        mgr->sel = 0;\n                    hudSelect63(mgr->sel);",
+   "replace": "                    {\n                        extern int ss_qol_bar_back(int bar);\n                        int qolSteps = ss_qol_bar_back(0) && pl->count > 1 ? pl->count - 1 : 1;\n                        while (qolSteps-- > 0)\n                            if (++mgr->sel >= pl->count)\n                                mgr->sel = 0;\n                    }\n                    hudSelect63(mgr->sel);"
+  },
+  {
+   "why": "Quality of life, experimental: the same for the R bar (quick items) in sub_08060E44, whose selection only this machine keeps.",
+   "find": "                if (++mgr->sel >= pl->f78)\n                    mgr->sel = 0;\n                pl->f26 = 0;",
+   "replace": "                {\n                    extern int ss_qol_bar_back(int bar);\n                    int qolSteps = ss_qol_bar_back(1) && pl->f78 > 1 ? pl->f78 - 1 : 1;\n                    while (qolSteps-- > 0)\n                        if (++mgr->sel >= pl->f78)\n                            mgr->sel = 0;\n                }\n                pl->f26 = 0;"
   }
  ],
  "code_08017F7C.c": [

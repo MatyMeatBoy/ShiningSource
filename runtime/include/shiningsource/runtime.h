@@ -108,6 +108,18 @@ void ss_frame_set_smooth(int on);
 void ss_frame_set_view(int width);
 void ss_skip_set_enabled(int on);
 
+/* Quality of life, experimental (core/qol.c): two buttons the console never had, reported above its ten in the
+ * mask ss_plat_present returns and in test scripts. ss_qol_keys turns one frame's mask into the buttons the game
+ * is given; ss_qol_bar_back(0 = L bar, 1 = R bar) is asked by the game where it steps a bar. The platform owns
+ * the switch for the buttons it reports: ss_qol_set_bars turns the option on or off while the game runs (an
+ * options menu calls it), ss_qol_bars says how it stands; it starts as SS_QOL_BARS says (off unless 1). */
+enum { SS_KEY_L_BACK = 0x0400, SS_KEY_R_BACK = 0x0800 };
+uint16_t ss_qol_keys(uint16_t held);
+uint16_t ss_qol_scripted(unsigned long mask);
+int ss_qol_bar_back(int bar);
+void ss_qol_set_bars(int on);
+int ss_qol_bars(void);
+
 /* Handle window events without showing a frame (used while a frame waits for the network). */
 void ss_plat_pump(void);
 /* One line about what the program is doing, shown in the window title (NULL or "" clears it). */
