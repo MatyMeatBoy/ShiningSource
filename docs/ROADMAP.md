@@ -250,18 +250,25 @@ Open:
 - [ ] Launcher: save-file management,
       Linux and Android versions of the launcher.
 - [ ] Achievements (owner's decision, 2026-11-12): two lists. The normal one is
-      the game's RetroAchievements set, evaluated by rcheevos against the
-      game's memory. **Rebel mode** is a second, separate record of the same
-      achievements for sessions that use cheats or an edited save: nothing
-      earned with cheats goes to the normal list. ReKHCoM has both (its
-      achievements page and `.rebel` save marks) and is the reference. Needs
-      the rcheevos runtime, the set's definitions supplied by the user or
-      fetched with their account, the game's memory exposed in
-      RetroAchievements' GBA layout, and the cheats themselves, which do not
-      exist yet.
-- [ ] Screen modes chosen on first start (owner's decision, 2026-11-12):
-      classic (the console's picture at a whole scale inside an adjustable
-      border) and enhanced (the picture adapts to the window).
+      the game's RetroAchievements set; **Rebel mode** is a second, separate
+      record for sessions that use cheats or an edited save.
+      - [x] Sign-in and the game's list in the launcher (page Achievements):
+            rcheevos (third_party, MIT) with the client ReKHCoM uses
+            (`launcher/achievements`). The password goes only to
+            retroachievements.org; the session token stays on the PC, protected
+            for the Windows user. Built and shown; signing in needs the owner's
+            account and has not been tried.
+      - [ ] The game evaluating the set while it runs (the host reads the game's
+            memory in RetroAchievements' layout), notices on screen, and what is
+            sent to the site. RetroAchievements counts official unlocks only
+            from approved emulators, so a port keeps its own record unless the
+            site agrees otherwise.
+      - [ ] Rebel mode, and the cheats that would lead to it.
+- [x] Screen modes chosen on first start: classic (the console's picture at a
+      whole scale inside an adjustable border, the port's own Soul frame) and
+      enhanced (the picture adapts to the window, the Soul field beside it).
+- [x] Launcher in the port's Soul look, with the game's title screen made on
+      the user's machine from their ROM (folder cache/, never distributed).
 
 ## M7. Online (working through the public relay, 2026-11-12)
 

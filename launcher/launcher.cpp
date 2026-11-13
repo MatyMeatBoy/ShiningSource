@@ -29,6 +29,7 @@
 #include <vector>
 
 #include "imgui.h"
+#include "achievements/ra_client.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
 
@@ -324,6 +325,91 @@ static void capture_event(const SDL_Event &event)
         SDL_OpenGamepad(event.gdevice.which);       /* an open controller is what sends button events */
 }
 
+/* ---- RetroAchievements ----
+ * The user signs in with their own account; the client (launcher/achievements, on rcheevos) asks the site for the
+ * achievement list of the ROM they chose and shows it. The password goes to retroachievements.org and nowhere
+ * else, and is not kept: what stays on this PC is the session token the site returns, protected for this Windows
+ * user. Nothing is evaluated here: the game does that (see docs/ROADMAP.md for what is and is not sent). */
+static KhRa *ra;
+static std::string ra_rom;          /* the ROM the list was asked for */
+
+static void achievements_page(const Game &game, const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red, const ImVec4 &green)
+{
+    static char username[64], password[128];
+    static bool remember = true;
+    rc_client_t *client = KhRaClient(ra);
+    const rc_client_user_t *user = client ? rc_client_get_user_info(client) : nullptr;
+    std::string rom = setting((std::string("rom_") + game.id).c_str());
+
+    ImGui::TextColored(gold, "%s", text("Achievements (RetroAchievements)", "Logros (RetroAchievements)"));
+    if (!ra) {
+        ImGui::TextColored(red, "%s", text("The achievements client could not be started.", "No se pudo iniciar el cliente de logros."));
+        return;
+    }
+    if (rom != ra_rom) {            /* the list belongs to a ROM: ask again when it changes */
+        std::vector<uint8_t> bytes;
+        if (FILE *file = fopen(rom.c_str(), "rb")) {
+            bytes.resize(32u * 1024 * 1024);
+            bytes.resize(fread(bytes.data(), 1, bytes.size(), file));
+            fclose(file);
+        }
+        KhRaSetRom(ra, bytes.empty() ? nullptr : bytes.data(), bytes.size());
+        ra_rom = rom;
+    }
+    if (user) {
+        ImGui::TextColored(green, text("Signed in as %s", "Sesi\xC3\xB3n iniciada como %s"), user->display_name);
+        ImGui::SameLine();
+        if (ImGui::Button(text("Sign out", "Cerrar sesi\xC3\xB3n")))
+            KhRaLogout(ra);
+    } else {
+        ImGui::TextWrapped("%s", text("Sign in with your RetroAchievements account to see this game's achievements.",
+                                      "Inicia sesi\xC3\xB3n con tu cuenta de RetroAchievements para ver los logros de este juego."));
+        ImGui::SetNextItemWidth(260);
+        ImGui::InputText(text("User", "Usuario"), username, sizeof username);
+        ImGui::SetNextItemWidth(260);
+        ImGui::InputText(text("Password", "Contrase\xC3\xB1" "a"), password, sizeof password, ImGuiInputTextFlags_Password);
+        ImGui::Checkbox(text("Keep me signed in on this PC", "Mantener la sesi\xC3\xB3n en este PC"), &remember);
+        ImGui::BeginDisabled(!username[0] || !password[0] || KhRaBusy(ra));
+        if (ImGui::Button(text("Sign in", "Iniciar sesi\xC3\xB3n"))) {
+            KhRaSetEnabled(ra, 1);
+            KhRaLogin(ra, username, password, remember);
+            SecureZeroMemory(password, sizeof password);
+        }
+        ImGui::EndDisabled();
+    }
+    if (KhRaStatus(ra)[0])
+        ImGui::TextColored(KhRaError(ra) ? red : dim, "%s", KhRaStatus(ra));
+    ImGui::Separator();
+    rc_client_achievement_list_t *list = client && user ? rc_client_create_achievement_list(client, RC_CLIENT_ACHIEVEMENT_CATEGORY_CORE,
+                                                                                            RC_CLIENT_ACHIEVEMENT_LIST_GROUPING_LOCK_STATE) : nullptr;
+    if (!list || !list->num_buckets) {
+        ImGui::TextColored(dim, "%s", user ? text("No achievement list yet for this ROM.", "A\xC3\xBAn no hay lista de logros para esta ROM.")
+                                           : text("The list appears after signing in.", "La lista aparece al iniciar sesi\xC3\xB3n."));
+    } else {
+        unsigned total = 0, unlocked = 0, points = 0;
+        for (uint32_t b = 0; b < list->num_buckets; b++)
+            for (uint32_t i = 0; i < list->buckets[b].num_achievements; i++) {
+                const rc_client_achievement_t *a = list->buckets[b].achievements[i];
+                total++;
+                points += a->points;
+                unlocked += a->unlocked != 0;
+            }
+        ImGui::Text(text("%u of %u unlocked on your account, %u points in the set", "%u de %u desbloqueados en tu cuenta, %u puntos en el conjunto"), unlocked, total, points);
+        ImGui::TextColored(dim, "%s", text("Normal list: earned by playing without cheats. Rebel mode (sessions with cheats) keeps its own record and never touches this one.",
+                                           "Lista normal: se gana jugando sin trucos. El modo rebelde (sesiones con trucos) lleva su propio registro y nunca toca este."));
+        ImGui::BeginChild("list", ImVec2(0, 0), ImGuiChildFlags_Borders);
+        for (uint32_t b = 0; b < list->num_buckets; b++)
+            for (uint32_t i = 0; i < list->buckets[b].num_achievements; i++) {
+                const rc_client_achievement_t *a = list->buckets[b].achievements[i];
+                ImGui::TextColored(a->unlocked ? gold : ImGui::GetStyleColorVec4(ImGuiCol_Text), "%s %s  (%u)", a->unlocked ? "*" : "-", a->title, a->points);
+                ImGui::TextColored(dim, "    %s", a->description);
+            }
+        ImGui::EndChild();
+    }
+    if (list)
+        rc_client_destroy_achievement_list(list);
+}
+
 /* ---- start the game ---- */
 
 static std::string launch_error;
@@ -471,9 +557,9 @@ static void interface_frame(bool &running)
     }
     ImGui::Spacing();
     ImGui::TextColored(dim, "%s", text("PAGES", "SECCIONES"));
-    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "About" };
-    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Acerca de" };
-    for (int i = 0; i < 6; i++)
+    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "About" };
+    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Acerca de" };
+    for (int i = 0; i < 7; i++)
         if (ImGui::Selectable(language ? pages_es[i] : pages_en[i], page == i))
             page = i;
     ImGui::EndChild();
@@ -724,6 +810,8 @@ static void interface_frame(bool &running)
                                ping_ms, suggested < 2 ? 2 : suggested > 30 ? 30 : suggested);
         }
         ImGui::EndDisabled();
+    } else if (page == 5) {
+        achievements_page(game, gold, dim, red, green);
     } else {
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
@@ -760,6 +848,7 @@ int main(int, char **)
     }
     SDL_GL_SetSwapInterval(1);
     IMGUI_CHECKVERSION();
+    ra = KhRaCreate(folder.c_str(), nullptr, nullptr, nullptr);     /* a remembered session signs in by itself */
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::GetIO().FontGlobalScale = 1.25f;
@@ -780,6 +869,7 @@ int main(int, char **)
             if (event.type == SDL_EVENT_QUIT)
                 running = false;
         }
+        KhRaPump(ra, 0);                 /* answers from the site; nothing is evaluated in the launcher */
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
