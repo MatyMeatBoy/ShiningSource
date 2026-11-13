@@ -631,7 +631,7 @@ public class MainActivity extends Activity {
             if (classic.isChecked()) {
                 env.println("SS_MODE=classic");
                 env.println("SS_BORDER=" + border.getText().toString().trim());
-                env.println("SS_BORDER_STYLE=4");
+                // the border's look is not set here: the game's options menu chooses it and keeps it (shiningsource.ini)
             }
             if (online.isChecked()) {
                 env.println("SS_NET=" + server.getText().toString().trim());

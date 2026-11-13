@@ -36,9 +36,19 @@ enum {
     SS_B_STATUS,            /* void (u32 text) */
     SS_B_OVERLAY,           /* void (int darkness, u32 text) */
     SS_B_ACHIEVEMENTS,      /* void (int run_flags)                              once per frame; SS_RUN_* of runtime.h */
+    SS_B_OPTION_HOOK,       /* void (u32 function)                               the image's int (int which, int value), SS_OPTION_* */
     SS_B_COUNT
 };
-#define SS_BRIDGE_VERSION 6u
+#define SS_BRIDGE_VERSION 7u
+
+/* The one way from the host into the image: the options menu lives in the host (the platform's window) and what
+ * it changes or asks lives in the game image. The image hands the host this function when it starts. */
+enum {
+    SS_OPTION_SMOOTH,       /* ss_frame_set_smooth(value) */
+    SS_OPTION_VIEW,         /* ss_frame_set_view(value) */
+    SS_OPTION_SKIP,         /* ss_skip_set_enabled(value) */
+    SS_OPTION_ONLINE        /* returns ss_net_active() */
+};
 
 extern const uint32_t *ss_bridge;
 #define SS_HOST(index, type) ((type)(uintptr_t)ss_bridge[index])

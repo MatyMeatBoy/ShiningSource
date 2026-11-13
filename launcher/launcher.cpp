@@ -9,7 +9,9 @@
  *   shiningsource.ini        settings, next to the launcher
  *
  * Settings reach the game as environment variables (SS_VIEW, SS_FULLSCREEN, SS_VOLUME, SS_NET...), which is also how the
- * automated tests drive it, so there is one mechanism to keep working.
+ * automated tests drive it, so there is one mechanism to keep working. The game's own options menu (Esc while
+ * playing, runtime/win32/plat_sdl.c) writes what the player changes there back to shiningsource.ini, with the same
+ * keys; two of them, "sides" and "smooth", have no control here and the game reads them from the file by itself.
  */
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
@@ -346,7 +348,7 @@ static void capture_event(const SDL_Event &event)
 {
     int values[10];
     if (capture_key >= 0 && event.type == SDL_EVENT_KEY_DOWN) {
-        if (event.key.scancode != SDL_SCANCODE_ESCAPE) {        /* Esc cancels, and always quits the game */
+        if (event.key.scancode != SDL_SCANCODE_ESCAPE) {        /* Esc cancels; in the game it always opens the options menu */
             bindings("keys", DEFAULT_KEYS, values);
             values[capture_key] = (int)event.key.scancode;
             store_bindings("keys", values);
@@ -994,8 +996,10 @@ static void interface_frame(bool &running)
         bindings("keys", DEFAULT_KEYS, keys);
         bindings("pad", DEFAULT_PAD, pad, 0);
         ImGui::TextColored(gold, "%s", text("Controls", "Controles"));
-        ImGui::TextWrapped("%s", text("Click a box and press the key or the controller button you want for it. Esc cancels. F11 is full screen and Esc quits the game.",
-                                      "Haz clic en una casilla y pulsa la tecla o el bot\xC3\xB3n del mando que quieras para ella. Esc cancela. F11 es pantalla completa y Esc sale del juego."));
+        ImGui::TextWrapped("%s", text("Click a box and press the key or the controller button you want for it. Esc cancels. F11 is full screen.",
+                                      "Haz clic en una casilla y pulsa la tecla o el bot\xC3\xB3n del mando que quieras para ella. Esc cancela. F11 es pantalla completa."));
+        ImGui::TextWrapped("%s", text("While playing, Esc (or Select and Start together on a controller) opens the options menu: screen mode, border, VSync, volume and more can be changed there without leaving the game, and it is where you quit. What you change there is kept here too.",
+                                      "Durante el juego, Esc (o Select y Start a la vez en un mando) abre el men\xC3\xBA de opciones: all\xC3\xAD se cambian el modo de pantalla, el borde, VSync, el volumen y m\xC3\xA1s sin salir del juego, y desde \xC3\xA9l se sale. Lo que cambies all\xC3\xAD tambi\xC3\xA9n queda guardado aqu\xC3\xAD."));
         if (ImGui::BeginTable("bindings", 3, ImGuiTableFlags_SizingFixedFit)) {
             ImGui::TableSetupColumn(text("Button", "Bot\xC3\xB3n"), 0, 110);
             ImGui::TableSetupColumn(text("Keyboard", "Teclado"), 0, 190);

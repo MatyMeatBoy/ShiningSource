@@ -161,7 +161,10 @@ static void scripted_input(void)
                 if (mask >> i & 1) {
                     long far;
                     memcpy(theirs, (const uint8_t *)(uintptr_t)(records + (uint32_t)i * 0x2E0 + 0x14), 8);
-                    far = labs((long)(theirs[0] - mine[0]) >> 8) + labs((long)(theirs[1] - mine[1]) >> 8);
+                    {       /* the game image's C library has no labs */
+                        long ax = (long)(theirs[0] - mine[0]) >> 8, ay = (long)(theirs[1] - mine[1]) >> 8;
+                        far = (ax < 0 ? -ax : ax) + (ay < 0 ? -ay : ay);
+                    }
                     if (best < 0 || far < nearest) {
                         best = i;
                         nearest = far;
@@ -232,7 +235,7 @@ static void enemy_log(void)
             fprintf(file, " | %d %u %d %d %d %u %u", i, id, (int)((definition - 0x0847AD3Cu) / 0xD8), (int)(x >> 8), (int)(y >> 8),
                     health, state);
         }
-    fputc('\n', file);
+    fprintf(file, "%c", 10);
     fflush(file);
 }
 
@@ -312,10 +315,25 @@ static void walk_lines(void)
  * The sides. In a scene that keeps the console's composition the columns beside it are left to the platform,
  * which draws its own field there. When the game's picture goes dark (a fade, a loading screen) a bright
  * frame around a black screen is the last thing wanted: the sides darken with the picture, a step at a time. */
+static int smooth = -1;         /* not read yet */
+
+/* The platform's options menu switches the smoothing while the game runs (1 on, 0 off). */
+void ss_frame_set_smooth(int on)
+{
+    smooth = on != 0;
+}
+
+/* The same menu switches between the classic and the enhanced picture: the width every frame is given from now
+ * on (as SS_VIEW), or 0 to follow the window. */
+void ss_frame_set_view(int width)
+{
+    forced_width = !width ? 0 : width < SS_SCREEN_W ? SS_SCREEN_W : width > SS_MAX_VIEW_W ? SS_MAX_VIEW_W : width;
+}
+
 static void finish_picture(uint32_t *pixels, int width)
 {
     static uint32_t past[4][SS_MAX_VIEW_W * SS_SCREEN_H];
-    static int past_width, smooth = -1, shade;
+    static int past_width, shade;
     int count = width * SS_SCREEN_H, i, wanted;
     unsigned long light = 0, sampled = 0;
 

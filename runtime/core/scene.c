@@ -236,6 +236,15 @@ static int spanish(void)
     return known;
 }
 
+static int enabled = -1;        /* not read yet */
+
+/* The platform's options menu turns the feature on and off while the game runs. Turned off in the middle of a
+ * question or a skip, the next frame simply hands the buttons to the game again. */
+void ss_skip_set_enabled(int on)
+{
+    enabled = on != 0;
+}
+
 /* One frame. `held` are the buttons the player holds; the result are the buttons the game is given. */
 uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
 {
@@ -265,7 +274,6 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
     if (!active && story && !talk.asks)
         active = SEQUENCE;      /* while a question waits there is nothing to skip: Start is the game's again */
 
-    static int enabled = -1;
     if (enabled < 0)
         enabled = !(getenv("SS_SKIP") && getenv("SS_SKIP")[0] == '0');       /* SS_SKIP=0 turns the feature off */
     if (!enabled) {
@@ -294,7 +302,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
                 ss_net_vote(1);
                 state = VOTING;
             } else if (active && have > 0) {
-                snprintf(line, sizeof line, spanish() ? "SALTAR ESCENA: %d/%d. START = SI" : "SKIP SCENE: %d/%d. START = YES", have, need);
+                snprintf(line, sizeof line, spanish() ? "Saltar escena: %d/%d. Start = s\xC3\xAD" : "Skip scene: %d/%d. Start = yes", have, need);
                 view->text = line;
             }
             if (ss_net_skip_now()) {            /* the others agreed while this player had not voted: cannot happen, but stay in step */
@@ -308,7 +316,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         break;
     case PROMPT:
         game &= (uint16_t)~(KEY_B | KEY_START);
-        view->text = spanish() ? "SALTAR ESCENA? START = SI  B = NO" : "SKIP SCENE? START = YES  B = NO";
+        view->text = spanish() ? "\xC2\xBFSaltar escena? Start = s\xC3\xAD  B = no" : "Skip scene? Start = yes  B = no";
         if (!active) {
             state = IDLE;                       /* the scene ended, or asks something, while the player made up their mind */
         } else if (pressed & KEY_START) {
@@ -321,7 +329,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
     case VOTING:
         game &= (uint16_t)~(KEY_B | KEY_START);
         ss_net_votes(&have, &need);
-        snprintf(line, sizeof line, spanish() ? "SALTAR: %d/%d PULSARON START. B = NO" : "SKIP: %d/%d PRESSED START. B = NO", have, need);
+        snprintf(line, sizeof line, spanish() ? "Saltar: %d/%d pulsaron Start. B = no" : "Skip: %d/%d pressed Start. B = no", have, need);
         view->text = line;
         if (ss_net_skip_now()) {
             state = FADE_OUT;
@@ -377,7 +385,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         view->darkness = shown ? 0 : 255;
         view->mute = !shown;
         view->present = shown || timer % 30 == 0;       /* a black frame now and then keeps the window answering */
-        view->text = spanish() ? "SALTANDO..." : "SKIPPING...";
+        view->text = spanish() ? "Saltando..." : "Skipping...";
         /* Online a player can reach, before the others, a point where the game waits for them (it shows that
          * itself). Nothing changes on the screen then: give the picture back instead of a dark wait. */
         if (online && !shown && (timer & 7) == 0) {

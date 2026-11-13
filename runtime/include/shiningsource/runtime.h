@@ -83,7 +83,8 @@ int ss_net_msg_recv(int who, void *data, int capacity);
 int ss_net_msg_gone(int who);
 void ss_net_flush(void);       /* end of a game frame: send this frame's block now */
 /* What the next presented frame carries over the picture: black of the given strength and one line of text
- * (capital letters, digits and ? = / : . only). */
+ * (UTF-8; written with the game's typeface when the platform finds it in the ROM, else in capitals without
+ * accents). */
 void ss_plat_overlay(int darkness, const char *text);
 
 /* A notice over the top of the picture for a few seconds: a heading and one line (an achievement's title, UTF-8,
@@ -100,6 +101,12 @@ enum { SS_RUN_REBEL = 1, SS_RUN_CHEATING = 2, SS_RUN_ONLINE = 4 };
 void ss_rebel_start(void);
 void ss_rebel_frame(void);
 void ss_rebel_set_host(void (*frame)(int run_flags));
+
+/* What the platform's options menu changes in the core while the game runs: the smoothing of fast blinking
+ * (core/frame.c), the picture's width (0 follows the window, as without SS_VIEW) and skip scene (core/scene.c). */
+void ss_frame_set_smooth(int on);
+void ss_frame_set_view(int width);
+void ss_skip_set_enabled(int on);
 
 /* Handle window events without showing a frame (used while a frame waits for the network). */
 void ss_plat_pump(void);

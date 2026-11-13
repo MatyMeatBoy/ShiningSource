@@ -23,6 +23,63 @@ static uint64_t next_frame_ns;
  * a 60 Hz display then repeated a frame every few seconds.) */
 static int display_paced;
 
+/* ---- settings the options menu owns ----
+ * Each has an environment variable (the launcher and the tests set those) and a key in shiningsource.ini, the
+ * launcher's settings file in the working folder ("key=value" lines). At start the variable decides when it is
+ * set, else the file, else the default; the menu writes what it changes back to the file (see "options menu"). */
+enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_COUNT };
+static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip" };
+static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_FULLSCREEN", "SS_VSYNC",
+                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP" };
+static char setting_file[SET_COUNT][16];        /* what the file said at start ("" if nothing) */
+static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, option_fullscreen, vsync_refused;
+static int view_forced;                         /* SS_VIEW: the enhanced picture's width, 0 to follow the window */
+
+static void read_setting_file(void)
+{
+    static int done;
+    FILE *file;
+    char line[2048];
+    int i;
+    if (done)
+        return;
+    done = 1;
+    file = fopen("shiningsource.ini", "rb");
+    while (file && fgets(line, sizeof line, file)) {
+        char *equals = strchr(line, '='), *end = line + strlen(line);
+        while (end > line && (end[-1] == '\n' || end[-1] == '\r'))
+            *--end = 0;
+        if (!equals)
+            continue;
+        *equals = 0;
+        for (i = 0; i < SET_COUNT; i++)
+            if (!strcmp(line, setting_keys[i]))
+                SDL_snprintf(setting_file[i], sizeof setting_file[i], "%s", equals + 1);
+    }
+    if (file)
+        fclose(file);
+#ifdef __ANDROID__
+    setting_file[SET_MODE][0] = 0;      /* there the app's first screen asks for the mode at every start */
+#endif
+}
+
+/* The text of a setting at start, or NULL when neither the environment nor the file has it. */
+static const char *setting_text(int which)
+{
+    const char *text = getenv(setting_variables[which]);
+    read_setting_file();
+    return text ? text : setting_file[which][0] ? setting_file[which] : NULL;
+}
+
+static int classic = -1, border, border_style, sides_field = 1;     /* screen mode, see "screen modes" */
+static void read_mode(void);
+enum { MENU_UP, MENU_DOWN, MENU_LEFT, MENU_RIGHT, MENU_OK, MENU_BACK, MENU_TOGGLE };
+static int menu_open;
+static void menu_command(int command);
+static void menu_click(float x, float y, int pressed);
+static void set_vsync(int wanted);
+void (*ss_plat_idle)(void);     /* called while the game waits behind the menu, if the host wants to know */
+
 /* ---- measurements (SS_STATS=1): how regular the frames were and how much memory the process used ----
  * Printed when the program ends. Intervals are the real time between two presented frames; the console's is
  * 16.74 ms. Late frames are those more than 2 ms over it. */
@@ -115,6 +172,7 @@ int ss_plat_video_init(const char *title)
 
 #ifdef __ANDROID__
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");     /* otherwise a resizable window follows the user */
+    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");                    /* Back is a key here: it opens the options menu */
 #endif
     read_bindings("SS_KEYS", (int *)keys, 1, SDL_SCANCODE_COUNT);
     read_bindings("SS_PAD", (int *)pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
@@ -126,10 +184,15 @@ int ss_plat_video_init(const char *title)
     spec.channels = 2;
     spec.freq = 48000;
     audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
+    {
+        const char *volume = setting_text(SET_VOLUME);      /* 0..100, set by the launcher or the menu */
+        option_volume = volume ? atoi(volume) : 100;
+        if (option_volume < 0) option_volume = 0;
+        if (option_volume > 100) option_volume = 100;
+    }
     if (audio) {
-        const char *volume = getenv("SS_VOLUME");      /* 0..100, set by the launcher */
-        if (volume)
-            SDL_SetAudioStreamGain(audio, (float)atoi(volume) / 100.0f);
+        if (option_volume != 100)
+            SDL_SetAudioStreamGain(audio, (float)option_volume / 100.0f);
         SDL_ResumeAudioStreamDevice(audio);
     }
     else
@@ -139,28 +202,10 @@ int ss_plat_video_init(const char *title)
         return -1;
     }
     {
-        const char *text = getenv("SS_VSYNC");
-        int wanted = text ? atoi(text) : 1;
-        const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
-        float refresh = mode && mode->refresh_rate > 1.0f ? mode->refresh_rate : 60.0f;
-        int every = (int)(refresh / 60.0f + 0.5f);
-        if (wanted == 2) {
-            if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_ADAPTIVE))
-                SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
-        } else if (wanted == 1) {
-            float rate = every > 0 ? refresh / (float)every : 0.0f;
-            if (every >= 1 && rate > 58.5f && rate < 61.5f && SDL_SetRenderVSync(renderer, every)) {
-                display_paced = 1;
-                if (audio)
-                    SDL_SetAudioStreamFrequencyRatio(audio, rate / 59.7275f);
-            } else {
-                SDL_SetRenderVSync(renderer, 1);
-            }
-        } else {
-            SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
-        }
-        fprintf(stderr, "video: display %.2f Hz, %s\n", refresh,
-                display_paced ? "paced by the display" : wanted == 2 ? "variable refresh, own pacing" : wanted == 1 ? "vsync, own pacing" : "no vsync");
+        const char *text = setting_text(SET_VSYNC);
+        option_vsync = text ? atoi(text) : 1;
+        if (option_vsync < 0 || option_vsync > 2) option_vsync = 1;
+        set_vsync(option_vsync);
     }
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
@@ -168,9 +213,32 @@ int ss_plat_video_init(const char *title)
 #ifdef __ANDROID__
     SDL_SetWindowFullscreen(window, true);
 #else
-    if (getenv("SS_FULLSCREEN"))
+    /* the variable's presence is the launcher's "yes"; the file says 1 or 0 */
+    option_fullscreen = getenv("SS_FULLSCREEN") || (setting_text(SET_FULLSCREEN) && atoi(setting_text(SET_FULLSCREEN)));
+    if (option_fullscreen)
         SDL_SetWindowFullscreen(window, true);
 #endif
+    {
+        /* Two of the settings live in the core, which reads its variables by itself: it is only told when the
+         * file decides. The picture's width is the core's too (SS_VIEW, and 240 when SS_MODE says classic): when
+         * the file made the mode classic the core is told to follow this file's answer, which is then 240. */
+        const char *text = getenv("SS_VIEW");
+        view_forced = text ? atoi(text) : 0;
+        if (view_forced && view_forced < SS_SCREEN_W) view_forced = SS_SCREEN_W;
+        if (view_forced > SS_MAX_VIEW_W) view_forced = SS_MAX_VIEW_W;
+        text = setting_text(SET_SMOOTH);
+        option_smooth = !(text && text[0] == '0');
+        if (!getenv("SS_SMOOTH") && text)
+            ss_frame_set_smooth(option_smooth);
+        text = setting_text(SET_SKIP);
+        option_skip = !(text && text[0] == '0');
+        if (!getenv("SS_SKIP") && text)
+            ss_skip_set_enabled(option_skip);
+        if (classic < 0)
+            read_mode();
+        if (classic && !getenv("SS_MODE"))
+            ss_frame_set_view(0);
+    }
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
     next_frame_ns = SDL_GetTicksNS();
@@ -179,6 +247,58 @@ int ss_plat_video_init(const char *title)
         atexit(stats_report);
     }
     return 0;
+}
+
+/* Decide who keeps time, see display_paced. `wanted` is the setting: 0 nobody synchronises, 1 VSync, 2 adaptive
+ * (variable refresh). Called at start, by the options menu, and when the window finds itself on another display
+ * or its display changes mode; SDL lets the renderer change it while it runs. What VSync means depends on the
+ * display's refresh rate:
+ *   a whole multiple of about 60 Hz (60, 120, 180, 240): the display paces the game;
+ *   any other rate the game's 59.7275 Hz fits in (75, 90, 100, 144, 165, 360): the game keeps its own clock and
+ *     every picture waits for the display's next refresh, which is always sooner than the next frame is due;
+ *   a display slower than the game (50 Hz, 30 Hz): waiting for its refresh would slow the game to the display's
+ *     rate and starve the sound, so nothing waits for it: the game keeps its clock and full speed, and the
+ *     picture may tear. (The other way, keeping the wait and dropping pictures, would need a present that
+ *     returns at once when the display is not ready, which SDL's renderer does not offer.)
+ * A display or a driver without adaptive synchronisation gets none, and the menu says so.
+ * SS_TEST_REFRESH=N makes this believe the display runs at N Hz (tests of the decision on one monitor). */
+static void set_vsync(int wanted)
+{
+    const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+    float refresh = mode && mode->refresh_rate > 1.0f ? mode->refresh_rate : 60.0f, rate = 59.7275f;
+    const char *said = "no vsync";
+    int every;
+    if (getenv("SS_TEST_REFRESH") && atof(getenv("SS_TEST_REFRESH")) > 1.0)
+        refresh = (float)atof(getenv("SS_TEST_REFRESH"));
+    every = (int)(refresh / 60.0f + 0.5f);
+    display_paced = 0;
+    vsync_refused = 0;
+    if (wanted == 2) {
+        said = "variable refresh, own pacing";
+        if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_ADAPTIVE)) {
+            SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
+            vsync_refused = 1;
+            said = "variable refresh not available: no vsync, own pacing";
+        }
+    } else if (wanted == 1) {
+        rate = every > 0 ? refresh / (float)every : 0.0f;
+        if (every >= 1 && rate > 58.5f && rate < 61.5f && SDL_SetRenderVSync(renderer, every)) {
+            display_paced = 1;
+            said = "paced by the display";
+        } else if (refresh < 59.0f) {
+            SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
+            said = "slower than the game: no vsync, own pacing";
+        } else {
+            SDL_SetRenderVSync(renderer, 1);
+            said = "vsync, own pacing";
+        }
+    } else {
+        SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
+    }
+    if (audio)
+        SDL_SetAudioStreamFrequencyRatio(audio, display_paced ? rate / 59.7275f : 1.0f);
+    next_frame_ns = SDL_GetTicksNS();
+    fprintf(stderr, "video: display %.2f Hz, %s\n", refresh, said);
 }
 
 void ss_plat_audio(const int16_t *samples, int frames)
@@ -196,17 +316,15 @@ void ss_plat_audio(const int16_t *samples, int frames)
  * a border. SS_BORDER is its thickness in console pixels (0 to 64) and SS_BORDER_STYLE its look (0 black,
  * 1 graphite, 2 indigo, 3 silver, 4 "Soul", the default). The border is drawn here, with no artwork of any game
  * or console. */
-static int classic = -1, border, border_style, sides_field = 1;
-
 static void read_mode(void)
 {
-    const char *text = getenv("SS_MODE");
+    const char *text = setting_text(SET_MODE);
     classic = text && !strcmp(text, "classic");
-    border = getenv("SS_BORDER") ? atoi(getenv("SS_BORDER")) : 16;
+    border = setting_text(SET_BORDER) ? atoi(setting_text(SET_BORDER)) : 16;
     if (border < 0) border = 0;
     if (border > 64) border = 64;
-    sides_field = !(getenv("SS_SIDES") && getenv("SS_SIDES")[0] == '0');
-    border_style = getenv("SS_BORDER_STYLE") ? atoi(getenv("SS_BORDER_STYLE")) : 4;
+    sides_field = !(setting_text(SET_SIDES) && setting_text(SET_SIDES)[0] == '0');
+    border_style = setting_text(SET_STYLE) ? atoi(setting_text(SET_STYLE)) : 4;
     if (border_style < 0 || border_style > 4) border_style = 4;
 }
 
@@ -334,7 +452,7 @@ int ss_plat_view_width(void)
 
 static void handle_event(const SDL_Event *event)
 {
-    if (event->type == SDL_EVENT_QUIT)      /* closing the window (or Alt+F4); Escape does nothing: too easy to hit */
+    if (event->type == SDL_EVENT_QUIT)      /* closing the window (or Alt+F4); Escape opens the options menu */
         exit(0);
     if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
         gamepad = SDL_OpenGamepad(event->gdevice.which);
@@ -344,6 +462,45 @@ static void handle_event(const SDL_Event *event)
     }
     if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F11)
         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+    /* the window went to another display, or its display changed mode: who keeps time is decided again */
+    if (event->type == SDL_EVENT_WINDOW_DISPLAY_CHANGED || event->type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED
+        || event->type == SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED)
+        set_vsync(option_vsync);
+    /* The options menu. Escape opens and closes it (on Android the system's Back, which SDL hands over as a
+     * key), and so does a controller's Guide button unless it was given to one of the console's buttons. In the
+     * menu the arrows and the keys bound to the pad move and change, Enter, Space or the A key choose, Backspace
+     * or the B key go back. A press on an entry with the mouse or a finger chooses it (SDL turns a touch into
+     * mouse events). The controller's pad and buttons are read once a frame, in menu_buttons. */
+    if (event->type == SDL_EVENT_KEY_DOWN) {
+        SDL_Scancode code = event->key.scancode;
+        if (code == SDL_SCANCODE_ESCAPE || code == SDL_SCANCODE_AC_BACK) {
+            if (!event->key.repeat)
+                menu_command(MENU_TOGGLE);
+        } else if (menu_open) {
+            if (code == SDL_SCANCODE_UP || code == keys[6]) menu_command(MENU_UP);
+            else if (code == SDL_SCANCODE_DOWN || code == keys[7]) menu_command(MENU_DOWN);
+            else if (code == SDL_SCANCODE_LEFT || code == keys[5]) menu_command(MENU_LEFT);
+            else if (code == SDL_SCANCODE_RIGHT || code == keys[4]) menu_command(MENU_RIGHT);
+            else if (event->key.repeat) return;
+            else if (code == SDL_SCANCODE_RETURN || code == SDL_SCANCODE_KP_ENTER || code == SDL_SCANCODE_SPACE || code == keys[0]) menu_command(MENU_OK);
+            else if (code == SDL_SCANCODE_BACKSPACE || code == keys[1]) menu_command(MENU_BACK);
+        }
+    }
+    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) {
+        int i, taken = 0;
+        for (i = 0; i < 10; i++)
+            taken |= pad_buttons[i] == SDL_GAMEPAD_BUTTON_GUIDE;
+        if (!taken)
+            menu_command(MENU_TOGGLE);
+    }
+    if (menu_open && (event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_MOTION)) {
+        int w = 1, h = 1, pw = 1, ph = 1, down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+        float x = down ? event->button.x : event->motion.x, y = down ? event->button.y : event->motion.y;
+        SDL_GetWindowSize(window, &w, &h);
+        SDL_GetWindowSizeInPixels(window, &pw, &ph);
+        if (!down || event->button.button == SDL_BUTTON_LEFT)
+            menu_click(x * (float)pw / (float)(w > 0 ? w : 1), y * (float)ph / (float)(h > 0 ? h : 1), down);
+    }
 }
 
 void ss_plat_status(const char *text)
@@ -424,19 +581,226 @@ static const uint8_t *glyph(char c)
     return blank;
 }
 
-/* One line of 5 x 7 text in the current draw colour. */
-static void draw_text(const char *text, int length, int x, int y)
+/* ---- text ----
+ * The port's own lines (the options menu, "skip scene", the notices) are written with the game's typeface: the
+ * letters the game itself draws its messages with, read from the user's ROM, which is mapped in this process at
+ * the console's address. Nothing of it is in the program. Where they are, for the Shining Soul II cartridge this
+ * was made for (found through the decompilation's text routine, sub_0801A3D0, and its font resource): the
+ * "SSDT" archive at 0x08518938, whose section 4 holds the fonts; the first is 256 cells of 128 bytes, each two
+ * 8 x 8 tiles of four bits a pixel, one above the other (the second half of a cell is unused): 0 nothing,
+ * 1 the letter, 3 its dark outline. The game gives every character eight columns; here the empty columns of a
+ * cell are dropped and neighbours share their outline, which reads better in a line of prose.
+ * Any other ROM, or one that does not look as expected, gets the 5 x 7 dots above instead, capitals only. */
+static SDL_Texture *font_texture;       /* the cells in a 16 x 16 grid: letters white, outline dark */
+static int font_state;                  /* 0 not looked for, 1 found, -1 not there */
+static uint8_t font_left[256], font_wide[256];
+static int block_text;                  /* 1: use the 5 x 7 dots even with the typeface (a very small window) */
+
+static uint32_t rom_word(const uint8_t *at)
 {
-    SDL_FRect box;
-    int i, row, column;
-    for (i = 0; i < length; i++) {
-        const uint8_t *rows = glyph(text[i]);
-        for (row = 0; row < 7; row++)
-            for (column = 0; column < 5; column++)
-                if (rows[row] & (0x10 >> column)) {
-                    box = (SDL_FRect){ (float)(x + i * 6 + column), (float)(y + row), 1, 1 };
-                    SDL_RenderFillRect(renderer, &box);
-                }
+    return at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
+}
+
+static void font_find(void)
+{
+    enum { ROM_BYTES = 0x1000000, ARCHIVE = 0x518938, CELL = 128, CELLS = 256 };
+    static uint32_t pixels[CELLS * 8 * 16];
+    const uint8_t *rom = (const uint8_t *)(uintptr_t)SS_ROM, *cells;
+    uint32_t section, font;
+    int cell, x, y;
+
+    font_state = -1;
+    if (getenv("SS_FONT") && getenv("SS_FONT")[0] == '0')       /* SS_FONT=0: the 5 x 7 dots, whatever the ROM */
+        return;
+    if (memcmp(rom + 0xAC, "AU2P", 4) || memcmp(rom + ARCHIVE, "SSDT", 4))
+        return;
+    section = ARCHIVE + rom_word(rom + ARCHIVE + 8 + 4 * 4);
+    if (section < ARCHIVE || section > ROM_BYTES - 8 || rom_word(rom + section) < 1)
+        return;
+    font = section + rom_word(rom + section + 4);
+    if (font < section || font > ROM_BYTES - CELL * CELLS)
+        return;
+    cells = rom + font;
+    for (x = 0; x < 64; x++)
+        if (cells[0x50 * CELL + x])
+            return;                     /* the space is not empty: not the font */
+    for (cell = 0; cell < CELLS; cell++) {
+        int first = 8, last = -1;
+        for (y = 0; y < 16; y++)
+            for (x = 0; x < 8; x++) {
+                int value = (cells[cell * CELL + y * 4 + x / 2] >> (x & 1 ? 4 : 0)) & 15;
+                pixels[((cell / 16) * 16 + y) * 128 + (cell % 16) * 8 + x] = !value ? 0 : value == 1 ? 0xFFFFFFFFu : 0xFF181C30u;
+                if (value && x < first) first = x;
+                if (value && x > last) last = x;
+            }
+        font_left[cell] = (uint8_t)(last < 0 ? 0 : first);
+        font_wide[cell] = (uint8_t)(last < 0 ? 0 : last - first + 1);
+    }
+    if (!font_wide[0] || !font_wide[0x20])       /* A and a */
+        return;
+    font_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, 128, 256);
+    if (!font_texture)
+        return;
+    SDL_UpdateTexture(font_texture, NULL, pixels, 128 * 4);
+    SDL_SetTextureBlendMode(font_texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(font_texture, SDL_SCALEMODE_NEAREST);
+    font_state = 1;
+}
+
+/* 1 when the game's typeface is used for the next text. */
+static int text_game(void)
+{
+    if (!font_state && renderer)
+        font_find();
+    return font_state > 0 && !block_text;
+}
+
+/* The next character of a line and how many bytes it took. The text is UTF-8; a byte that is not gives the
+ * Latin-1 character of that value. */
+static unsigned text_next(const char *text, int *bytes)
+{
+    const unsigned char *s = (const unsigned char *)text;
+    *bytes = 1;
+    if (s[0] < 0x80)
+        return s[0];
+    if ((s[0] & 0xE0) == 0xC0 && (s[1] & 0xC0) == 0x80) {
+        *bytes = 2;
+        return (unsigned)(s[0] & 0x1F) << 6 | (s[1] & 0x3F);
+    }
+    if ((s[0] & 0xF0) == 0xE0 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80) {
+        *bytes = 3;
+        return (unsigned)(s[0] & 0x0F) << 12 | (unsigned)(s[1] & 0x3F) << 6 | (s[2] & 0x3F);
+    }
+    if ((s[0] & 0xF8) == 0xF0 && (s[1] & 0xC0) == 0x80 && (s[2] & 0xC0) == 0x80 && (s[3] & 0xC0) == 0x80) {
+        *bytes = 4;
+        return 0xFFFD;
+    }
+    return s[0];
+}
+
+/* The cell of the game's font for a character (the game's own character code less one), or -1 for a space. */
+static int font_cell(unsigned c)
+{
+    /* the game's codes 0x61..0x79: capitals with accents in its own order, then C cedilla, N tilde, sharp s and
+     * the two Spanish opening marks; the small letters follow 0x20 further on */
+    static const uint8_t accented[25] = { 0xC0, 0xC1, 0xC4, 0xC2, 0xC8, 0xC9, 0xCB, 0xCA, 0xCC, 0xCD, 0xCE, 0xCF, 0xD2, 0xD3, 0xD6, 0xD4,
+                                          0xD9, 0xDA, 0xDC, 0xDB, 0xC7, 0xD1, 0xDF, 0xA1, 0xBF };
+    static const char marks[] = "<>;:@'", more[] = "!?%&[]", last[] = "/+-=.,";
+    const char *found;
+    int i;
+    if (c >= 'A' && c <= 'Z') return (int)c - 0x40 - 1;
+    if (c >= 'a' && c <= 'z') return (int)c - 0x40 - 1;
+    if (c >= '0' && c <= '9') return (int)c + 0x11 - 1;
+    if (c == ' ' || c == 0xA0) return -1;
+    if (c < 0x80) {
+        if ((found = strchr(marks, (int)c)) != NULL) return 0x1B + (int)(found - marks) - 1;
+        if ((found = strchr(more, (int)c)) != NULL) return 0x3B + (int)(found - more) - 1;
+        if ((found = strchr(last, (int)c)) != NULL) return 0x4B + (int)(found - last) - 1;
+        switch (c) {
+        case '*': return 0x52 - 1;
+        case '"': return 0x53 - 1;
+        case '$': return 0x55 - 1;
+        case '(': return 0x56 - 1;
+        case ')': return 0x57 - 1;
+        case '|': return 0x7A - 1;
+        case '`': return 0x7B - 1;
+        case '^': return 0x7D - 1;
+        case '_': return -1;
+        }
+        return 0x3C - 1;                /* the question mark */
+    }
+    if (c == 0x2026) return 0x59 - 1;   /* ... */
+    if (c == 0x2019 || c == 0x2018) return 0x20 - 1;
+    if (c == 0xB0) return 0x7C - 1;
+    for (i = 0; i < 25; i++) {
+        if (c == accented[i]) return 0x61 + i - 1;
+        if (i < 22 && c == accented[i] + 0x20u) return 0x81 + i - 1;
+    }
+    return 0x3C - 1;
+}
+
+/* The same character for the 5 x 7 dots: a capital without its accent. */
+static char block_char(unsigned c)
+{
+    /* U+00C0..U+00FF without the bit that tells capitals from small letters */
+    static const char plain[33] = "AAAAAA?CEEEEIIII?NOOOOO?OUUUUY??";
+    if (c < 0x80)
+        return c >= 'a' && c <= 'z' ? (char)(c - 32) : c < 32 ? ' ' : (char)c;
+    if (c == 0xA1) return '!';
+    if (c == 0xBF) return '?';
+    return c >= 0xC0 && c <= 0xFF ? plain[c & 0x1F] : c == 0xA0 ? ' ' : '?';
+}
+
+enum { FONT_SPACE = 4 };
+
+static int text_height(void)
+{
+    return text_game() ? 16 : 7;
+}
+
+/* Width of the first `bytes` bytes of a line (the whole line when negative), in the units it is drawn in. */
+static int text_width(const char *text, int bytes)
+{
+    int game = text_game(), width = 0, used;
+    const char *end = bytes < 0 ? text + SDL_strlen(text) : text + bytes;
+    while (text < end && *text) {
+        unsigned c = text_next(text, &used);
+        int cell = game ? font_cell(c) : 0;
+        width += !game ? 6 : cell < 0 || !font_wide[cell] ? FONT_SPACE : font_wide[cell] - 1;
+        text += used;
+    }
+    return width ? width + (game ? 1 : -1) : 0;
+}
+
+/* How many bytes of a line fit in `room` units (whole characters). */
+static int text_fit(const char *text, int room)
+{
+    int bytes = 0, used;
+    while (text[bytes]) {
+        text_next(text + bytes, &used);
+        if (text_width(text, bytes + used) > room)
+            break;
+        bytes += used;
+    }
+    return bytes;
+}
+
+/* One line of text with its top left corner at (x, y), in the given colour. */
+static void draw_text(const char *text, int bytes, int x, int y, int r, int g, int b, int alpha)
+{
+    int game = text_game(), used, row, column;
+    const char *end = bytes < 0 ? text + SDL_strlen(text) : text + bytes;
+    SDL_FRect box, source;
+    if (game) {
+        SDL_SetTextureColorMod(font_texture, (Uint8)r, (Uint8)g, (Uint8)b);
+        SDL_SetTextureAlphaMod(font_texture, (Uint8)alpha);
+    } else {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)alpha);
+    }
+    while (text < end && *text) {
+        unsigned c = text_next(text, &used);
+        text += used;
+        if (game) {
+            int cell = font_cell(c);
+            if (cell < 0 || !font_wide[cell]) {
+                x += FONT_SPACE;
+                continue;
+            }
+            source = (SDL_FRect){ (float)((cell % 16) * 8 + font_left[cell]), (float)((cell / 16) * 16), (float)font_wide[cell], 16 };
+            box = (SDL_FRect){ (float)x, (float)y, (float)font_wide[cell], 16 };
+            SDL_RenderTexture(renderer, font_texture, &source, &box);
+            x += font_wide[cell] - 1;
+        } else {
+            const uint8_t *rows = glyph(block_char(c));
+            for (row = 0; row < 7; row++)
+                for (column = 0; column < 5; column++)
+                    if (rows[row] & (0x10 >> column)) {
+                        box = (SDL_FRect){ (float)(x + column), (float)(y + row), 1, 1 };
+                        SDL_RenderFillRect(renderer, &box);
+                    }
+            x += 6;
+        }
     }
 }
 
@@ -444,7 +808,7 @@ static void draw_text(const char *text, int length, int x, int y)
 static void draw_overlay(int width, int height)
 {
     SDL_FRect box;
-    int length = (int)SDL_strlen(overlay_text), x, y;
+    int length = (int)SDL_strlen(overlay_text), wide, tall, x, y;
     if (overlay_darkness > 0) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)overlay_darkness);
@@ -453,14 +817,15 @@ static void draw_overlay(int width, int height)
     }
     if (!length)
         return;
-    x = (width - length * 6) / 2;
-    y = height - 22;
+    wide = text_width(overlay_text, -1);
+    tall = text_height();
+    x = (width - wide) / 2;
+    y = height - 15 - tall;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 170);
-    box = (SDL_FRect){ (float)x - 4, (float)y - 3, (float)(length * 6 + 7), 13 };
+    box = (SDL_FRect){ (float)x - 4, (float)y - 3, (float)(wide + 8), (float)(tall + 6) };
     SDL_RenderFillRect(renderer, &box);
-    SDL_SetRenderDrawColor(renderer, 255, 232, 150, 255);
-    draw_text(overlay_text, length, x, y);
+    draw_text(overlay_text, -1, x, y, 255, 232, 150, 255);
 }
 
 /* ---- notices: a heading and one line, over the top of the picture for a few seconds ----
@@ -472,22 +837,15 @@ static struct notice notices[NOTICE_QUEUE];
 static int notice_count, notice_age;
 static SDL_Texture *notice_texture;         /* the icon of the notice being shown */
 
-/* Capitals only (the 5 x 7 set has no accents): the accented letters of Latin-1 lose the accent, and any other
- * character outside ASCII becomes one '?'. The text is UTF-8. */
+/* The text is kept as it came (UTF-8); control characters become spaces. How it is written is decided when it is
+ * drawn: the game's typeface has small letters and accents, the 5 x 7 dots have capitals only. */
 static void notice_copy(char *out, size_t capacity, const char *text)
 {
-    /* U+00C0..U+00FF without the bit that tells capitals from small letters */
-    static const char plain[33] = "AAAAAA?CEEEEIIII?NOOOOO?OUUUUY??";
     size_t n = 0;
-    for (; text && *text && n + 1 < capacity; text++) {
-        unsigned char c = (unsigned char)*text, next = (unsigned char)text[1];
-        if ((c & 0xC0) == 0x80)
-            continue;                               /* the tail of a character already shown */
-        if (c == 0xC3 && next >= 0x80 && next < 0xC0)
-            out[n++] = plain[next & 0x1F];
-        else
-            out[n++] = c >= 0x80 ? '?' : c >= 'a' && c <= 'z' ? (char)(c - 32) : c < 32 ? ' ' : (char)c;
-    }
+    for (; text && *text && n + 1 < capacity; text++)
+        out[n++] = (unsigned char)*text < 32 ? ' ' : *text;
+    while (n && ((unsigned char)out[n - 1] & 0xC0) == 0xC0)
+        n--;                                        /* a character cut in two by the capacity */
     out[n] = 0;
 }
 
@@ -512,7 +870,8 @@ void ss_plat_notice(const char *heading, const char *text, int rebel, const uint
 static void draw_notice(int left, int top, int width)
 {
     const struct notice *notice = &notices[0];
-    int heading, length, fit, first = 0, shown, columns, x, alpha = 255, icon;
+    const char *line;
+    int heading, heading_wide, shown, shown_wide, room, wide, tall, x, alpha = 255, icon, used, skip;
     SDL_FRect box;
 
     if (!notice_count)
@@ -526,37 +885,38 @@ static void draw_notice(int left, int top, int width)
         }
     }
     icon = notice_texture ? NOTICE_ICON + 4 : 0;    /* room at the left of the text */
-    fit = (width - 16 - icon) / 6;
-    heading = (int)SDL_strlen(notice->heading);
-    length = (int)SDL_strlen(notice->text);
+    room = width - 16 - icon;
+    tall = text_height();
+    line = notice->text;
     if (notice_age < NOTICE_FADE)
         alpha = 255 * (notice_age + 1) / NOTICE_FADE;
     if (notice_age >= NOTICE_FRAMES - NOTICE_FADE)
         alpha = 255 * (NOTICE_FRAMES - notice_age) / NOTICE_FADE;
-    if (heading > fit)
-        heading = fit;
-    shown = length > fit ? fit : length;
-    if (length > fit) {                             /* slide: a second still, then a character every eight frames */
-        first = (notice_age - 60) / 8;
-        if (first < 0) first = 0;
-        if (first > length - fit) first = length - fit;
+    heading = text_fit(notice->heading, room);
+    heading_wide = text_width(notice->heading, heading);
+    /* slide: a second still, then a character every eight frames until the end of the line is in sight */
+    for (skip = (notice_age - 60) / 8; skip > 0 && text_width(line, -1) > room; skip--) {
+        text_next(line, &used);
+        line += used;
     }
-    columns = shown > heading ? shown : heading;
-    x = left + (width - columns * 6 - icon) / 2 + icon;
+    shown = text_fit(line, room);
+    shown_wide = text_width(line, shown);
+    wide = shown_wide > heading_wide ? shown_wide : heading_wide;
+    x = left + (width - wide - icon) / 2 + icon;
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(alpha * 190 / 255));
-    box = (SDL_FRect){ (float)(x - 5 - icon), (float)top + 2, (float)(columns * 6 + 9 + icon), 24 };
+    box = (SDL_FRect){ (float)(x - 5 - icon), (float)top + 2, (float)(wide + 10 + icon), (float)(2 * tall + 10) };
     SDL_RenderFillRect(renderer, &box);
     if (notice->rebel)
         SDL_SetRenderDrawColor(renderer, 255, 96, 150, (Uint8)alpha);
     else
         SDL_SetRenderDrawColor(renderer, 232, 168, 56, (Uint8)alpha);
     SDL_RenderRect(renderer, &box);
-    draw_text(notice->heading, heading, x + (columns - heading) * 3, top + 5);
-    SDL_SetRenderDrawColor(renderer, 255, 244, 214, (Uint8)alpha);
-    draw_text(notice->text + first, shown, x + (columns - shown) * 3, top + 15);
+    draw_text(notice->heading, heading, x + (wide - heading_wide) / 2, top + 5, notice->rebel ? 255 : 232, notice->rebel ? 96 : 168,
+              notice->rebel ? 150 : 56, alpha);
+    draw_text(line, shown, x + (wide - shown_wide) / 2, top + 8 + tall, 255, 244, 214, alpha);
     if (notice_texture) {
-        box = (SDL_FRect){ (float)(x - 2 - icon), (float)top + 4, NOTICE_ICON, NOTICE_ICON };
+        box = (SDL_FRect){ (float)(x - 2 - icon), (float)(top + 2 + (2 * tall + 10 - NOTICE_ICON) / 2), NOTICE_ICON, NOTICE_ICON };
         SDL_SetTextureAlphaMod(notice_texture, (Uint8)alpha);
         SDL_RenderTexture(renderer, notice_texture, NULL, &box);
     }
@@ -573,7 +933,8 @@ static void draw_notice(int left, int top, int width)
 
 /* ---- touch screen: the console's buttons drawn over the picture ----
  * Positions are in picture units (the view is `width` x 160). On by default on Android while no controller is
- * connected; SS_TOUCH=1 or 0 forces it. */
+ * connected; SS_TOUCH=1 or 0 forces it. A small button at the top opens the options menu; while the menu is
+ * open the buttons are neither drawn nor read (a touch then chooses in the menu, see handle_event). */
 struct touch_button { int bit; float x, y, w, h; };
 
 static int touch_layout(struct touch_button *b, int width)
@@ -591,13 +952,14 @@ static int touch_layout(struct touch_button *b, int width)
 
 static uint16_t touch_buttons(int width)
 {
-    static int wanted = -1;
+    static int wanted = -1, menu_before;
     const float pad_x = 40, pad_y = 116, pad_radius = 36, dead = 9;
+    const SDL_FRect menu_box = { (float)width / 2 - 13, 2, 26, 13 };
     struct touch_button buttons[8];
     SDL_TouchID *devices;
     SDL_FRect box;
     uint16_t held = 0;
-    int count = 0, d, i, n, window_w = 1, window_h = 1;
+    int count = 0, d, i, n, window_w = 1, window_h = 1, menu_now = 0;
 
     if (wanted < 0) {
         const char *text = getenv("SS_TOUCH");
@@ -609,6 +971,10 @@ static uint16_t touch_buttons(int width)
     }
     if (!wanted || gamepad)
         return 0;
+    if (menu_open) {
+        menu_before = 1;                /* the finger that chose "resume" opens nothing when it is still down */
+        return 0;
+    }
     n = touch_layout(buttons, width);
     SDL_GetWindowSize(window, &window_w, &window_h);
     devices = SDL_GetTouchDevices(&count);
@@ -629,6 +995,8 @@ static uint16_t touch_buttons(int width)
             for (i = 0; i < n; i++)
                 if (x >= buttons[i].x - 4 && x < buttons[i].x + buttons[i].w + 4 && y >= buttons[i].y - 4 && y < buttons[i].y + buttons[i].h + 4)
                     held |= (uint16_t)(1 << buttons[i].bit);
+            if (x >= menu_box.x - 4 && x < menu_box.x + menu_box.w + 4 && y >= menu_box.y - 2 && y < menu_box.y + menu_box.h + 4)
+                menu_now = 1;
         }
         SDL_free(list);
     }
@@ -652,26 +1020,617 @@ static uint16_t touch_buttons(int width)
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
         SDL_RenderRect(renderer, &box);
     }
-    return held;
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 45);        /* the menu's button: three bars in a box */
+    SDL_RenderFillRect(renderer, &menu_box);
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, 120);
+    SDL_RenderRect(renderer, &menu_box);
+    for (i = 0; i < 3; i++) {
+        box = (SDL_FRect){ menu_box.x + 7, menu_box.y + 3 + (float)i * 3, 12, 1 };
+        SDL_RenderFillRect(renderer, &box);
+    }
+    if (menu_now && !menu_before)
+        menu_command(MENU_TOGGLE);
+    menu_before = menu_now;
+    return menu_open ? 0 : held;
 }
 
-/* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
-uint16_t ss_plat_present(const uint32_t *pixels, int width)
-{
-    static int shown_width;
-    SDL_FRect source = { 0, 0, (float)width, SS_SCREEN_H };
-    SDL_Rect update = { 0, 0, width, SS_SCREEN_H };
-    const bool *state;
-    uint16_t held = 0;
-    uint64_t now;
-    SDL_Event event;
-    int i;
+/* ---- options menu ----
+ * Opened over the game with Escape, the system's Back on Android, Select and Start together on a controller (or
+ * its Guide button), or the small button of the touch controls. Every entry takes effect at once and is written
+ * to shiningsource.ini, so the launcher and the next start find it.
+ *
+ * While it is open the game gets no buttons. A game alone waits: ss_plat_present does not return, it keeps
+ * drawing the same picture under the menu, and no sound is made because none is produced. Online nobody can
+ * wait for one player, so the game goes on behind the menu and the menu says so.
+ *
+ * Tests: SS_TEST_KEYS="picture:key,..." plays the part of the keyboard, where `picture` counts what the window
+ * has shown (as SS_WINDOW_SHOT does; game frames stop while the menu is open alone, pictures do not) and key is
+ * one of esc up down left right ok back, pad:MASK (a controller holding those buttons from then on, mask as in
+ * SS_INPUT) or click:X:Y (a press at that window pixel). With it set, what the menu does is written to stderr. */
+enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
+       ITEM_QUIT, ITEM_KINDS };
+enum { INFO_LINES = 8, INFO_BYTES = 96 };
+static int menu_row, menu_quit_armed, menu_online;
+static uint16_t menu_swallow;           /* buttons still held from the menu: not the game's until they are let go */
+static unsigned settings_changed;       /* one bit per setting the menu changed in this session */
+static long pictures, game_frames;      /* what the window has shown, and how many of those were new game frames */
+static int test_log;
+static uint16_t test_pad;
+static int logical_w, logical_h;        /* the logical size the renderer has now (0: none, the menu's own scale) */
+static struct { int scale, x, w, rows_y, pitch, count, items[ITEM_KINDS], middle[ITEM_KINDS], reach[ITEM_KINDS]; } menu_shape;
 
-    if (!window)
-        return 0;
-    while (SDL_PollEvent(&event))
-        handle_event(&event);
-    state = SDL_GetKeyboardState(NULL);
+static int spanish(void)
+{
+    static int known = -1;
+    if (known < 0) {
+        const char *text = getenv("SS_LANG");
+        known = text && text[0] == 'e' && text[1] == 's';
+    }
+    return known;
+}
+
+/* The entries shown now, top to bottom. */
+static int menu_items(int *items)
+{
+    int n = 0;
+    items[n++] = ITEM_RESUME;
+    items[n++] = ITEM_MODE;
+    if (classic) {
+        items[n++] = ITEM_BORDER;
+        items[n++] = ITEM_STYLE;
+    } else {
+        items[n++] = ITEM_SIDES;
+    }
+#ifndef __ANDROID__
+    items[n++] = ITEM_FULLSCREEN;       /* an Android app always has the whole screen */
+#endif
+    items[n++] = ITEM_VSYNC;
+    items[n++] = ITEM_VOLUME;
+    items[n++] = ITEM_SMOOTH;
+    items[n++] = ITEM_SKIP;
+    items[n++] = ITEM_QUIT;
+    return n;
+}
+
+static const char *item_label(int item)
+{
+    static const char *const names[ITEM_KINDS][2] = {
+        { "Resume", "Continuar" }, { "Screen mode", "Modo de pantalla" }, { "Border size", "Grosor del borde" },
+        { "Border style", "Aspecto del borde" }, { "Sides", "Lados" }, { "Full screen", "Pantalla completa" }, { "VSync", "VSync" },
+        { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
+        { "Skip scene with Start", "Saltar escena con Start" }, { "Quit game", "Salir del juego" },
+    };
+    if (item == ITEM_QUIT && menu_quit_armed)
+        return spanish() ? "Pulsa otra vez para salir" : "Press again to quit";
+    return names[item][spanish()];
+}
+
+/* The value an entry shows at its right, or NULL for one that only does something. */
+static const char *item_value(int item, char *buffer, size_t capacity)
+{
+    static const char *const styles[5][2] = { { "Black", "Negro" }, { "Graphite", "Grafito" }, { "Indigo", "\xC3\x8Dndigo" },
+                                              { "Silver", "Plata" }, { "Soul", "Soul" } };
+    const int es = spanish();
+    const char *on = es ? "S\xC3\xAD" : "On", *off = es ? "No" : "Off";
+    switch (item) {
+    case ITEM_MODE: return classic ? (es ? "Cl\xC3\xA1sico" : "Classic") : (es ? "Mejorado" : "Enhanced");
+    case ITEM_BORDER: SDL_snprintf(buffer, capacity, "%d", border); return buffer;
+    case ITEM_STYLE: return styles[border_style][es];
+    case ITEM_SIDES: return sides_field ? (es ? "Campo" : "Field") : (es ? "Negro" : "Black");
+    case ITEM_FULLSCREEN: return option_fullscreen ? on : off;
+    case ITEM_VSYNC:
+        if (option_vsync == 2)
+            return vsync_refused ? (es ? "VRR (sin sincron\xC3\xAD" "a)" : "VRR (no sync)") : "VRR";
+        return option_vsync ? on : off;
+    case ITEM_VOLUME: SDL_snprintf(buffer, capacity, "%d%%", option_volume); return buffer;
+    case ITEM_SMOOTH: return option_smooth ? on : off;
+    case ITEM_SKIP: return option_skip ? on : off;
+    }
+    return NULL;
+}
+
+/* A setting as the settings file holds it (the launcher's words). */
+static void setting_value(int which, char *out, size_t capacity)
+{
+    int number = which == SET_BORDER ? border : which == SET_STYLE ? border_style : which == SET_SIDES ? sides_field
+                 : which == SET_FULLSCREEN ? option_fullscreen : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
+                 : which == SET_SMOOTH ? option_smooth : option_skip;
+    if (which == SET_MODE)
+        SDL_snprintf(out, capacity, "%s", classic ? "classic" : "enhanced");
+    else
+        SDL_snprintf(out, capacity, "%d", number);
+}
+
+/* Write what the menu changed to shiningsource.ini in the working folder: the launcher's file, "key=value"
+ * lines. Only the lines of the keys changed here are replaced (or added at the end, or the file made, when they
+ * are not there); every other line stays byte for byte. The new file is written beside the old one and takes its
+ * place when it is complete. */
+static void save_settings(void)
+{
+    static const char name[] = "shiningsource.ini", fresh[] = "shiningsource.ini.new";
+    char *old = NULL, value[32];
+    const char *line, *ending;
+    long size = 0;
+    unsigned written = 0;
+    int i;
+    FILE *file = fopen(name, "rb"), *out;
+
+    if (file) {
+        fseek(file, 0, SEEK_END);
+        size = ftell(file);
+        fseek(file, 0, SEEK_SET);
+        old = size >= 0 && size < (1 << 24) ? malloc((size_t)size + 1) : NULL;
+        if (!old || fread(old, 1, (size_t)size, file) != (size_t)size) {
+            fclose(file);
+            free(old);
+            return;                     /* a file that cannot be read whole is not replaced */
+        }
+        old[size] = 0;
+        fclose(file);
+    }
+#ifdef _WIN32
+    ending = old && size && !strstr(old, "\r\n") ? "\n" : "\r\n";      /* the launcher writes the system's line ends */
+#else
+    ending = old && strstr(old, "\r\n") ? "\r\n" : "\n";
+#endif
+    out = fopen(fresh, "wb");
+    if (!out) {
+        free(old);
+        return;
+    }
+    for (line = old; line && *line; ) {
+        const char *end = strchr(line, '\n'), *next = end ? end + 1 : line + strlen(line), *equals = memchr(line, '=', (size_t)(next - line));
+        int which = -1;
+        for (i = 0; equals && i < SET_COUNT; i++)
+            if (strlen(setting_keys[i]) == (size_t)(equals - line) && !memcmp(line, setting_keys[i], (size_t)(equals - line)))
+                which = i;
+        if (which >= 0 && (settings_changed >> which & 1)) {
+            if (!(written >> which & 1)) {          /* a second line of the same key is dropped */
+                setting_value(which, value, sizeof value);
+                fprintf(out, "%s=%s%s", setting_keys[which], value, end ? (end > line && end[-1] == '\r' ? "\r\n" : "\n") : ending);
+                written |= 1u << which;
+            }
+        } else {
+            fwrite(line, 1, (size_t)(next - line), out);
+            if (!end && settings_changed & ~written)
+                fputs(ending, out);                 /* the last line had no end and more follow */
+        }
+        line = next;
+    }
+    for (i = 0; i < SET_COUNT; i++)
+        if ((settings_changed >> i & 1) && !(written >> i & 1)) {
+            setting_value(i, value, sizeof value);
+            fprintf(out, "%s=%s%s", setting_keys[i], value, ending);
+        }
+    free(old);
+    if (ferror(out) | fclose(out)) {
+        remove(fresh);
+        return;
+    }
+#ifdef _WIN32
+    if (!MoveFileExA(fresh, name, MOVEFILE_REPLACE_EXISTING))
+        remove(fresh);
+#else
+    if (rename(fresh, name) != 0)
+        remove(fresh);
+#endif
+}
+
+/* Change an entry's value one step down (-1) or up (+1), at once, and remember it. */
+static void item_change(int item, int step)
+{
+    char value[32];
+    int which = -1;
+    switch (item) {
+    case ITEM_MODE:
+        classic = !classic;
+        ss_frame_set_view(classic ? 0 : view_forced);       /* classic: the core asks ss_plat_view_width, which says 240 */
+        which = SET_MODE;
+        break;
+    case ITEM_BORDER:
+        border = step > 0 ? (border / 4 + 1) * 4 : ((border + 3) / 4 - 1) * 4;
+        if (border < 0) border = 0;
+        if (border > 64) border = 64;
+        which = SET_BORDER;
+        break;
+    case ITEM_STYLE:
+        border_style = (border_style + step + 5) % 5;
+        which = SET_STYLE;
+        break;
+    case ITEM_SIDES:
+        sides_field = !sides_field;
+        which = SET_SIDES;
+        break;
+    case ITEM_FULLSCREEN:
+        option_fullscreen = !option_fullscreen;
+        SDL_SetWindowFullscreen(window, option_fullscreen);
+        which = SET_FULLSCREEN;
+        break;
+    case ITEM_VSYNC:
+        option_vsync = (option_vsync + step + 3) % 3;
+        set_vsync(option_vsync);
+        which = SET_VSYNC;
+        break;
+    case ITEM_VOLUME:
+        option_volume = step > 0 ? (option_volume / 10 + 1) * 10 : ((option_volume + 9) / 10 - 1) * 10;
+        if (option_volume < 0) option_volume = 0;
+        if (option_volume > 100) option_volume = 100;
+        if (audio)
+            SDL_SetAudioStreamGain(audio, (float)option_volume / 100.0f);
+        which = SET_VOLUME;
+        break;
+    case ITEM_SMOOTH:
+        option_smooth = !option_smooth;
+        ss_frame_set_smooth(option_smooth);
+        which = SET_SMOOTH;
+        break;
+    case ITEM_SKIP:
+        option_skip = !option_skip;
+        ss_skip_set_enabled(option_skip);
+        which = SET_SKIP;
+        break;
+    }
+    if (which < 0)
+        return;
+    settings_changed |= 1u << which;
+    save_settings();
+    if (test_log) {
+        setting_value(which, value, sizeof value);
+        fprintf(stderr, "menu: %s=%s (picture %ld, game frame %ld)\n", setting_keys[which], value, pictures, game_frames);
+    }
+}
+
+static void menu_close(void)
+{
+    menu_open = 0;
+    menu_swallow = 0x03FF;
+    next_frame_ns = SDL_GetTicksNS();   /* the time spent here is not time the game has to make up */
+    if (test_log)
+        fprintf(stderr, "menu: closed at picture %ld, game frame %ld\n", pictures, game_frames);
+}
+
+static void menu_command(int command)
+{
+    int items[ITEM_KINDS], count = menu_items(items), item;
+    char buffer[32];
+    if (command == MENU_TOGGLE && !menu_open) {
+        if (!window)
+            return;
+        menu_open = 1;
+        menu_row = 0;
+        menu_quit_armed = 0;
+        option_fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;      /* F11 may have changed it */
+        if (test_log)
+            fprintf(stderr, "menu: opened at picture %ld, game frame %ld\n", pictures, game_frames);
+        return;
+    }
+    if (!menu_open)
+        return;
+    if (menu_row >= count)
+        menu_row = count - 1;
+    item = items[menu_row];
+    switch (command) {
+    case MENU_TOGGLE:
+    case MENU_BACK:
+        menu_close();
+        break;
+    case MENU_UP:
+    case MENU_DOWN:
+        menu_row = (menu_row + (command == MENU_UP ? count - 1 : 1)) % count;
+        menu_quit_armed = 0;
+        break;
+    case MENU_LEFT:
+    case MENU_RIGHT:
+        if (item_value(item, buffer, sizeof buffer))
+            item_change(item, command == MENU_LEFT ? -1 : 1);
+        break;
+    case MENU_OK:
+        if (item == ITEM_RESUME) {
+            menu_close();
+        } else if (item == ITEM_QUIT) {
+            if (menu_quit_armed) {
+                if (test_log)
+                    fprintf(stderr, "menu: quit chosen at picture %ld, game frame %ld\n", pictures, game_frames);
+                exit(0);                /* as closing the window does */
+            }
+            menu_quit_armed = 1;        /* asked twice: leaving loses what was not saved in the game */
+        } else {
+            item_change(item, 1);
+        }
+        break;
+    }
+}
+
+/* The pointer (mouse or finger) at a window pixel: it marks the entry under it, and a press chooses it. On an
+ * entry with a value the press steps it up, or down when it falls on the left arrow or the left half of the
+ * value. */
+static void menu_click(float x, float y, int pressed)
+{
+    int ux, uy, row, item;
+    char buffer[32];
+    if (!menu_open || menu_shape.scale < 1)
+        return;
+    ux = (int)x / menu_shape.scale;
+    uy = (int)y / menu_shape.scale;
+    if (ux < menu_shape.x || ux >= menu_shape.x + menu_shape.w || uy < menu_shape.rows_y)
+        return;
+    row = (uy - menu_shape.rows_y) / menu_shape.pitch;
+    if (row >= menu_shape.count)
+        return;
+    if (row != menu_row)
+        menu_quit_armed = 0;
+    menu_row = row;
+    if (!pressed)
+        return;
+    item = menu_shape.items[row];
+    if (item_value(item, buffer, sizeof buffer))
+        item_change(item, ux < menu_shape.middle[row] && ux >= menu_shape.reach[row] ? -1 : 1);
+    else
+        menu_command(MENU_OK);
+}
+
+/* The controller in the menu, once per picture: the pad or the stick move and change (held, they repeat), the
+ * console's A chooses and B goes back. `pad` are the buttons the controller holds. */
+static void menu_buttons(uint16_t pad)
+{
+    static const int commands[4] = { MENU_RIGHT, MENU_LEFT, MENU_UP, MENU_DOWN };
+    static uint16_t before;
+    static int held_for;
+    uint16_t pressed = (uint16_t)(pad & ~before);
+    int i;
+    before = pad;
+    if (!menu_open)
+        return;
+    held_for = (pad & 0xF0) ? held_for + 1 : 0;
+    for (i = 0; i < 4; i++)
+        if ((pressed >> (4 + i) & 1) || ((pad >> (4 + i) & 1) && held_for >= 24 && held_for % 6 == 0))
+            menu_command(commands[i]);
+    if (pressed & 1)
+        menu_command(MENU_OK);
+    else if (pressed & 2)
+        menu_command(MENU_BACK);
+}
+
+/* Select and Start together on the controller open and close the menu. So that neither button of that press
+ * reaches the game, what the controller says about those two is handed on three pictures late (a twentieth of
+ * a second, not felt on Start alone): when the second arrives within that time the first has not been seen by
+ * the game, and both stay hidden until both are let go. Pressed further apart than that, the menu still opens,
+ * but the game has seen the first button. */
+static uint16_t menu_chord(uint16_t pad)
+{
+    enum { LATE = 3, BOTH = 0x000C };
+    static uint16_t past[LATE];
+    static int hidden, at;
+    uint16_t late;
+    if ((pad & BOTH) == BOTH && !hidden) {
+        hidden = 1;
+        memset(past, 0, sizeof past);
+        menu_command(MENU_TOGGLE);
+    }
+    if (hidden) {
+        if (!(pad & BOTH))
+            hidden = 0;
+        return (uint16_t)(pad & ~BOTH);
+    }
+    late = past[at];
+    past[at] = (uint16_t)(pad & BOTH);
+    at = (at + 1) % LATE;
+    return (uint16_t)((pad & ~BOTH) | late);
+}
+
+/* What a controller's button is called in the menu's line about the controls. */
+static const char *pad_name(SDL_GamepadButton button)
+{
+    static const char *const face[] = { NULL, "A", "B", "X", "Y", "Cross", "Circle", "Square", "Triangle" };
+    static const char *const face_es[] = { NULL, "A", "B", "X", "Y", "Cruz", "C\xC3\xADrculo", "Cuadrado", "Tri\xC3\xA1ngulo" };
+    int label = gamepad ? (int)SDL_GetGamepadButtonLabel(gamepad, button) : 0;
+    if (label >= 1 && label <= 8)
+        return spanish() ? face_es[label] : face[label];
+    switch (button) {
+    case SDL_GAMEPAD_BUTTON_BACK: return "Back";
+    case SDL_GAMEPAD_BUTTON_GUIDE: return "Guide";
+    case SDL_GAMEPAD_BUTTON_START: return "Start";
+    case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "L3";
+    case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "R3";
+    case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "LB";
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "RB";
+    case SDL_GAMEPAD_BUTTON_DPAD_UP: return spanish() ? "Arriba" : "Up";
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return spanish() ? "Abajo" : "Down";
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return spanish() ? "Izquierda" : "Left";
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return spanish() ? "Derecha" : "Right";
+    default: break;
+    }
+    return "?";
+}
+
+static const char *key_name(SDL_Scancode code)
+{
+    const char *name = SDL_GetScancodeName(code);
+    return name && *name ? name : "?";
+}
+
+/* The lines under the entries: whether the game waits, the controls as they are bound (they are changed in the
+ * launcher), and how the menu is used. */
+static int menu_info(char lines[INFO_LINES][INFO_BYTES])
+{
+    const int es = spanish();
+    int n = 0;
+    SDL_snprintf(lines[n++], INFO_BYTES, "%s", menu_online ? (es ? "En l\xC3\xADnea: el juego sigue en marcha" : "Online: the game keeps running")
+                                                            : (es ? "Juego en pausa" : "Game paused"));
+#ifndef __ANDROID__
+    SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s", es ? "Teclas" : "Keys", key_name(keys[0]), key_name(keys[1]),
+                 key_name(keys[9]), key_name(keys[8]));
+    SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", key_name(keys[3]), key_name(keys[2]));
+#endif
+    if (gamepad) {
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s", es ? "Mando" : "Pad", pad_name(pad_buttons[0]), pad_name(pad_buttons[1]),
+                     pad_name(pad_buttons[9]), pad_name(pad_buttons[8]));
+        SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", pad_name(pad_buttons[3]), pad_name(pad_buttons[2]));
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Select+Start: men\xC3\xBA. A: elegir. B: volver" : "Select+Start: menu. A: choose. B: back");
+    } else {
+#ifdef __ANDROID__
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Toca una opci\xC3\xB3n para cambiarla" : "Touch an option to change it");
+#else
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Flechas: mover y cambiar. Esc: volver" : "Arrows: move and change. Esc: back");
+#endif
+    }
+    return n;
+}
+
+/* Draw the menu over the finished picture. It has its own scale: the largest whole number at which the panel
+ * fits the window, whatever the picture's mode, so it reads the same over a small classic picture and a wide
+ * one. In a window too small for the game's typeface it falls back to the 5 x 7 dots. The look is the port's
+ * "Soul" one, as the launcher's: a deep blue-green panel with points of light, a gold frame and jewels. */
+static void draw_menu(void)
+{
+    char info[INFO_LINES][INFO_BYTES], buffer[32];
+    int items[ITEM_KINDS], count = menu_items(items), lines = menu_info(info);
+    int out_w = 0, out_h = 0, attempt, game = 0, pitch = 0, info_pitch = 0, title = 0, w = 0, h = 0, scale = 1, x, y, i, k, row_y, tall;
+    const char *heading = spanish() ? "Opciones" : "Options";
+
+    SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
+    SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
+    logical_w = logical_h = 0;
+    for (attempt = 0; attempt < 2; attempt++) {
+        block_text = attempt;
+        game = text_game();
+        pitch = game ? 15 : 11;
+        info_pitch = game ? 14 : 9;
+        title = game ? 21 : 14;
+        w = game ? 272 : 244;
+        h = 5 + title + count * pitch + 6 + lines * info_pitch + 4;
+        scale = out_w / (w + 8) < out_h / (h + 8) ? out_w / (w + 8) : out_h / (h + 8);
+        if (scale >= 1 || !game)
+            break;
+    }
+    if (scale < 1)
+        scale = 1;
+    if (menu_row >= count)
+        menu_row = count - 1;
+    tall = text_height();
+    x = (out_w / scale - w) / 2;
+    y = (out_h / scale - h) / 2;
+    SDL_SetRenderScale(renderer, (float)scale, (float)scale);
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 120);
+    SDL_RenderFillRect(renderer, NULL);
+    fill((float)x - 3, (float)y - 3, (float)w + 6, (float)h + 6, 96, 58, 16);
+    fill((float)x - 2, (float)y - 2, (float)w + 4, (float)h + 4, 232, 168, 56);
+    fill((float)x - 1, (float)y - 1, (float)w + 2, (float)h + 2, 255, 226, 138);
+    for (i = 0; i < h; i++) {
+        int t = i * 255 / (h - 1);
+        fill((float)x, (float)(y + i), (float)w, 1, 16 - t * 8 / 255, 50 - t * 26 / 255, 60 - t * 28 / 255);
+    }
+    for (i = 3; i < h; i += 7)
+        for (k = 3 + (i * 5) % 11; k < w; k += 13) {
+            int light = (k * 31 + i * 17) % 5;
+            fill((float)(x + k), (float)(y + i), 1, 1, 30 + light * 8, 74 + light * 9, 84 + light * 9);
+        }
+    jewel(x - 2, y - 2, 3, 232, 168, 56); jewel(x + w + 1, y - 2, 3, 232, 168, 56);
+    jewel(x - 2, y + h + 1, 3, 232, 168, 56); jewel(x + w + 1, y + h + 1, 3, 232, 168, 56);
+    jewel(x + w / 2, y - 2, 3, 92, 214, 226); jewel(x + w / 2, y + h + 1, 3, 92, 214, 226);
+
+    draw_text(heading, -1, x + (w - text_width(heading, -1)) / 2, y + 5 + (title - 4 - tall) / 2, 255, 214, 110, 255);
+    fill((float)x + 8, (float)(y + 5 + title - 3), (float)w - 16, 1, 170, 118, 40);
+    row_y = y + 5 + title;
+    for (i = 0; i < count; i++) {
+        const char *value = item_value(items[i], buffer, sizeof buffer);
+        int top = row_y + i * pitch, text_y = top + (pitch - tall) / 2, chosen = i == menu_row, wide, value_x;
+        if (chosen) {
+            fill((float)x + 4, (float)top, (float)w - 8, (float)pitch, 150, 98, 26);
+            fill((float)x + 4, (float)top, (float)w - 8, 1, 232, 168, 56);
+        }
+        if (items[i] == ITEM_QUIT && menu_quit_armed)
+            draw_text(item_label(items[i]), -1, x + 10, text_y, 255, 150, 150, 255);
+        else
+            draw_text(item_label(items[i]), -1, x + 10, text_y, chosen ? 255 : 226, chosen ? 255 : 236, chosen ? 255 : 230, 255);
+        menu_shape.items[i] = items[i];
+        menu_shape.middle[i] = menu_shape.reach[i] = 0;
+        if (!value)
+            continue;
+        wide = text_width(value, -1);
+        value_x = x + w - 20 - wide;
+        draw_text(value, -1, value_x, text_y, 255, 226, 138, 255);
+        for (k = 0; k < 4; k++) {       /* the arrows at both sides of the value */
+            int shade = chosen ? 255 : 150;
+            fill((float)(value_x - 10 + k), (float)(top + pitch / 2 - k), 1, (float)(2 * k + 1), shade, shade * 226 / 255, shade * 138 / 255);
+            fill((float)(x + w - 14 + k), (float)(top + pitch / 2 - 3 + k), 1, (float)(7 - 2 * k), shade, shade * 226 / 255, shade * 138 / 255);
+        }
+        menu_shape.middle[i] = value_x + wide / 2;
+        menu_shape.reach[i] = value_x - 22;
+    }
+    row_y += count * pitch + 6;
+    fill((float)x + 8, (float)(row_y - 3), (float)w - 16, 1, 170, 118, 40);
+    for (i = 0; i < lines; i++) {
+        int warn = i == 0 && menu_online;
+        draw_text(info[i], text_fit(info[i], w - 20), x + 10, row_y + i * info_pitch + (info_pitch - tall) / 2 + (game ? 1 : 0),
+                  warn ? 255 : 150, warn ? 190 : 196, warn ? 120 : 204, 255);
+    }
+    menu_shape.scale = scale;
+    menu_shape.x = x;
+    menu_shape.w = w;
+    menu_shape.rows_y = y + 5 + title;
+    menu_shape.pitch = pitch;
+    menu_shape.count = count;
+    SDL_SetRenderScale(renderer, 1.0f, 1.0f);
+    block_text = 0;
+}
+
+static void test_report(void)
+{
+    fprintf(stderr, "menu test: %ld pictures shown for %ld game frames\n", pictures, game_frames);
+}
+
+/* SS_TEST_KEYS, see "options menu". */
+static void test_keys(void)
+{
+    static const char *const names[] = { "up", "down", "left", "right", "ok", "back", "esc" };
+    static const char *script;
+    static int looked;
+    const char *cursor;
+    if (!looked) {
+        looked = 1;
+        script = getenv("SS_TEST_KEYS");
+        test_log = script != NULL;
+        if (test_log)
+            atexit(test_report);
+    }
+    for (cursor = script; cursor && *cursor; ) {
+        char *end, name[32];
+        long at = strtol(cursor, &end, 10);
+        size_t length;
+        unsigned i;
+        if (*end != ':')
+            break;
+        cursor = end + 1;
+        length = strcspn(cursor, ",");
+        if (at == pictures && length < sizeof name) {
+            memcpy(name, cursor, length);
+            name[length] = 0;
+            for (i = 0; i < sizeof names / sizeof names[0]; i++)
+                if (!strcmp(name, names[i]))
+                    menu_command((int)i);           /* the order of the MENU_ commands */
+            if (!strncmp(name, "pad:", 4))
+                test_pad = (uint16_t)strtoul(name + 4, NULL, 16);
+            if (!strncmp(name, "click:", 6)) {
+                float x = (float)strtol(name + 6, &end, 10), y = *end == ':' ? (float)atol(end + 1) : 0;
+                menu_click(x, y, 0);
+                menu_click(x, y, 1);
+            }
+        }
+        cursor += length;
+        if (*cursor == ',')
+            cursor++;
+    }
+}
+
+/* The buttons the keyboard and the controller hold for the game (bit order above). */
+static uint16_t read_buttons(void)
+{
+    const bool *state = SDL_GetKeyboardState(NULL);
+    uint16_t held = 0, pad = test_pad;
+    int i;
     for (i = 0; i < 10; i++)
         if (state[keys[i]])
             held |= (uint16_t)(1 << i);
@@ -680,75 +1639,144 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         int x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
         for (i = 0; i < 10; i++)
             if (SDL_GetGamepadButton(gamepad, pad_buttons[i]))
-                held |= (uint16_t)(1 << i);
-        if (x > 12000) held |= 1 << 4;
-        if (x < -12000) held |= 1 << 5;
-        if (y < -12000) held |= 1 << 6;
-        if (y > 12000) held |= 1 << 7;
+                pad |= (uint16_t)(1 << i);
+        if (x > 12000) pad |= 1 << 4;
+        if (x < -12000) pad |= 1 << 5;
+        if (y < -12000) pad |= 1 << 6;
+        if (y > 12000) pad |= 1 << 7;
     }
+    held |= menu_chord(pad);
+    menu_buttons(pad);
     if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
     if ((held & 0xC0) == 0xC0) held &= ~0xC0;
+    return held;
+}
 
-    if (classic < 0)
-        read_mode();
-    if (width != shown_width) {
-        if (classic)
-            SDL_SetRenderLogicalPresentation(renderer, width + 2 * border, SS_SCREEN_H + 2 * border, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-        else
-            SDL_SetRenderLogicalPresentation(renderer, width, SS_SCREEN_H, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-        shown_width = width;
+/* Draw the frame in the texture (`width` columns), what goes over it, and the menu. Returns the buttons the
+ * touch controls hold. The picture shown is `width` wide except right after the mode changed and while a game
+ * waits behind the menu, when the frame at hand has the width of the mode before: its middle is shown then, or
+ * all of it in the middle. */
+static uint16_t show_picture(int width)
+{
+    int view = classic ? SS_SCREEN_W : menu_open ? (view_forced ? view_forced : ss_plat_view_width()) : width;
+    int shown = width < view ? width : view, w = classic ? view + 2 * border : view, h = classic ? SS_SCREEN_H + 2 * border : SS_SCREEN_H;
+    SDL_FRect source = { (float)((width - shown) / 2), 0, (float)shown, SS_SCREEN_H };
+    SDL_FRect inside = { (float)((classic ? border : 0) + (view - shown) / 2), (float)(classic ? border : 0), (float)shown, SS_SCREEN_H };
+    uint16_t held;
+
+    if (w != logical_w || h != logical_h) {
+        SDL_SetRenderLogicalPresentation(renderer, w, h, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        logical_w = w;
+        logical_h = h;
     }
-    SDL_UpdateTexture(texture, &update, pixels, width * 4);
     if (classic) {
-        SDL_FRect inside = { (float)border, (float)border, (float)width, SS_SCREEN_H };
         draw_border();
         SDL_RenderTexture(renderer, texture, &source, &inside);
-        draw_overlay(width + 2 * border, SS_SCREEN_H + 2 * border);
-        draw_notice(border, border, width);
-        held |= touch_buttons(width + 2 * border);
+        draw_overlay(w, h);
+        draw_notice(border, border, view);
     } else {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         /* Enhanced mode: where the picture has nothing to show (beside a menu, past the edge of a map) the
          * renderer leaves the pixels transparent and the port's field shows through. SS_SIDES=0 keeps black. */
-        if (width > SS_SCREEN_W && sides_field)
-            draw_field(width, SS_SCREEN_H, 0, 0, 0, 0);
-        SDL_RenderTexture(renderer, texture, &source, NULL);
-        draw_overlay(width, SS_SCREEN_H);
-        draw_notice(0, 0, width);
-        held |= touch_buttons(width);
+        if (view > SS_SCREEN_W && sides_field)
+            draw_field(view, SS_SCREEN_H, 0, 0, 0, 0);
+        SDL_RenderTexture(renderer, texture, &source, &inside);
+        draw_overlay(w, h);
+        draw_notice(0, 0, view);
     }
-    {                                   /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N */
-        static long shot_at = -1, presented;
-        if (shot_at < 0)
-            shot_at = getenv("SS_WINDOW_SHOT") ? atol(getenv("SS_WINDOW_SHOT")) : 0;
-        if (shot_at && ++presented == shot_at) {
-            SDL_Surface *surface = SDL_RenderReadPixels(renderer, NULL);
-            if (surface) {
-                SDL_SaveBMP(surface, "ss_window.bmp");
-                SDL_DestroySurface(surface);
+    held = touch_buttons(w);
+    if (menu_open)
+        draw_menu();
+    return held;
+}
+
+/* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
+uint16_t ss_plat_present(const uint32_t *pixels, int width)
+{
+    SDL_Rect update = { 0, 0, width, SS_SCREEN_H };
+    uint16_t held = 0;
+    uint64_t now;
+    SDL_Event event;
+    int waiting;
+
+    if (!window)
+        return 0;
+    game_frames++;
+    SDL_UpdateTexture(texture, &update, pixels, width * 4);
+    do {                                /* once, or for as long as a game alone waits behind the menu */
+        while (SDL_PollEvent(&event))
+            handle_event(&event);
+        pictures++;
+        test_keys();
+        held = read_buttons();
+        if (classic < 0)
+            read_mode();
+        menu_online = menu_open && ss_net_active();
+        held |= show_picture(width);
+        {
+            /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N in ss_window.bmp. More numbers
+             * after commas save further pictures of the same run, each in ss_window_N.bmp. */
+            static const char *shots;
+            static int looked;
+            const char *cursor;
+            char name[40], *end;
+            if (!looked) {
+                looked = 1;
+                shots = getenv("SS_WINDOW_SHOT");
+            }
+            for (cursor = shots; cursor && *cursor; cursor = *end == ',' ? end + 1 : NULL) {
+                long shot_at = strtol(cursor, &end, 10);
+                if (shot_at && pictures == shot_at) {
+                    SDL_Surface *surface = SDL_RenderReadPixels(renderer, NULL);
+                    SDL_snprintf(name, sizeof name, cursor == shots ? "ss_window.bmp" : "ss_window_%ld.bmp", shot_at);
+                    if (surface) {
+                        SDL_SaveBMP(surface, name);
+                        SDL_DestroySurface(surface);
+                    }
+                }
+                if (end == cursor)
+                    break;
             }
         }
-    }
-    SDL_RenderPresent(renderer);
+        SDL_RenderPresent(renderer);
 
-    /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */
-    next_frame_ns += 16742706;
-    now = SDL_GetTicksNS();
-    if (display_paced && !overlay_skipping) {
-        next_frame_ns = now;                        /* the display's refresh already spaced this frame */
-    } else if (next_frame_ns > now) {
-        SDL_DelayPrecise(next_frame_ns - now);
-        stat_waits++;
-        stat_wait_ns += next_frame_ns - now;
+        /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */
+        next_frame_ns += 16742706;
+        now = SDL_GetTicksNS();
+        if (display_paced && !overlay_skipping) {
+            next_frame_ns = now;                        /* the display's refresh already spaced this frame */
+        } else if (next_frame_ns > now) {
+            SDL_DelayPrecise(next_frame_ns - now);
+            stat_waits++;
+            stat_wait_ns += next_frame_ns - now;
+        }
+        else if (now - next_frame_ns > 100000000)
+            next_frame_ns = now;                        /* fell far behind (debugger, window drag): do not catch up */
+        if (stat_interval_us) {
+            uint64_t shown = SDL_GetTicksNS();
+            if (stat_last_ns)
+                stat_interval_us[stat_count++ % STAT_SLOTS] = (uint32_t)((shown - stat_last_ns) / 1000);
+            stat_last_ns = shown;
+        }
+        waiting = menu_open && !menu_online;
+        if (waiting && ss_plat_idle)
+            ss_plat_idle();
+    } while (waiting);
+
+    /* The game gets nothing while the menu is open, and afterwards nothing of what was held in it (the B that
+     * closed it, the A that chose "resume") until that button has been let go once. */
+    if (menu_open) {
+        held = 0;
+    } else {
+        menu_swallow &= held;
+        held &= (uint16_t)~menu_swallow;
     }
-    else if (now - next_frame_ns > 100000000)
-        next_frame_ns = now;                        /* fell far behind (debugger, window drag): do not catch up */
-    if (stat_interval_us) {
-        uint64_t shown = SDL_GetTicksNS();
-        if (stat_last_ns)
-            stat_interval_us[stat_count++ % STAT_SLOTS] = (uint32_t)((shown - stat_last_ns) / 1000);
-        stat_last_ns = shown;
+    if (test_log) {
+        static uint16_t told;
+        if (held != told)
+            fprintf(stderr, "input: picture %ld, game frame %ld: the game is given %04X\n", pictures, game_frames, held);
+        told = held;
     }
     return held;
 }

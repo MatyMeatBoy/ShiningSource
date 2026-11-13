@@ -128,6 +128,18 @@ uint32_t ss_plat_ticks_ms(void) { return SS_HOST(SS_B_TICKS, uint32_t (*)(void))
 /* the host evaluates the achievements: it sees the same memory (a host without them serves an empty function) */
 static void host_achievements(int run_flags) { SS_HOST(SS_B_ACHIEVEMENTS, void (*)(int))(run_flags); }
 
+/* What the host's options menu changes or asks here (bridge.h, SS_OPTION_*). */
+static int guest_option(int which, int value)
+{
+    switch (which) {
+    case SS_OPTION_SMOOTH: ss_frame_set_smooth(value); break;
+    case SS_OPTION_VIEW: ss_frame_set_view(value); break;
+    case SS_OPTION_SKIP: ss_skip_set_enabled(value); break;
+    case SS_OPTION_ONLINE: return ss_net_active();
+    }
+    return 0;
+}
+
 /* ---- entry: called by the host on a low stack, with the GBA memory mapped and the ROM loaded ---- */
 
 void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_high)
@@ -140,6 +152,7 @@ void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_h
     fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());
     fprintf(stderr, "game image %p-%p entered; running the game's AgbMain\n", (void *)__image_start, (void *)__image_end);
     ss_rebel_set_host(host_achievements);
+    SS_HOST(SS_B_OPTION_HOOK, void (*)(uint32_t))((uint32_t)(uintptr_t)guest_option);
     ss_rebel_start();                   /* before the game reads its save: a Rebel run has its own file */
     AgbMain();
     exit(0);
