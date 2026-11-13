@@ -23,13 +23,13 @@
 
 enum { KEY_A = 0x001, KEY_B = 0x002, KEY_START = 0x008 };
 enum { IDLE, PROMPT, VOTING, FADE_OUT, SKIPPING, FADE_IN };
-enum { FADE_STEP = 13, PROMPT_FRAMES = 180, SKIP_LIMIT = 36000 };
+enum { FADE_STEP = 13, PROMPT_FRAMES = 180, SKIP_LIMIT = 36000, ONLINE_LIMIT = 3600 };
 
 void sub_08086860(void);        /* TaskPlayStoryIntroduction */
 void sub_08087A5C(void);        /* TaskDisplayCenteredSceneMessage */
 void sub_080887D4(void);        /* TaskPlayScriptedSpriteRouteSequence */
 
-/* Is a story-telling task in the scheduler's list? (struct Task: next at +0, entry at +0x0C, see sched.c) */
+/* Is a story-telling task in the scheduler's list? Returns which kind (1 introduction, 2 message, 3 sprite sequence). (struct Task: next at +0, entry at +0x0C, see sched.c) */
 int ss_scene_active(void)
 {
     uint32_t task = *(const uint32_t *)(uintptr_t)0x03001240u;
@@ -46,7 +46,7 @@ int ss_scene_active(void)
         uint32_t entry = *(const uint32_t *)(uintptr_t)(task + 0x0C);
         if (entry == (uint32_t)(uintptr_t)sub_08086860 || entry == (uint32_t)(uintptr_t)sub_08087A5C
             || entry == (uint32_t)(uintptr_t)sub_080887D4)
-            return 1;
+            return entry == (uint32_t)(uintptr_t)sub_08086860 ? 1 : entry == (uint32_t)(uintptr_t)sub_08087A5C ? 2 : 3;
         task = *(const uint32_t *)(uintptr_t)task;
     }
     return 0;
@@ -65,7 +65,7 @@ static int spanish(void)
 /* One frame. `held` are the buttons the player holds; the result are the buttons the game is given. */
 uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
 {
-    static int state = IDLE, timer, darkness, quiet, voted;
+    static int state = IDLE, timer, darkness, quiet, voted, kind;
     static unsigned long frames, test_at = ~0ul;
     static uint16_t previous;
     static char line[48];
@@ -146,20 +146,26 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
             state = SKIPPING;
             timer = 0;
             quiet = 0;
+            kind = active;
         }
         view->darkness = darkness;
         break;
     case SKIPPING: {
         /* the same presses on every player: online they follow the shared timeline's frame number */
         unsigned long beat = online ? ss_net_label() : frames;
-        game = active && (beat & 3) < 2 ? KEY_A : 0;
-        quiet = active ? 0 : quiet + 1;
+        /* Online the game reads the buttons once every few frames: a press of two frames in four can fall on
+         * the same phase every time and look held for ever. A longer, odd rhythm cannot. */
+        /* Only the scene that was asked about is skipped: when another kind of scene follows it, or the same
+         * one does not end, the player gets the picture back instead of a dark screen. */
+        int same = online ? active == kind : active != 0;
+        game = same && (online ? beat % 14 < 7 : (beat & 3) < 2) ? KEY_A : 0;
+        quiet = same ? 0 : quiet + 1;
         timer++;
         view->darkness = 255;
         view->mute = 1;
         view->present = timer % 30 == 0;        /* a black frame now and then keeps the window answering */
         view->text = spanish() ? "SALTANDO..." : "SKIPPING...";
-        if (quiet >= 20 || timer > SKIP_LIMIT) {
+        if (quiet >= (active ? 2 : 20) || timer > (online ? ONLINE_LIMIT : SKIP_LIMIT)) {
             state = FADE_IN;
             view->present = 1;
         }

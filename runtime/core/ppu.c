@@ -24,14 +24,42 @@
 #define VRAM     ((const uint8_t *)(uintptr_t)SS_VRAM)
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
 
+/* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
+enum { HUD_BAND = 56, HUD_SPLIT = 176, EDGE_FADE = 12 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
 /* per scanline, per layer: palette index + 1 (0 = transparent); sprites also carry priority and flags */
 static uint16_t line_bg[4][MAXW];
 static uint16_t line_obj[MAXW];
 static uint8_t line_obj_prio[MAXW], line_obj_flags[MAXW];   /* flags: 1 semi-transparent, 2 sprite-window pixel */
+static uint8_t line_obj_index[MAXW];
+/* sprites the game shows every other frame (see flicker below): drawn apart, mixed half and half at the end */
+static uint16_t line_ghost[MAXW];
+static uint8_t line_ghost_prio[MAXW], line_ghost_index[MAXW];
 
 static struct ss_view view;
+static int hud_at_edges;        /* this frame the field's status display goes to the edges of a wide view */
+
+/* A page that fills the screen (status, items, the Start menu) is one composition with the status display and
+ * everything stays in the middle then. Such a page crosses the column that parts the display's two groups in
+ * the upper lines; a message window at the bottom does not count. */
+static int page_open(void)
+{
+    int n, ty;
+    for (n = 0; n < 4; n++) {
+        uint16_t cnt = IO16(0x08 + n * 2);
+        const uint16_t *map = (const uint16_t *)(VRAM + ((cnt >> 8) & 31) * 0x800);
+        int scroll_x = IO16(0x10 + n * 4), scroll_y = IO16(0x12 + n * 4);
+        if (view.bg[n].map || !(IO16(0) & (0x100 << n)))
+            continue;
+        for (ty = 0; ty < 13; ty++) {
+            const uint16_t *row = map + (((ty * 8 + scroll_y) & 255) >> 3) * 32;
+            if ((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF))
+                return 1;
+        }
+    }
+    return 0;
+}
 
 /* Native x (0..239) shown at view column X for content without a source map, or -1 if nothing is there. */
 static int native_x(int X, int y)
@@ -70,12 +98,22 @@ static void text_background(int n, int y)
     int width = (size & 1) ? 512 : 256, height = (size & 2) ? 512 : 256;
     int scroll_x = IO16(0x10 + n * 4) & 511, scroll_y = IO16(0x12 + n * 4) & 511;
     const struct ss_bg_source *source = &view.bg[n];
-    int X;
+    int X, split;
 
-    if (source->map) {              /* full source map: world position, no wrapping */
+    if (source->map) {
+        /* The console's own 240 columns are drawn from what the game put in the hardware (a menu or a window
+         * drawn over the field is then always whole); the columns beside them come from the full source map:
+         * world position, no wrapping. */
         int wy = y + source->scroll_y;
         for (X = 0; X < view.width; X++) {
             int wx = X - view.shift + source->scroll_x;
+            if (X >= view.shift && X < view.shift + W) {
+                int px = (X - view.shift + scroll_x) & (width - 1), py = (y + scroll_y) & (height - 1);
+                int block = (px >> 8) + ((py >> 8) * (width == 512 ? 2 : 1));
+                line_bg[n][X] = tile_pixel(chars, *(const uint16_t *)(map + block * 0x800 + ((py & 255) >> 3) * 64 + ((px & 255) >> 3) * 2),
+                                           px & 7, py & 7, colour256);
+                continue;
+            }
             if (wx < 0 || wy < 0 || (wx >> 3) >= source->width || (wy >> 3) >= source->height)
                 line_bg[n][X] = 0;
             else
@@ -83,8 +121,19 @@ static void text_background(int n, int y)
         }
         return;
     }
+    split = 0;
+    if (hud_at_edges && y < HUD_BAND) {
+        /* The field's status display: what is left of HUD_SPLIT stays at the left edge of the screen and what
+         * is right of it goes to the right edge. A line where the layer crosses that column (a window, a
+         * message) is one piece and stays in the middle. */
+        int py = (y + scroll_y) & 255;
+        const uint16_t *row = (const uint16_t *)(map + (py >> 3) * 64);
+        split = !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
+    }
     for (X = 0; X < view.width; X++) {
         int x = native_x(X, y), px, py, block;
+        if (split)
+            x = X < HUD_SPLIT ? X : (X >= view.width - W + HUD_SPLIT ? X - (view.width - W) : -1);
         if (x < 0) {
             line_bg[n][X] = 0;
             continue;
@@ -127,94 +176,171 @@ static void affine_background(int n, int y)
     }
 }
 
+static const uint8_t obj_sizes[3][4][2] = {
+    { { 8, 8 }, { 16, 16 }, { 32, 32 }, { 64, 64 } },
+    { { 16, 8 }, { 32, 8 }, { 32, 16 }, { 64, 32 } },
+    { { 8, 16 }, { 8, 32 }, { 16, 32 }, { 32, 64 } },
+};
+
+/* ---- flicker ----
+ * The cartridge has one real transparency effect and many things to make transparent, so for shadows, ghosts,
+ * the arrow that points to a companion and a character that has just been hurt it shows the sprite one frame
+ * and hides it the next. On the console's slow screen that reads as half transparent; on a modern display it
+ * is a hard blink, and when frames are not presented evenly (online, or a display that is not at 60 Hz) the
+ * sprite can stay solid or vanish for a moment. So a sprite that alternates is recognised and drawn in every
+ * frame at half strength instead, which is what the eye saw.
+ *
+ * Recognised from the last four frames of the sprite table: a sprite is one that alternates if it is here now,
+ * was not in the frame before and was in the one before that; and one that is not here now is still shown
+ * if it was in the last frame, in neither neighbour of that frame, and in the frame before those. A sprite that
+ * simply appears, disappears or changes shape for an animation does not fit either pattern. Two entries are
+ * the same sprite when they have the same size and priority and are within a few pixels. */
+static uint16_t oam_history[4][128][3];
+static uint8_t flicker_here[128], flicker_gone[128];
+
+static int obj_box(const uint16_t *e, int *x, int *y)
+{
+    if ((!(e[0] & 0x100) && (e[0] & 0x200)) || (e[0] >> 14) == 3)
+        return 0;
+    *y = e[0] & 255;
+    if (*y >= 160) *y -= 256;
+    *x = e[1] & 511;
+    if (*x >= 384) *x -= 512;
+    return *y > -64;
+}
+
+static int obj_in(const uint16_t *e, uint16_t (*list)[3])
+{
+    int x, y, x2, y2, j;
+    if (!obj_box(e, &x, &y))
+        return 0;
+    for (j = 0; j < 128; j++) {
+        const uint16_t *o = list[j];
+        if (((o[0] ^ e[0]) & 0xC000) || ((o[1] ^ e[1]) & 0xC000) || ((o[2] ^ e[2]) & 0x0C00) || !obj_box(o, &x2, &y2))
+            continue;
+        if (x2 - x <= 8 && x - x2 <= 8 && y2 - y <= 8 && y - y2 <= 8)
+            return 1;
+    }
+    return 0;
+}
+
+static void find_flicker(void)
+{
+    int i, x, y;
+    memmove(oam_history[1], oam_history[0], sizeof oam_history[0] * 3);
+    for (i = 0; i < 128; i++) {
+        oam_history[0][i][0] = OAM[i * 4];
+        oam_history[0][i][1] = OAM[i * 4 + 1];
+        oam_history[0][i][2] = OAM[i * 4 + 2];
+    }
+    for (i = 0; i < 128; i++) {
+        const uint16_t *now = oam_history[0][i], *last = oam_history[1][i];
+        flicker_here[i] = obj_box(now, &x, &y) && !obj_in(now, oam_history[1]) && obj_in(now, oam_history[2]);
+        flicker_gone[i] = obj_box(last, &x, &y) && !obj_in(last, oam_history[0]) && !obj_in(last, oam_history[2])
+                          && obj_in(last, oam_history[3]);
+    }
+}
+
+/* One sprite on line y. `ghost`: it is one that alternates, and goes to the half-strength line. */
+static void sprite(int y, uint16_t a0, uint16_t a1, uint16_t a2, int i, int ghost)
+{
+    uint16_t dispcnt = IO16(0);
+    int one_dimensional = dispcnt & 0x40, extra = view.width - W;
+    int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
+    int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place;
+    int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
+
+    if ((!affine && (a0 & 0x200)) || shape == 3)
+        return;
+    width = obj_sizes[shape][a1 >> 14][0];
+    height = obj_sizes[shape][a1 >> 14][1];
+    box_w = width;
+    box_h = height;
+    if (affine && (a0 & 0x200)) {
+        box_w *= 2;
+        box_h *= 2;
+    }
+    y0 = a0 & 255;
+    if (y0 >= 160) y0 -= 256;
+    row = y - y0;
+    if (row < 0 || row >= box_h)
+        return;
+    x0 = a1 & 511;
+    /* On the console anything from 240 up is off screen or a wrapped negative position. With a wider view a
+     * sprite just right of 240 is visible, so only the top of the range is read as negative. */
+    if (x0 >= (extra ? 512 - 128 : 240)) x0 -= 512;
+    /* where this sprite goes in the view: sprites of a scene with a source map with the world, the icons of
+     * the status display to their edge, anything else centred */
+    place = view.world ? view.shift : extra / 2;
+    colour256 = a0 & 0x2000;
+    tile = a2 & 0x3FF;
+    prio = (a2 >> 10) & 3;
+    if (hud_at_edges && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
+        int centre = x0 + box_w / 2;
+        if (centre < 72) place = 0;
+        else if (centre >= HUD_SPLIT) place = extra;
+    }
+    bank = a2 >> 12;
+    if (affine) {
+        const uint16_t *matrix = OAM + ((a1 >> 9) & 31) * 16;
+        pa = (int16_t)matrix[3]; pb = (int16_t)matrix[7]; pc = (int16_t)matrix[11]; pd = (int16_t)matrix[15];
+    }
+    for (x = 0; x < box_w; x++) {
+        int sx = x0 + x + place, tx, ty, number, index;
+        if (sx < 0 || sx >= view.width)
+            continue;
+        if (affine) {
+            int dx = x - box_w / 2, dy = row - box_h / 2;
+            tx = ((pa * dx + pb * dy) >> 8) + width / 2;
+            ty = ((pc * dx + pd * dy) >> 8) + height / 2;
+            if (tx < 0 || ty < 0 || tx >= width || ty >= height)
+                continue;
+        } else {
+            tx = (a1 & 0x1000) ? width - 1 - x : x;
+            ty = (a1 & 0x2000) ? height - 1 - row : row;
+        }
+        if (colour256) {
+            number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) * 2 : 32) + (tx >> 3) * 2;
+            index = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 8 + (tx & 7)];
+        } else {
+            uint8_t byte;
+            number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) : 32) + (tx >> 3);
+            byte = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 4 + ((tx & 7) >> 1)];
+            index = (tx & 1) ? byte >> 4 : byte & 15;
+            if (index) index += bank * 16;
+        }
+        if (!index)
+            continue;
+        if (mode == 2) {
+            line_obj_flags[sx] |= 2;
+            continue;
+        }
+        if (ghost) {
+            if (prio <= line_ghost_prio[sx] || !line_ghost[sx]) {
+                line_ghost[sx] = (uint16_t)(0x100 + index + 1);
+                line_ghost_prio[sx] = (uint8_t)prio;
+                line_ghost_index[sx] = (uint8_t)i;
+            }
+        } else if (prio <= line_obj_prio[sx] || !line_obj[sx]) {
+            line_obj[sx] = (uint16_t)(0x100 + index + 1);
+            line_obj_prio[sx] = (uint8_t)prio;
+            line_obj_index[sx] = (uint8_t)i;
+            line_obj_flags[sx] = (uint8_t)((line_obj_flags[sx] & 2) | (mode == 1));
+        }
+    }
+}
+
 static void sprites(int y)
 {
-    static const uint8_t sizes[3][4][2] = {
-        { { 8, 8 }, { 16, 16 }, { 32, 32 }, { 64, 64 } },
-        { { 16, 8 }, { 32, 8 }, { 32, 16 }, { 64, 32 } },
-        { { 8, 16 }, { 8, 32 }, { 16, 32 }, { 32, 64 } },
-    };
-    uint16_t dispcnt = IO16(0);
-    int one_dimensional = dispcnt & 0x40, extra = view.width - W, i;
-
+    int i;
     memset(line_obj, 0, sizeof line_obj);
     memset(line_obj_prio, 4, sizeof line_obj_prio);
     memset(line_obj_flags, 0, sizeof line_obj_flags);
+    memset(line_ghost, 0, sizeof line_ghost);
     for (i = 127; i >= 0; i--) {
-        uint16_t a0 = OAM[i * 4], a1 = OAM[i * 4 + 1], a2 = OAM[i * 4 + 2];
-        int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
-        int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place;
-        int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
-
-        if ((!affine && (a0 & 0x200)) || shape == 3)
-            continue;
-        width = sizes[shape][a1 >> 14][0];
-        height = sizes[shape][a1 >> 14][1];
-        box_w = width;
-        box_h = height;
-        if (affine && (a0 & 0x200)) {
-            box_w *= 2;
-            box_h *= 2;
-        }
-        y0 = a0 & 255;
-        if (y0 >= 160) y0 -= 256;
-        row = y - y0;
-        if (row < 0 || row >= box_h)
-            continue;
-        x0 = a1 & 511;
-        /* On the console anything from 240 up is off screen or a wrapped negative position. With a wider view a
-         * sprite just right of 240 is visible, so only the top of the range is read as negative. */
-        if (x0 >= (extra ? 512 - 128 : 240)) x0 -= 512;
-        /* where this sprite goes in the view: HUD sprites to their edge, sprites of a scene with a source map
-         * with the world, anything else centred */
-        if (y0 + box_h <= view.hud_rows && view.hud_rows)
-            place = (x0 + box_w / 2 < W / 2) ? view.hud_left : view.hud_right - W;
-        else
-            place = view.world ? view.shift : extra / 2;
-        colour256 = a0 & 0x2000;
-        tile = a2 & 0x3FF;
-        prio = (a2 >> 10) & 3;
-        bank = a2 >> 12;
-        if (affine) {
-            const uint16_t *matrix = OAM + ((a1 >> 9) & 31) * 16;
-            pa = (int16_t)matrix[3]; pb = (int16_t)matrix[7]; pc = (int16_t)matrix[11]; pd = (int16_t)matrix[15];
-        }
-        for (x = 0; x < box_w; x++) {
-            int sx = x0 + x + place, tx, ty, number, index;
-            if (sx < 0 || sx >= view.width)
-                continue;
-            if (affine) {
-                int dx = x - box_w / 2, dy = row - box_h / 2;
-                tx = ((pa * dx + pb * dy) >> 8) + width / 2;
-                ty = ((pc * dx + pd * dy) >> 8) + height / 2;
-                if (tx < 0 || ty < 0 || tx >= width || ty >= height)
-                    continue;
-            } else {
-                tx = (a1 & 0x1000) ? width - 1 - x : x;
-                ty = (a1 & 0x2000) ? height - 1 - row : row;
-            }
-            if (colour256) {
-                number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) * 2 : 32) + (tx >> 3) * 2;
-                index = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 8 + (tx & 7)];
-            } else {
-                uint8_t byte;
-                number = tile + (ty >> 3) * (one_dimensional ? (width >> 3) : 32) + (tx >> 3);
-                byte = VRAM[0x10000 + (number & 0x3FF) * 32 + (ty & 7) * 4 + ((tx & 7) >> 1)];
-                index = (tx & 1) ? byte >> 4 : byte & 15;
-                if (index) index += bank * 16;
-            }
-            if (!index)
-                continue;
-            if (mode == 2) {
-                line_obj_flags[sx] |= 2;
-                continue;
-            }
-            if (prio <= line_obj_prio[sx] || !line_obj[sx]) {
-                line_obj[sx] = (uint16_t)(0x100 + index + 1);
-                line_obj_prio[sx] = (uint8_t)prio;
-                line_obj_flags[sx] = (uint8_t)((line_obj_flags[sx] & 2) | (mode == 1));
-            }
-        }
+        if (flicker_gone[i])
+            sprite(y, oam_history[1][i][0], oam_history[1][i][1], oam_history[1][i][2], i, 1);
+        sprite(y, OAM[i * 4], OAM[i * 4 + 1], OAM[i * 4 + 2], i, flicker_here[i]);
     }
 }
 
@@ -257,7 +383,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     int mode, eva, evb, evy, windows, y, X, n;
     int prio[4], enabled[4];
     uint8_t end_of_frame[SS_LINE_REGISTERS];
-    int per_line = ss_line_registers(0) != NULL;
+    int per_line = ss_line_registers(0) != NULL, edge_fade;
 
     if (requested) {
         view = *requested;
@@ -269,6 +395,9 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     if (view.width < W) view.width = W;
     if (view.width > MAXW) view.width = MAXW;
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
+    find_flicker();
+    edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
+    hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_open();
     for (y = 0; y < H; y++) {
         uint32_t *out = pixels + y * pitch_pixels;
         if (per_line)
@@ -304,10 +433,8 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 continue;
             }
-            if (view.world && (X < view.hud_left || X >= view.hud_right)) {
-                out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* beside a map narrower than the view there is nothing: black, not the backdrop colour */
-                continue;
-            }
+            if (view.world && (X < view.hud_left || X >= view.hud_right))
+                top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
             if (windows) {
                 /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
                  * full-screen mask (the scene-change blackout) covers them too */
@@ -349,6 +476,28 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 case 2: top_colour = fade(top_colour, evy, 1); break;
                 case 3: top_colour = fade(top_colour, evy, 0); break;
                 }
+            }
+            if (line_ghost[X] && (dispcnt & 0x1000) && (mask & 0x10)) {
+                /* a sprite that alternates, where it is in front of what was drawn: half of each */
+                int g = line_ghost_prio[X], front;
+                if (top == LAYER_OBJ)
+                    front = g < line_obj_prio[X] || (g == line_obj_prio[X] && line_ghost_index[X] < line_obj_index[X]);
+                else
+                    front = top == LAYER_BACKDROP || g <= prio[top];
+                if (front) {
+                    uint16_t colour = PAL[line_ghost[X] - 1];
+                    if ((mask & 0x20) && (bldcnt & 0x10) && ((bldcnt >> 6) & 3) >= 2)
+                        colour = fade(colour, evy, ((bldcnt >> 6) & 3) == 2);
+                    top_colour = blend(top_colour, colour, 8, 8);
+                }
+            }
+            if (edge_fade && (top == LAYER_BACKDROP || (top == LAYER_OBJ ? line_obj_prio[X] > 0 : view.bg[top].map != NULL))) {
+                /* the last columns of a map narrower than the view sink into the black beside it */
+                int from_left = X - view.hud_left, from_right = view.hud_right - 1 - X, by = -1;
+                if (view.hud_left > 0 && from_left >= 0 && from_left < EDGE_FADE) by = from_left;
+                if (view.hud_right < view.width && from_right >= 0 && from_right < EDGE_FADE) by = from_right;
+                if (by >= 0)
+                    top_colour = fade(top_colour, 16 - (by + 1) * 16 / (EDGE_FADE + 1), 0);
             }
             out[X] = to_rgb(top_colour);
         }

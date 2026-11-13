@@ -21,16 +21,17 @@ enum { STATE = 0x03003170, LAYER_SIZE = 0x18 };
 /* Is the hardware layer really showing this map? The engine copies the visible part of the map into the layer's
  * 32 x 32 tile ring, so tile (tx, ty) of the map sits at ring position (tx mod 32, ty mod 32). A menu drawn
  * on the same layer (status, items) leaves the field's records in place but fills the ring with its own tiles;
- * reading the map then would draw the field's tiles where the menu is. A few sample tiles of what is on
- * screen settle it. */
+ * reading the map then would draw the field's tiles where the menu is. Every tile on screen is compared; the
+ * engine itself changes a few (doors, switches), so a small part may differ. (The console's own columns are
+ * drawn from the ring in any case, see ppu.c: this only decides whether the sides continue the field.) */
 static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int scroll_x, int scroll_y)
 {
     const uint16_t *ring = (const uint16_t *)(uintptr_t)(SS_VRAM + ((IO16(0x08 + bg * 2) >> 8) & 31) * 0x800u);
     int sx, sy, checked = 0, wrong = 0;
     if (IO16(0x08 + bg * 2) & 0xC000)
         return 1;                       /* larger hardware maps are not rings of 32: not judged */
-    for (sy = 2; sy < 20; sy += 4) {
-        for (sx = 1; sx < 30; sx += 5) {
+    for (sy = 0; sy < 20; sy++) {
+        for (sx = 0; sx < 30; sx++) {
             int tx = (scroll_x >> 3) + sx, ty = (scroll_y >> 3) + sy;
             if (tx < 0 || ty < 0 || tx >= map_w || ty >= map_h)
                 continue;
@@ -38,7 +39,7 @@ static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int 
             wrong += ring[(ty & 31) * 32 + (tx & 31)] != map[ty * map_w + tx];
         }
     }
-    return checked < 6 || wrong * 3 <= checked;
+    return checked < 6 || wrong * 16 <= checked;
 }
 
 /* Fill `view` for a picture `width` pixels wide. Returns 1 when the scene has source maps (a field scene). */
