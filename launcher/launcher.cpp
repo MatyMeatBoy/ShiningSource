@@ -1088,7 +1088,7 @@ static void interface_frame(bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.3", "Versión 0.3"));
+        ImGui::TextColored(gold, "%s", text("Version 0.3.1", "Versión 0.3.1"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
     }
     ImGui::EndChild();
