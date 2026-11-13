@@ -28,8 +28,9 @@ from it when you play.
 ## Download
 
 [Releases](https://github.com/MatyMeatBoy/ShiningSource/releases): Windows x64
-(`.zip`: unpack it and start `ShiningSource.exe`) and Android (`.apk`,
-arm64-v8a and x86_64, Android 5 or later). The launcher asks for your ROM the
+(`.zip`: unpack it and start `ShiningSource.exe`), Android (`.apk`,
+arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
+from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
 They are pre-releases. Each one's notes say what was checked and, just as
@@ -130,7 +131,7 @@ display stays at the left edge.*
 |---|---|
 | Windows x64 | Released; the main test platform |
 | Android (arm64-v8a, x86_64) | Released; tested in the x86_64 emulator (0.7.4), not yet on a phone |
-| Linux x64, ARM64 | Builds and passes the reference run and an online session in virtual machines (Debian 12, 0.7.2); no packaged release, not tried on a desktop |
+| Linux x64, ARM64 | x64 released from 0.7.4 (`.tar.gz`, no launcher yet); both pass the reference run, an online session and a lost connection that returns in virtual machines (Debian 12, 0.7.4); not tried with a window on a desktop |
 | Browser (WebAssembly) | Builds from source and plays from your ROM file, saves kept in the browser; offline only; no hosted page |
 | PS5, PS4, Switch, Vita | Not started |
 

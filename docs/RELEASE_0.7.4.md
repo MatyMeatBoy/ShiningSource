@@ -55,6 +55,10 @@ Measured first, with a relay that cuts one player off for a while
   hash and the same sound in the Android emulator (x86_64). The first attempt,
   started while the emulator was still booting, ended at frame 28,380 without
   a report or a crash record; the repeat ran through.
+- After the release, on Linux x64 and Linux ARM64 (Debian 12 virtual machines,
+  no window): the play-through gives the same hash and the same sound, a
+  two-player session through a relay built there runs to its end, and a player
+  cut off for 30 seconds is taken in again (one run each).
 
 ## Not checked
 
@@ -64,13 +68,17 @@ Measured first, with a relay that cuts one player off for a while
 - A change of map while a player is away, and fights during an outage: the
   scripted session only walks in the first field.
 - Four players, two outages in one session.
-- Linux with this version, and an online session on Android: not run. The
-  link code is the same on every platform.
+- **Linux with a window.** The Linux x64 package added to this release was
+  only ever run without one: picture, sound and a controller on a real desktop
+  are untried.
+- An online session on Android with this version.
 - Everything listed as not checked in 0.7.3 and before.
 
 ## Install
 
 - Windows: unpack `ShiningSource-0.7.4-windows-x64.zip` and start
   `ShiningSource.exe`.
+- Linux x64: unpack `ShiningSource-0.7.4-linux-x64.tar.gz` and run
+  `./ss2_linux64 your-rom.gba` (no launcher yet; `LINUX.txt` has the settings).
 - Android: install `ShiningSource-0.7.4-android.apk` (arm64-v8a and x86_64,
   Android 5 or later; signed with a debug key, so Android asks to allow it).
