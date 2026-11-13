@@ -115,9 +115,9 @@ public class MainActivity extends Activity {
         online.setChecked(saved.getBoolean("online", false));
         page.addView(online);
         room = field(text("Room (the same for everyone)", "Sala (la misma para todos)"), saved.getString("room", "shining"), false, page);
-        delay = field(text("Delay in frames, the host decides (same country 4, same continent 6, far 10-14)",
-                           "Retardo en cuadros, lo decide el anfitrión (mismo país 4, mismo continente 6, lejos 10-14)"),
-                      saved.getString("delay", "6"), true, page);
+        delay = field(text("Delay in frames, the host decides. 0 = automatic (recommended)",
+                           "Retardo en cuadros, lo decide el anfitrión. 0 = automático (recomendado)"),
+                      saved.getString("delay", "0"), true, page);
         server = field(text("Server", "Servidor"), saved.getString("server", DEFAULT_SERVER), false, page);
         page.addView(label(text("The first to enter a room is the host. In the game choose MULTIPLAYER MODE.",
                                 "El primero en entrar a una sala es el anfitrión. En el juego elige MULTIPLAYER MODE.")));

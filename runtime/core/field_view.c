@@ -16,7 +16,30 @@
 #define RD32(a) (*(const uint32_t *)(uintptr_t)(a))
 #define IO16(o) RD16(SS_IO + (o))
 
-enum { STATE = 0x03003170, LAYER_SIZE = 0x18, HUD_ROWS = 16 };
+enum { STATE = 0x03003170, LAYER_SIZE = 0x18 };
+
+/* Is the hardware layer really showing this map? The engine copies the visible part of the map into the layer's
+ * 32 x 32 tile ring, so tile (tx, ty) of the map sits at ring position (tx mod 32, ty mod 32). A menu drawn
+ * on the same layer (status, items) leaves the field's records in place but fills the ring with its own tiles;
+ * reading the map then would draw the field's tiles where the menu is. A few sample tiles of what is on
+ * screen settle it. */
+static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int scroll_x, int scroll_y)
+{
+    const uint16_t *ring = (const uint16_t *)(uintptr_t)(SS_VRAM + ((IO16(0x08 + bg * 2) >> 8) & 31) * 0x800u);
+    int sx, sy, checked = 0, wrong = 0;
+    if (IO16(0x08 + bg * 2) & 0xC000)
+        return 1;                       /* larger hardware maps are not rings of 32: not judged */
+    for (sy = 2; sy < 20; sy += 4) {
+        for (sx = 1; sx < 30; sx += 5) {
+            int tx = (scroll_x >> 3) + sx, ty = (scroll_y >> 3) + sy;
+            if (tx < 0 || ty < 0 || tx >= map_w || ty >= map_h)
+                continue;
+            checked++;
+            wrong += ring[(ty & 31) * 32 + (tx & 31)] != map[ty * map_w + tx];
+        }
+    }
+    return checked < 6 || wrong * 3 <= checked;
+}
 
 /* Fill `view` for a picture `width` pixels wide. Returns 1 when the scene has source maps (a field scene). */
 int ss_field_view(struct ss_view *view, int width)
@@ -42,6 +65,8 @@ int ss_field_view(struct ss_view *view, int width)
         y += offset_y + (int16_t)RD16(layer + 0x06);
         if (((x ^ IO16(0x10 + bg * 4)) & 0xFF) || ((y ^ IO16(0x12 + bg * 4)) & 0xFF))
             continue;                   /* not where the game put it this frame */
+        if (!shows_its_map(bg, (const uint16_t *)(uintptr_t)data, map_w, map_h, x, y))
+            return 0;                   /* a menu took the layer over: the whole scene keeps the console's picture */
         view->bg[bg].map = (const uint16_t *)(uintptr_t)data;
         view->bg[bg].width = map_w;
         view->bg[bg].height = map_h;
@@ -54,30 +79,25 @@ int ss_field_view(struct ss_view *view, int width)
     if (!found)
         return 0;
     view->world = 1;
-    view->hud_rows = HUD_ROWS;
-    view->hud_left = 0;
-    view->hud_right = width;
-    /* Centre the console's 240 columns in the view, but never show past the widest map: at a map edge the
-     * view slides, exactly as the game's own camera does at its edges. */
+    /* The console's 240 columns stay in the middle of the view, always: world, sprites, menus and effects then
+     * share one offset whatever the camera does. (An earlier version slid the view at the edges of a map to
+     * show more of it; menus drawn with sprites then parted from their backgrounds.) Where the view reaches
+     * past the widest map there is nothing to show, and the renderer paints it black: hud_left and hud_right
+     * are the columns the map covers. The status bar is not divided. */
     extra = width - SS_SCREEN_W;
     view->shift = extra / 2;
+    view->hud_rows = 0;
+    view->hud_left = 0;
+    view->hud_right = width;
     for (i = 0; i < 4; i++) {
         if (view->bg[i].map && view->bg[i].width * 8 == widest) {
             origin = view->bg[i].scroll_x - view->shift;        /* world x of the view's left column */
-            if (widest <= width) {
-                origin = (widest - width) / 2;                  /* map narrower than the view: centre the map */
+            if (origin < 0)
                 view->hud_left = -origin;
-                view->hud_right = -origin + widest;
-                if (view->hud_right - view->hud_left < SS_SCREEN_W) {
-                    view->hud_left = extra / 2;
-                    view->hud_right = view->hud_left + SS_SCREEN_W;
-                }
-            }
-            else if (origin < 0)
-                origin = 0;
-            else if (origin + width > widest)
-                origin = widest - width;
-            view->shift = view->bg[i].scroll_x - origin;
+            if (origin + width > widest)
+                view->hud_right = widest - origin;
+            if (view->hud_left > view->shift) view->hud_left = view->shift;                      /* never into the console's own columns */
+            if (view->hud_right < view->shift + SS_SCREEN_W) view->hud_right = view->shift + SS_SCREEN_W;
             break;
         }
     }

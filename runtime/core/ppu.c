@@ -294,10 +294,14 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 out[X] = 0xFF000000u;       /* side bars of a scene that keeps the console's composition */
                 continue;
             }
+            if (view.world && (X < view.hud_left || X >= view.hud_right)) {
+                out[X] = 0xFF000000u;       /* beside a map narrower than the view there is nothing: black, not the backdrop colour */
+                continue;
+            }
             if (windows) {
                 /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
                  * full-screen mask (the scene-change blackout) covers them too */
-                int x = X - (view.world ? view.shift : (view.width - W) / 2);
+                int x = X - (view.width - W) / 2;      /* the console's columns are always the middle ones */
                 uint16_t winin = IO16(0x48), winout = IO16(0x4A);
                 if (x < 0) x = 0;
                 if (x > W - 1) x = W - 1;

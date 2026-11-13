@@ -210,14 +210,14 @@ static const int DEFAULT_PAD[10] = { SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON
                                      SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER };
 static int capture_key = -1, capture_pad = -1;      /* the entry waiting for a press, or -1 */
 
-static void bindings(const char *name, const int *defaults, int *out)
+static void bindings(const char *name, const int *defaults, int *out, int lowest = 1)
 {
     std::string text = setting(name);
     const char *at = text.c_str();
     for (int i = 0; i < 10; i++) {
         char *end;
         long value = strtol(at, &end, 10);
-        out[i] = end != at && value > 0 ? (int)value : defaults[i];
+        out[i] = end != at && value >= lowest ? (int)value : defaults[i];     /* controller buttons start at 0 */
         at = *end == ',' ? end + 1 : end;
     }
 }
@@ -244,7 +244,7 @@ static void capture_event(const SDL_Event &event)
         capture_key = -1;
     }
     if (capture_pad >= 0 && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-        bindings("pad", DEFAULT_PAD, values);
+        bindings("pad", DEFAULT_PAD, values, 0);
         values[capture_pad] = (int)event.gbutton.button;
         store_bindings("pad", values);
         capture_pad = -1;
@@ -270,6 +270,9 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_BORDER", classic ? setting("border", "16").c_str() : nullptr);
     SetEnvironmentVariableA("SS_BORDER_STYLE", classic ? setting("border_style", "4").c_str() : nullptr);
     SetEnvironmentVariableA("SS_VIEW", view == "auto" || classic ? nullptr : view.c_str());
+    SetEnvironmentVariableA("SS_VSYNC", setting("vsync", "1").c_str());
+    SetEnvironmentVariableA("SS_LANG", language ? "es" : "en");
+    SetEnvironmentVariableA("SS_SKIP", setting("skip", "1") == "0" ? "0" : nullptr);
     SetEnvironmentVariableA("SS_FULLSCREEN", setting("fullscreen", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
@@ -277,7 +280,7 @@ static void play(const Game &game)
     bool online = setting("online", "0") == "1";
     SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
-    SetEnvironmentVariableA("SS_NET_DELAY", online ? setting("delay", "6").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_NET_DELAY", online && setting("delay_auto", "1") == "0" ? setting("delay", "6").c_str() : nullptr);
     startup.cb = sizeof startup;
     launch_error.clear();
     if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, 0, nullptr, folder.c_str(), &startup, &process)) {
@@ -447,6 +450,23 @@ static void interface_frame(bool &running)
         ImGui::TextWrapped("%s", text("In field scenes the extra columns show more of the real map; menus and story scenes keep the original picture, centred. Nothing is stretched.",
                                       "En las escenas de campo las columnas extra muestran m\xC3\xA1s del mapa real; los men\xC3\xBAs y escenas de historia conservan la imagen original, centrada. Nada se estira."));
         ImGui::EndDisabled();
+        {
+            int sync = atoi(setting("vsync", "1").c_str());
+            bool skip = setting("skip", "1") != "0";
+            ImGui::TextColored(gold, "%s", text("Synchronisation", "Sincronizaci\xC3\xB3n"));
+            ImGui::SetNextItemWidth(360);
+            if (ImGui::Combo("##vsync", &sync, language ? "Desactivada (puede partir la imagen)\0VSync (recomendado)\0VRR: G-Sync / FreeSync\0"
+                                                        : "Off (the picture may tear)\0VSync (recommended)\0VRR: G-Sync / FreeSync\0")) {
+                settings["vsync"] = std::to_string(sync);
+                save_settings();
+            }
+            ImGui::TextWrapped("%s", text("VSync: the display paces the game when its refresh rate is 60 Hz or a multiple (120, 180, 240). VRR: for variable-refresh displays in full screen, the game keeps the console's exact 59.73 Hz.",
+                                          "VSync: la pantalla marca el ritmo del juego si su frecuencia es 60 Hz o un m\xC3\xBAltiplo (120, 180, 240). VRR: para pantallas de frecuencia variable en pantalla completa, el juego mantiene los 59,73 Hz exactos de la consola."));
+            if (ImGui::Checkbox(text("Skip scene with Start (asks first; online everyone has to press it)", "Saltar escena con Start (pregunta antes; en l\xC3\xADnea todos deben pulsarlo)"), &skip)) {
+                settings["skip"] = skip ? "1" : "0";
+                save_settings();
+            }
+        }
         if (ImGui::Checkbox(text("Start in full screen (F11 switches while playing)", "Empezar en pantalla completa (F11 cambia durante el juego)"), &fullscreen)) {
             settings["fullscreen"] = fullscreen ? "1" : "0";
             save_settings();
@@ -462,7 +482,7 @@ static void interface_frame(bool &running)
         int count = 0, keys[10], pad[10];
         SDL_JoystickID *pads = SDL_GetGamepads(&count);
         bindings("keys", DEFAULT_KEYS, keys);
-        bindings("pad", DEFAULT_PAD, pad);
+        bindings("pad", DEFAULT_PAD, pad, 0);
         ImGui::TextColored(gold, "%s", text("Controls", "Controles"));
         ImGui::TextWrapped("%s", text("Click a box and press the key or the controller button you want for it. Esc cancels. F11 is full screen and Esc quits the game.",
                                       "Haz clic en una casilla y pulsa la tecla o el bot\xC3\xB3n del mando que quieras para ella. Esc cancela. F11 es pantalla completa y Esc sale del juego."));
@@ -484,7 +504,15 @@ static void interface_frame(bool &running)
                     capture_pad = -1;
                 }
                 ImGui::TableNextColumn();
+                /* the name printed on the connected controller (Cross, Circle, A, B...), else SDL's own */
                 const char *pad_name = SDL_GetGamepadStringForButton((SDL_GamepadButton)pad[i]);
+                if (count > 0 && pad[i] <= SDL_GAMEPAD_BUTTON_NORTH) {
+                    static const char *const face[] = { nullptr, "A", "B", "X", "Y", "Cross", "Circle", "Square", "Triangle" };
+                    static const char *const face_es[] = { nullptr, "A", "B", "X", "Y", "Cruz", "C\xC3\xADrculo", "Cuadrado", "Tri\xC3\xA1ngulo" };
+                    int label = (int)SDL_GetGamepadButtonLabelForType(SDL_GetGamepadTypeForID(pads[0]), (SDL_GamepadButton)pad[i]);
+                    if (label >= 1 && label <= 8)
+                        pad_name = language ? face_es[label] : face[label];
+                }
                 label = capture_pad == i ? text("press a button...", "pulsa un bot\xC3\xB3n...") : (pad_name ? pad_name : "?");
                 ImGui::BeginDisabled(count == 0);
                 if (ImGui::Button((label + "##pad").c_str(), ImVec2(180, 0))) {
@@ -528,6 +556,12 @@ static void interface_frame(bool &running)
         }
         ImGui::TextWrapped("%s", text("Everyone types the same room name. The first to enter is the host (player 1). In the game choose MULTIPLAYER MODE: the cable is the network.",
                                       "Todos escriben el mismo nombre de sala. El primero en entrar es el anfitri\xC3\xB3n (jugador 1). En el juego elige MULTIPLAYER MODE: el cable es la red."));
+        bool automatic = setting("delay_auto", "1") != "0";
+        if (ImGui::Checkbox(text("Automatic delay (recommended): as short as the connection allows", "Retardo autom\xC3\xA1tico (recomendado): tan corto como permita la conexi\xC3\xB3n"), &automatic)) {
+            settings["delay_auto"] = automatic ? "1" : "0";
+            save_settings();
+        }
+        ImGui::BeginDisabled(automatic);
         ImGui::SetNextItemWidth(260);
         if (ImGui::SliderInt(text("Delay (host decides)", "Retardo (lo decide el anfitri\xC3\xB3n)"), &delay, 2, 30, text("%d frames", "%d cuadros"))) {
             settings["delay"] = std::to_string(delay);
@@ -535,6 +569,7 @@ static void interface_frame(bool &running)
         }
         ImGui::TextWrapped("%s", text("Same country: 3 or 4. Same continent: 6. Between continents: 10 to 14. Too low and the game slows down, it never disconnects; too high and the other players react later.",
                                       "Mismo pa\xC3\xADs: 3 o 4. Mismo continente: 6. Entre continentes: 10 a 14. Si es muy bajo el juego va m\xC3\xA1s lento, nunca se desconecta; si es muy alto los dem\xC3\xA1s reaccionan m\xC3\xA1s tarde."));
+        ImGui::EndDisabled();
         ImGui::SetNextItemWidth(260);
         if (ImGui::InputText(text("Server", "Servidor"), server, sizeof server)) {
             settings["server"] = server;
@@ -556,7 +591,7 @@ static void interface_frame(bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.1", "Versión 0.1"));
+        ImGui::TextColored(gold, "%s", text("Version 0.1.1", "Versión 0.1.1"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
     }
     ImGui::EndChild();

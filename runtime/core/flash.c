@@ -114,12 +114,15 @@ uint16_t IdentifyFlash(void)
     /* The description the game expects is the 512 Kbit Macronix part: maker 0xC2, device 0x1C. */
     for (entry = gSetup512KInfos; *entry >= SS_ROM && *entry < SS_ROM + 0x1000000; entry++) {
         const uint8_t *info = (const uint8_t *)(uintptr_t)*entry;
-        if (info[44] == 0xC2 && info[45] == 0x1C) {
+        if (info[40] == 0xC2 && info[41] == 0x1C) {
             chosen = *entry;
             break;
         }
     }
-    gFlash = chosen + 24;       /* struct FlashType inside struct FlashSetupInfo */
+    /* struct FlashSetupInfo is five pointers (20 bytes) and then struct FlashType, whose maker and device
+     * bytes are 20 bytes in. The game compares them with its list of supported chips and refuses to save
+     * otherwise, so both offsets have to be exact. */
+    gFlash = chosen + 20;
     ProgramFlashSector = (uint32_t)(uintptr_t)program_sector;
     EraseFlashSector = (uint32_t)(uintptr_t)erase_sector;
     EraseFlashChip = (uint32_t)(uintptr_t)erase_chip;

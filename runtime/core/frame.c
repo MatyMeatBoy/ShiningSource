@@ -77,10 +77,14 @@ static unsigned long audio_frames, audio_loud;
 static int audio_peak;
 static FILE *audio_file;
 
+static int skip_mute;           /* a skipped scene makes no sound */
+
 void ss_audio_push(const int16_t *samples, int frames)
 {
     static int file_checked;
     int i;
+    if (skip_mute)
+        return;
     for (i = 0; i < frames * 2; i++) {
         int magnitude = samples[i] < 0 ? -samples[i] : samples[i];
         if (magnitude > audio_peak) audio_peak = magnitude;
@@ -225,11 +229,28 @@ void VBlankIntrWait(void)
             memset(&view, 0, sizeof view);
             view.width = width;
         }
-        ss_ppu_render(pixels, width, &view);
-        REG_KEYINPUT = (uint16_t)(~ss_plat_present(pixels, width) & 0x03FF);    /* the register is active low */
+        {
+            static uint16_t held;
+            static struct ss_skip_view skip = { 0, NULL, 1, 0 };
+            if (skip.present) {
+                ss_ppu_render(pixels, width, &view);
+                ss_plat_overlay(skip.darkness, skip.text);
+                held = ss_plat_present(pixels, width);
+            }
+            if (input_script) {                 /* tests: the script plays the part of the player */
+                scripted_input();
+                held = (uint16_t)(~REG_KEYINPUT & 0x03FF);
+            }
+            REG_KEYINPUT = (uint16_t)(~ss_skip_update(held, &skip) & 0x03FF);   /* the register is active low */
+            skip_mute = skip.mute;
+        }
+    } else {
+        static struct ss_skip_view skip;        /* without a window the skip still plays, so tests can drive it */
+        if (input_script)
+            scripted_input();
+        REG_KEYINPUT = (uint16_t)(~ss_skip_update((uint16_t)(~REG_KEYINPUT & 0x03FF), &skip) & 0x03FF);
+        skip_mute = skip.mute;
     }
-    if (input_script)
-        scripted_input();
     REG_DISPSTAT &= ~1;
     REG_VCOUNT = 0;
 }

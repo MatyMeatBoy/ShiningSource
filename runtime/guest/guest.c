@@ -117,6 +117,7 @@ void ss_plat_audio(const int16_t *samples, int frames)
 }
 
 void ss_plat_status(const char *text) { SS_HOST(SS_B_STATUS, void (*)(uint32_t))((uint32_t)(uintptr_t)text); }
+void ss_plat_overlay(int darkness, const char *text) { SS_HOST(SS_B_OVERLAY, void (*)(int, uint32_t))(darkness, (uint32_t)(uintptr_t)text); }
 void ss_plat_pump(void) { SS_HOST(SS_B_PUMP, void (*)(void))(); }
 int ss_plat_net_open(const char *host, int port) { return SS_HOST(SS_B_NET_OPEN, int (*)(uint32_t, int))((uint32_t)(uintptr_t)host, port); }
 int ss_plat_net_send(const void *data, int size) { return SS_HOST(SS_B_NET_SEND, int (*)(uint32_t, int))((uint32_t)(uintptr_t)data, size); }

@@ -404,9 +404,15 @@ static void mix(int16_t *out, int frames)
                     position = v->loop_start + fmod(position - v->loop_start, (double)(v->size - v->loop_start));
                     at = (uint32_t)position;
                 }
-                sample = v->data[at];
-                sum[n * 2] += sample * left;
-                sum[n * 2 + 1] += sample * right;
+                {
+                    /* between this sample and the next (the loop's first one at the end of a loop): stepping from
+                     * one 8-bit sample to the next at 48 kHz adds a hard edge the console's own output filters away */
+                    uint32_t after = at + 1 < v->size ? at + 1 : (v->loops && v->size > v->loop_start ? v->loop_start : at);
+                    int fraction = (int)((position - (double)at) * 256.0);
+                    sample = (v->data[at] * (256 - fraction) + v->data[after] * fraction) >> 4;      /* 4 more bits */
+                }
+                sum[n * 2] += sample * left >> 4;
+                sum[n * 2 + 1] += sample * right >> 4;
                 position += advance;
             }
             v->position = position;
@@ -417,11 +423,11 @@ static void mix(int16_t *out, int frames)
                 int sample;
                 if (v->kind == 3) {
                     int index = (int)(phase * 32) & 31, byte = v->wave[index >> 1];
-                    sample = (((index & 1) ? byte & 15 : byte >> 4) - 8) * 10;
+                    sample = (((index & 1) ? byte & 15 : byte >> 4) - 8) * 8;
                 } else if (v->kind == 4) {
-                    sample = (v->lfsr & 1) ? 48 : -48;
+                    sample = (v->lfsr & 1) ? 36 : -36;
                 } else {
-                    sample = phase < duty[v->duty] ? 48 : -48;
+                    sample = phase < duty[v->duty] ? 36 : -36;
                 }
                 sum[n * 2] += sample * left;
                 sum[n * 2 + 1] += sample * right;
@@ -438,8 +444,21 @@ static void mix(int16_t *out, int frames)
         }
     }
     for (n = 0; n < frames * 2; n++) {
-        int32_t s = sum[n] >> 2;
-        out[n] = (int16_t)(s > 32767 ? 32767 : s < -32768 ? -32768 : s);
+        /* The console's amplifier rolls the top off; without that the square and noise channels sound brittle.
+         * One-pole low-pass at about 14 kHz, per channel. */
+        static int32_t filtered[2];
+        int32_t s = sum[n] >> 2, magnitude;
+        filtered[n & 1] += (s - filtered[n & 1]) * 5 / 6;
+        s = filtered[n & 1];
+        /* Loud passages: above three quarters of full scale the signal is bent towards the limit instead of
+         * being cut flat, which is what was heard as saturation. */
+        magnitude = s < 0 ? -s : s;
+        if (magnitude > 24576) {
+            int32_t over = magnitude - 24576;
+            magnitude = 24576 + (int32_t)((int64_t)over * 8191 / (over + 8191));
+            s = s < 0 ? -magnitude : magnitude;
+        }
+        out[n] = (int16_t)s;
     }
 }
 

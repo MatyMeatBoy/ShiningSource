@@ -51,6 +51,26 @@ int ss_plat_view_width(void);
 uint16_t ss_plat_present(const uint32_t *pixels, int width);
 /* Play one game frame of 48 kHz stereo samples. */
 void ss_plat_audio(const int16_t *samples, int frames);
+/* Skip scene (core/scene.c). ss_skip_update is called once a frame with the buttons the player holds and returns
+ * the buttons the game is given; `view` says how to show the frame. */
+struct ss_skip_view {
+    int darkness;               /* 0..255, black over the picture (the fade) */
+    const char *text;           /* one line to show over the picture, or NULL */
+    int present;                /* 0: do not show this frame (the game is running ahead) */
+    int mute;                   /* 1: drop this frame's sound */
+};
+int ss_scene_active(void);
+uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view);
+/* Online side of it (core/netlink.c): a vote per player, and one frame of the shared timeline to start at. */
+int ss_net_active(void);
+void ss_net_vote(int wants);
+void ss_net_votes(int *have, int *need);
+int ss_net_skip_now(void);
+unsigned long ss_net_label(void);
+/* What the next presented frame carries over the picture: black of the given strength and one line of text
+ * (capital letters, digits and ? = / : . only). */
+void ss_plat_overlay(int darkness, const char *text);
+
 /* Handle window events without showing a frame (used while a frame waits for the network). */
 void ss_plat_pump(void);
 /* One line about what the program is doing, shown in the window title (NULL or "" clears it). */

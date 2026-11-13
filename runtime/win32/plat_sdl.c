@@ -14,6 +14,12 @@ static SDL_Texture *texture;
 static SDL_Gamepad *gamepad;
 static SDL_AudioStream *audio;
 static uint64_t next_frame_ns;
+/* Who keeps time (SS_VSYNC): 1, the default, synchronises with the display; when its refresh rate is a whole
+ * multiple of about 60 Hz the display itself paces the game (no tearing, no stutter; the game then runs 0.45%
+ * fast and the sound is resampled by the same amount). 2 is for variable-refresh displays: the game keeps its own
+ * 59.7275 Hz and the display follows. 0 turns synchronisation off. Online, every player keeps the console's own
+ * rate so that nobody has to wait for anybody: the display only removes tearing. */
+static int display_paced;
 
 /* ---- measurements (SS_STATS=1): how regular the frames were and how much memory the process used ----
  * Printed when the program ends. Intervals are the real time between two presented frames; the console's is
@@ -86,7 +92,7 @@ static SDL_GamepadButton pad_buttons[10] = {
 
 /* SS_KEYS and SS_PAD: ten numbers separated by commas (SDL scancodes, SDL controller buttons) in the order
  * above. The launcher writes them; a number out of range or a short list keeps the default of that entry. */
-static void read_bindings(const char *name, int *out, int limit)
+static void read_bindings(const char *name, int *out, int lowest, int limit)
 {
     const char *text = getenv(name);
     int i;
@@ -95,7 +101,7 @@ static void read_bindings(const char *name, int *out, int limit)
         long value = strtol(text, &end, 10);
         if (end == text)
             break;
-        if (value > 0 && value < limit)
+        if (value >= lowest && value < limit)    /* controller buttons start at 0 (the bottom face button) */
             out[i] = (int)value;
         text = *end == ',' ? end + 1 : end;
     }
@@ -108,8 +114,8 @@ int ss_plat_video_init(const char *title)
 #ifdef __ANDROID__
     SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");     /* otherwise a resizable window follows the user */
 #endif
-    read_bindings("SS_KEYS", (int *)keys, SDL_SCANCODE_COUNT);
-    read_bindings("SS_PAD", (int *)pad_buttons, SDL_GAMEPAD_BUTTON_COUNT);
+    read_bindings("SS_KEYS", (int *)keys, 1, SDL_SCANCODE_COUNT);
+    read_bindings("SS_PAD", (int *)pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -129,6 +135,30 @@ int ss_plat_video_init(const char *title)
     if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
+    }
+    {
+        const char *text = getenv("SS_VSYNC");
+        int wanted = text ? atoi(text) : 1;
+        const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window));
+        float refresh = mode && mode->refresh_rate > 1.0f ? mode->refresh_rate : 60.0f;
+        int every = (int)(refresh / 60.0f + 0.5f);
+        if (wanted == 2) {
+            if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_ADAPTIVE))
+                SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
+        } else if (wanted == 1) {
+            float rate = every > 0 ? refresh / (float)every : 0.0f;
+            if (every >= 1 && rate > 58.5f && rate < 61.5f && !getenv("SS_NET") && SDL_SetRenderVSync(renderer, every)) {
+                display_paced = 1;
+                if (audio)
+                    SDL_SetAudioStreamFrequencyRatio(audio, rate / 59.7275f);
+            } else {
+                SDL_SetRenderVSync(renderer, 1);
+            }
+        } else {
+            SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_DISABLED);
+        }
+        fprintf(stderr, "video: display %.2f Hz, %s\n", refresh,
+                display_paced ? "paced by the display" : wanted == 2 ? "variable refresh, own pacing" : wanted == 1 ? "vsync, own pacing" : "no vsync");
     }
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
@@ -323,6 +353,74 @@ void ss_plat_pump(void)
         handle_event(&event);
 }
 
+/* ---- overlay: the fade and the one line of text of "skip scene" ---- */
+static int overlay_darkness, overlay_skipping;
+static char overlay_text[64];
+
+void ss_plat_overlay(int darkness, const char *text)
+{
+    overlay_darkness = darkness < 0 ? 0 : darkness > 255 ? 255 : darkness;
+    overlay_skipping = 0;
+    SDL_snprintf(overlay_text, sizeof overlay_text, "%s", text ? text : "");
+}
+
+/* 5 x 7 dots per character, one byte per row, for the characters the messages use. */
+static const uint8_t *glyph(char c)
+{
+    static const uint8_t letters[26][7] = {
+        {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}, {0x1E,0x11,0x11,0x1E,0x11,0x11,0x1E}, {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E},
+        {0x1E,0x11,0x11,0x11,0x11,0x11,0x1E}, {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}, {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10},
+        {0x0E,0x11,0x10,0x17,0x11,0x11,0x0F}, {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}, {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E},
+        {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}, {0x11,0x12,0x14,0x18,0x14,0x12,0x11}, {0x10,0x10,0x10,0x10,0x10,0x10,0x1F},
+        {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}, {0x11,0x19,0x15,0x13,0x11,0x11,0x11}, {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E},
+        {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}, {0x0E,0x11,0x11,0x11,0x15,0x12,0x0D}, {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11},
+        {0x0F,0x10,0x10,0x0E,0x01,0x01,0x1E}, {0x1F,0x04,0x04,0x04,0x04,0x04,0x04}, {0x11,0x11,0x11,0x11,0x11,0x11,0x0E},
+        {0x11,0x11,0x11,0x11,0x11,0x0A,0x04}, {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}, {0x11,0x11,0x0A,0x04,0x0A,0x11,0x11},
+        {0x11,0x11,0x0A,0x04,0x04,0x04,0x04}, {0x1F,0x01,0x02,0x04,0x08,0x10,0x1F} };
+    static const uint8_t digits[10][7] = {
+        {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}, {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F},
+        {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}, {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}, {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E},
+        {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}, {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}, {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E},
+        {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C} };
+    static const uint8_t question[7] = {0x0E,0x11,0x01,0x02,0x04,0x00,0x04}, equals[7] = {0x00,0x00,0x1F,0x00,0x1F,0x00,0x00},
+                         slash[7] = {0x01,0x01,0x02,0x04,0x08,0x10,0x10}, colon[7] = {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00},
+                         dot[7] = {0x00,0x00,0x00,0x00,0x00,0x0C,0x0C}, blank[7] = {0};
+    if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
+    if (c >= '0' && c <= '9') return digits[c - '0'];
+    return c == '?' ? question : c == '=' ? equals : c == '/' ? slash : c == ':' ? colon : c == '.' ? dot : blank;
+}
+
+/* Draw the overlay over a picture `width` x `height` units big (the current logical size). */
+static void draw_overlay(int width, int height)
+{
+    SDL_FRect box;
+    int length = (int)SDL_strlen(overlay_text), x, y, i, row, column;
+    if (overlay_darkness > 0) {
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)overlay_darkness);
+        box = (SDL_FRect){ 0, 0, (float)width, (float)height };
+        SDL_RenderFillRect(renderer, &box);
+    }
+    if (!length)
+        return;
+    x = (width - length * 6) / 2;
+    y = height - 22;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 170);
+    box = (SDL_FRect){ (float)x - 4, (float)y - 3, (float)(length * 6 + 7), 13 };
+    SDL_RenderFillRect(renderer, &box);
+    SDL_SetRenderDrawColor(renderer, 255, 232, 150, 255);
+    for (i = 0; i < length; i++) {
+        const uint8_t *rows = glyph(overlay_text[i]);
+        for (row = 0; row < 7; row++)
+            for (column = 0; column < 5; column++)
+                if (rows[row] & (0x10 >> column)) {
+                    box = (SDL_FRect){ (float)(x + i * 6 + column), (float)(y + row), 1, 1 };
+                    SDL_RenderFillRect(renderer, &box);
+                }
+    }
+}
+
 /* ---- touch screen: the console's buttons drawn over the picture ----
  * Positions are in picture units (the view is `width` x 160). On by default on Android while no controller is
  * connected; SS_TOUCH=1 or 0 forces it. */
@@ -455,11 +553,13 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         SDL_FRect inside = { (float)border, (float)border, (float)width, SS_SCREEN_H };
         draw_border();
         SDL_RenderTexture(renderer, texture, &source, &inside);
+        draw_overlay(width + 2 * border, SS_SCREEN_H + 2 * border);
         held |= touch_buttons(width + 2 * border);
     } else {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         SDL_RenderTexture(renderer, texture, &source, NULL);
+        draw_overlay(width, SS_SCREEN_H);
         held |= touch_buttons(width);
     }
     {                                   /* SS_WINDOW_SHOT=N: save what the window shows at presented frame N */
@@ -479,7 +579,9 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     /* the console refreshes at 59.7275 Hz; game speed must not depend on the monitor */
     next_frame_ns += 16742706;
     now = SDL_GetTicksNS();
-    if (next_frame_ns > now) {
+    if (display_paced && !overlay_skipping) {
+        next_frame_ns = now;                        /* the display's refresh already spaced this frame */
+    } else if (next_frame_ns > now) {
         SDL_DelayPrecise(next_frame_ns - now);
         stat_waits++;
         stat_wait_ns += next_frame_ns - now;
