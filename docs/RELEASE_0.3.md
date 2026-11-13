@@ -88,7 +88,7 @@ step cost many frames, and a single item needed five of them.
 - **Icon**: the port's own Soul jewel, on the programs, the Android package
   and the web page.
 - **Browser build** (`tools/build_web.py`): the game runs as WebAssembly from
-  your own ROM file. Offline only, and saves are not kept between visits yet.
+  your own ROM file. Offline only; saves are kept in the browser.
   It is built from source; no hosted page ships with this release.
 
 ## Install

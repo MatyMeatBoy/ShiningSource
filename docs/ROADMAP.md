@@ -350,7 +350,7 @@ Open:
 ## M8. Everything else ReKHCoM ships
 
 Web (wasm32): builds and runs from the user's ROM file (`tools/build_web.py`,
-2026-11-13; offline, saves not kept between visits yet). PS5, PS4, Switch, Vita:
+2026-11-13; offline; saves kept in the browser (IndexedDB)). PS5, PS4, Switch, Vita:
 not started. No online at first. `reloc` mode for the
 platforms that cannot map low addresses.
 
