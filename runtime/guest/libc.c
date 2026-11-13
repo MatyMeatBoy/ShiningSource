@@ -213,8 +213,37 @@ char *getenv(const char *name)
     return pool + used - length - 1;
 }
 
+long strtol(const char *text, char **end, int base)
+{
+    while (*text == ' ')
+        text++;
+    if (*text == '-')
+        return -(long)strtoul(text + 1, end, base);
+    return (long)strtoul(*text == '+' ? text + 1 : text, end, base);
+}
+
+/* Functions to run when the program ends (a few: test reports). */
+static void (*at_exit[8])(void);
+static int at_exit_count;
+
+int atexit(void (*function)(void))
+{
+    if (at_exit_count == 8)
+        return -1;
+    at_exit[at_exit_count++] = function;
+    return 0;
+}
+
+double floor(double x)
+{
+    long long whole = (long long)x;         /* towards zero; the values here are far inside the range */
+    return (double)(whole - (x < (double)whole));
+}
+
 void exit(int code)
 {
+    while (at_exit_count > 0)
+        at_exit[--at_exit_count]();
     SS_HOST(SS_B_EXIT, void (*)(int))(code);
     for (;;) {}
 }

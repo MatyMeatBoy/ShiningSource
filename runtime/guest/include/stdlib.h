@@ -3,6 +3,8 @@
 #include <stddef.h>
 char *getenv(const char *name);
 unsigned long strtoul(const char *text, char **end, int base);
+long strtol(const char *text, char **end, int base);
+int atexit(void (*function)(void));
 void exit(int code) __attribute__((noreturn));
 int abs(int value);
 #endif
