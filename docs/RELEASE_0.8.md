@@ -1,5 +1,9 @@
 # ShiningSource 0.8
 
+**Superseded by [0.8.1](RELEASE_0.8.1.md)**: in 0.8 a player returning after
+a long outage could be told the session was over (always on Linux, a matter
+of timing elsewhere).
+
 The first public release. Shining Soul II (Europe) as a native program for
 Windows x64, Android and Linux x64: widescreen, online for 2 to 4 players,
 achievements. The versions before it (0.1 to 0.7.5) were test builds for a
@@ -101,9 +105,9 @@ with 0.8.**
 - **By a person, with this version**: combat online, the music by ear, the
   transparencies in the scenes that were reported, a real controller, a
   phone, Linux with a window, signing in to RetroAchievements.
-- The Linux x64 package of this version had not been run when the release was
-  published (0.7.4 was, in a virtual machine); the result is added here when
-  it is in.
+- After the release, the Linux x64 package in a virtual machine: the
+  play-through and a two-player session pass, the outage case failed. See
+  0.8.1.
 - The rules for a gone player at level exits, portals, boss portals and the
   party's defeat: no scripted session reaches them yet.
 - Fights, items and many enemies appearing during an outage.

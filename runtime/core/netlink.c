@@ -1729,7 +1729,10 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
             block = gone_block[i];
             /* A player that is itself cut off waits SS_NET_AWAY for its connection and then gives the session
              * up. One that has been silent for that long after it was given up here will not come back. */
-            if (away[i].epoch && now - away[i].since > (uint32_t)away_ms) {
+            /* `since` is read from the clock in drop(), which this same pass may just have called: it can be a
+             * millisecond later than `now`. Compared as unsigned that was "away for 49 days", and the player
+             * was written off the moment it timed out (found on Linux, 0.8; a matter of timing everywhere). */
+            if (away[i].epoch && (int32_t)(now - away[i].since) > away_ms) {
                 away[i].epoch = 0;
                 net_say("net: player %d has been away for %u seconds; it is not expected back\n", i + 1,
                         (unsigned)((now - away[i].since + patience(i)) / 1000));

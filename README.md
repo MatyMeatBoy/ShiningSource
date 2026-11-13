@@ -132,7 +132,7 @@ display stays at the left edge.*
 |---|---|
 | Windows x64 | Released; the main test platform |
 | Android (arm64-v8a, x86_64) | Released; tested in the x86_64 emulator (0.8), not yet on a phone |
-| Linux x64, ARM64 | x64 released from 0.7.4 (`.tar.gz`, no launcher yet); both pass the reference run, an online session and a lost connection that returns in virtual machines (Debian 12, 0.7.4); not tried with a window on a desktop |
+| Linux x64, ARM64 | x64 released (`.tar.gz`, no launcher yet); both pass the reference run and an online session in virtual machines (Debian 12, 0.8); a lost connection that returns: fixed in 0.8.1 after it failed there; not tried with a window on a desktop |
 | Browser (WebAssembly) | Builds from source and plays from your ROM file, saves kept in the browser; offline only; no hosted page |
 | PS5, PS4, Switch, Vita | Not started |
 
