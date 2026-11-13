@@ -75,7 +75,7 @@ public class MainActivity extends Activity {
     private TextView romStatus, romNote, romHelp, playHint, gameNote;
     private Button choose, play;
     private CheckBox online;
-    private EditText room, delay, server, border;
+    private EditText room, server, border;
     private RadioButton classic, enhanced;
 
     /** What a file is: the result of reading it once. */
@@ -150,9 +150,6 @@ public class MainActivity extends Activity {
         online.setChecked(saved.getBoolean("online", true));
         page.addView(online);
         room = field(text("Room (the same for everyone)", "Sala (la misma para todos)"), saved.getString("room", "shining"), false, page);
-        delay = field(text("Delay in frames, the host decides. 0 = automatic (recommended)",
-                           "Retardo en cuadros, lo decide el anfitrión. 0 = automático (recomendado)"),
-                      saved.getString("delay", "0"), true, page);
         server = field(text("Server", "Servidor"), saved.getString("server", DEFAULT_SERVER), false, page);
         page.addView(label(text("The first to enter a room is the host. In the game choose MULTIPLAYER MODE.",
                                 "El primero en entrar a una sala es el anfitrión. En el juego elige MULTIPLAYER MODE.")));
@@ -614,7 +611,7 @@ public class MainActivity extends Activity {
         if (classic.isChecked() || enhanced.isChecked())
             edit.putString("mode", classic.isChecked() ? "classic" : "enhanced");
         edit.putString("border", border.getText().toString()).putBoolean("online", online.isChecked())
-            .putString("room", room.getText().toString()).putString("delay", delay.getText().toString())
+            .putString("room", room.getText().toString())
             .putString("server", server.getText().toString()).apply();
     }
 
@@ -636,7 +633,7 @@ public class MainActivity extends Activity {
             if (online.isChecked()) {
                 env.println("SS_NET=" + server.getText().toString().trim());
                 env.println("SS_NET_ROOM=" + room.getText().toString().trim());
-                env.println("SS_NET_DELAY=" + delay.getText().toString().trim());
+                // no SS_NET_DELAY: the direct transport, as on the PC (a delay would select the older stepped one)
             }
             env.close();
         } catch (Exception error) {
