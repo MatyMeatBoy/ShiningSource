@@ -10,3 +10,4 @@ shiningsource.sav
 *.raw
 shiningsource.ini
 *.png
+!docs/img/*.png
