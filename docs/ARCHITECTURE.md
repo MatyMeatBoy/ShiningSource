@@ -32,7 +32,7 @@ ReKHCoM solved the same problem and ShiningSource adopts its three modes:
 |---|---|---|
 | **host64 + guest** | Windows x64, Linux x64/arm64, Android arm64, PS5 | The game is compiled with 32-bit pointers for a 64-bit CPU (x32 / arm64_32) and linked as a flat image at a low address. A 64-bit host process maps the GBA address space at its real addresses and gives the game a small table of services (video, audio, files, network). 64-bit registers and instructions, 32-bit pointers. |
 | **dev32** | developers | A 32-bit Windows process where GBA addresses are real addresses. Simplest to debug; everything proved here carries to host64. Not shipped. |
-| **reloc** | Switch, Vita, anything that cannot map low addresses | GBA regions are arrays and pointer words are relocated at load. Slower to bring up; done last. |
+| **rebased** | Switch, Vita, anything that cannot map low addresses | GBA regions are one block of the program; the compiler's intermediate code is rewritten so that addresses are moved into it where memory is touched (`tools/rebase_ir.py`, `docs/CONSOLES_NX_VITA.md`). The ROM's data stays as it is. |
 | **wasm32** | web | 32-bit by nature; GBA addresses live in linear memory. |
 
 How the low addresses are obtained (learned on 2026-11-12): asking the system

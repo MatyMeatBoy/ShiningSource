@@ -6,7 +6,9 @@
 #include <stdlib.h>
 
 const uint32_t *ss_bridge;
-#ifdef __MACH__         /* arm64_32 image: the linker names the bounds of the code section */
+#ifdef SS_REBASED       /* consoles (runtime/console): no image bounds, the game's memory is a block of this image */
+const char *ss_guest_rom;               /* the ROM file; the host sets it before it enters the image */
+#elif defined(__MACH__)         /* arm64_32 image: the linker names the bounds of the code section */
 extern char __image_start[] __asm("section$start$__TEXT$__text");
 extern char __text_end[] __asm("section$end$__TEXT$__text");
 #define __image_end __text_end
@@ -46,7 +48,18 @@ void *ss_co_create(void (*entry)(void *), void *argument)
     }
     co->stack_low = SS_HOST(SS_B_STACK_ALLOC, uint32_t (*)(uint32_t))(STACK_BYTES);
     co->stack_high = co->stack_low + STACK_BYTES;
-#ifdef __aarch64__
+#if defined(__arm__)
+    /* 32-bit ARM (console/co_arm.S): what ss_co_swap pops: d8..d15, then r4..r11 and the return address */
+    {
+        uint32_t *words = (uint32_t *)(uintptr_t)(co->stack_high - 108);
+        for (i = 0; i < 27; i++)
+            words[i] = 0;
+        words[16] = (uint32_t)(uintptr_t)argument;      /* r4 */
+        words[17] = (uint32_t)(uintptr_t)entry;         /* r5 */
+        words[24] = (uint32_t)(uintptr_t)ss_co_start;   /* pc */
+        frame = (uint64_t *)words;
+    }
+#elif defined(__aarch64__)
     /* what ss_co_swap loads: x19..x30 and d8..d15 (22 slots); x30 is where it returns */
     frame = (uint64_t *)(uintptr_t)(co->stack_high - 192);
     for (i = 0; i < 24; i++)
@@ -89,10 +102,12 @@ void ss_co_delete(void *coroutine)
     co->stack_low = 0;
 }
 
+#ifndef SS_REBASED      /* console/rebase.c has its own */
 int ss_is_native_code(uint32_t address)
 {
     return address >= (uint32_t)(uintptr_t)__image_start && address < (uint32_t)(uintptr_t)__text_end;
 }
+#endif
 
 /* ---- video, input, sound ---- */
 
@@ -150,8 +165,19 @@ void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_h
         exit(90);
     main_coroutine.stack_low = stack_low;
     main_coroutine.stack_high = stack_high;
+#ifdef SS_REBASED
+    {
+        const char *error = "";
+        if (ss_memory_init(ss_guest_rom, &error) != 0) {
+            fprintf(stderr, "memory setup failed: %s\n", error);
+            exit(91);
+        }
+    }
+    fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());
+#else
     fprintf(stderr, "%u code pointers in the ROM data now point to native functions\n", ss_patch_code_pointers());
     fprintf(stderr, "game image %p-%p entered; running the game's AgbMain\n", (void *)__image_start, (void *)__image_end);
+#endif
     ss_rebel_set_host(host_achievements);
     SS_HOST(SS_B_OPTION_HOOK, void (*)(uint32_t))((uint32_t)(uintptr_t)guest_option);
     ss_rebel_start();                   /* before the game reads its save: a Rebel run has its own file */

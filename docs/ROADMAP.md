@@ -487,9 +487,10 @@ What each added is in `docs/RELEASE_*.md`. In short:
 ## M8. Everything else ReKHCoM ships
 
 Web (wasm32): builds and runs from the user's ROM file (`tools/build_web.py`,
-2026-11-13; offline; saves kept in the browser (IndexedDB)). PS5, PS4, Switch, Vita:
-not started. No online at first. `reloc` mode for the
-platforms that cannot map low addresses.
+2026-11-13; offline; saves kept in the browser (IndexedDB)). PS5, PS4: not started.
+Vita: the package builds (`tools/build_vita.py`), never run on a console. Switch:
+designed, not built. Both use rebased memory (`tools/rebase_ir.py`), which prints the
+reference on a PC (`tools/build_rebased.py`): `docs/CONSOLES_NX_VITA.md`. No online at first.
 
 ## Shining Soul 1
 
