@@ -106,7 +106,7 @@ android {
  namespace 'com.shiningsource.android'
  compileSdk 35
  ndkVersion '%s'
- defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 13; versionName '0.7.5' }
+ defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 14; versionName '0.8' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { debug { debuggable true }; release { minifyEnabled false } }
  lint { abortOnError false }

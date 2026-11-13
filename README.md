@@ -33,8 +33,8 @@ arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
-They are pre-releases. Each one's notes say what was checked and, just as
-plainly, what was not.
+0.8 is the first public release; the versions before it were test builds.
+Each release's notes say what was checked and, just as plainly, what was not.
 
 ## What it does
 
@@ -131,7 +131,7 @@ display stays at the left edge.*
 | Platform | State |
 |---|---|
 | Windows x64 | Released; the main test platform |
-| Android (arm64-v8a, x86_64) | Released; tested in the x86_64 emulator (0.7.4), not yet on a phone |
+| Android (arm64-v8a, x86_64) | Released; tested in the x86_64 emulator (0.8), not yet on a phone |
 | Linux x64, ARM64 | x64 released from 0.7.4 (`.tar.gz`, no launcher yet); both pass the reference run, an online session and a lost connection that returns in virtual machines (Debian 12, 0.7.4); not tried with a window on a desktop |
 | Browser (WebAssembly) | Builds from source and plays from your ROM file, saves kept in the browser; offline only; no hosted page |
 | PS5, PS4, Switch, Vita | Not started |
@@ -147,12 +147,14 @@ and by a small group of players. Known and open at the time of writing:
 - Players reported areas without music. A survey of all 399 songs
   (`tools/tests/m4a_survey.py`) found none silent and no command the sound
   engine lacks, so the cause is in when the game asks for a song, not in how
-  it is played. One likely cause is changed after 0.7.5 (a song asked for
+  it is played. One likely cause is changed in 0.8 (a song asked for
   again while it was still fading out stayed silent); it was never seen
   happening in a test, so tell us where the music is missing.
-- Joining a game that is already in progress is not possible. Returning after
-  a lost connection is (0.7.4, 0.7.5), tested on one machine with the relay
-  cutting a player off, not yet on a real network.
+- Returning after a lost connection, a player that is gone, and the changes
+  of map around them are tested on one machine with a relay that cuts a
+  player off, not yet on a real network.
+- Joining a game that is already in progress is an experiment, off by default
+  ([docs/JOIN_IN_PROGRESS.md](docs/JOIN_IN_PROGRESS.md)).
 
 The order of work is in [docs/ROADMAP.md](docs/ROADMAP.md); the design and its
 reasons in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); measurements of
