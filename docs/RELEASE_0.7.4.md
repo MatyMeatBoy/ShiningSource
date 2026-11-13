@@ -51,6 +51,11 @@ Measured first, with a relay that cuts one player off for a while
   10 seconds heal; the scripted 32,000-frame play-through gives `5F1DB1A8` and
   the same sound on the development build and Windows x64.
 
+- After the release, from the same source: the play-through gives the same
+  hash and the same sound in the Android emulator (x86_64). The first attempt,
+  started while the emulator was still booting, ended at frame 28,380 without
+  a report or a crash record; the repeat ran through.
+
 ## Not checked
 
 - **A real network.** The outage is the relay not forwarding, on one machine.
@@ -59,8 +64,8 @@ Measured first, with a relay that cuts one player off for a while
 - A change of map while a player is away, and fights during an outage: the
   scripted session only walks in the first field.
 - Four players, two outages in one session.
-- Android and Linux with this version: built, not run. The link code is the
-  same on every platform.
+- Linux with this version, and an online session on Android: not run. The
+  link code is the same on every platform.
 - Everything listed as not checked in 0.7.3 and before.
 
 ## Install
