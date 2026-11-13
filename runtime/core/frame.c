@@ -208,7 +208,8 @@ static void finish_picture(uint32_t *pixels, int width)
 {
     static uint32_t past[4][SS_MAX_VIEW_W * SS_SCREEN_H];
     static int past_width, smooth = -1, shade;
-    int count = width * SS_SCREEN_H, i, peak = 0, wanted;
+    int count = width * SS_SCREEN_H, i, wanted;
+    unsigned long light = 0, sampled = 0;
 
     if (smooth < 0)
         smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
@@ -223,10 +224,8 @@ static void finish_picture(uint32_t *pixels, int width)
         if (!(now >> 24))
             continue;                   /* a side column: nothing of the game's there */
         if ((i & 3) == 0) {
-            int r = (now >> 16) & 255, g = (now >> 8) & 255, bl = now & 255;
-            if (r > peak) peak = r;
-            if (g > peak) peak = g;
-            if (bl > peak) peak = bl;
+            light += ((now >> 16) & 255) + ((now >> 8) & 255) * 2 + (now & 255);
+            sampled += 4;
         }
         if (!smooth)
             continue;
@@ -236,10 +235,16 @@ static void finish_picture(uint32_t *pixels, int width)
         if (other != now && (other >> 24))
             pixels[i] = 0xFF000000u | (((now >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + (now & other & 0x010101));
     }
-    /* how dark the sides are: full when the picture is black, none from a third of full brightness up */
-    wanted = peak >= 96 ? 0 : 255 - peak * 255 / 96;
-    if (wanted > shade) shade = wanted - shade > 24 ? shade + 24 : wanted;
-    else shade = shade - wanted > 24 ? shade - 24 : wanted;
+    /* How dark the sides are follows how bright the game's picture is as a whole (not its brightest point, which
+     * stays until the last moment of a fade): black when the picture is black, clear from a moderately lit
+     * picture up, and never more than a small step from one frame to the next, so they sink and rise with the
+     * game's own fade instead of switching. */
+    {
+        int mean = sampled ? (int)(light / sampled) : 0;
+        wanted = mean >= 72 ? 0 : 255 - mean * 255 / 72;
+    }
+    if (wanted > shade) shade = wanted - shade > 8 ? shade + 8 : wanted;
+    else shade = shade - wanted > 8 ? shade - 8 : wanted;
     if (shade)
         for (i = 0; i < count; i++)
             if (!(pixels[i] >> 24))
