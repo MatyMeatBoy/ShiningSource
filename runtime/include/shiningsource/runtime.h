@@ -54,8 +54,16 @@ int ss_field_view(struct ss_view *view, int width);
 int ss_plat_video_init(const char *title);
 /* Width the picture should have to fill the window at a whole-number scale (240..SS_MAX_VIEW_W). */
 int ss_plat_view_width(void);
-/* Show one `width` x 160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order). */
+/* Show one `width` x 160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order).
+ * A machine that cannot draw every picture in time: when the platform is more than a frame behind the game's clock
+ * it sets SS_PRESENT_LATE in what it returns, and the next frame may then be given without a picture (`width` 0):
+ * the platform does everything else of a frame (events, buttons, the clock) and shows nothing new. The game keeps
+ * its speed and the sound its pace; only pictures are lost. */
 uint16_t ss_plat_present(const uint32_t *pixels, int width);
+enum { SS_PRESENT_LATE = 0x8000 };
+/* core/ppu.c: a frame goes by without being drawn; the renderer still has to see its sprites (see find_alternating). */
+struct ss_view;
+void ss_ppu_unseen(const struct ss_view *view);
 /* Play one game frame of 48 kHz stereo samples. */
 void ss_plat_audio(const int16_t *samples, int frames);
 /* Skip scene (core/scene.c). ss_skip_update is called once a frame with the buttons the player holds and returns

@@ -876,13 +876,19 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
     return top_colour;
 }
 
-void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
+/* What a frame leaves behind for the frames after it: the sprite table, the sprites' tiles and their colours. */
+static void keep_frame(void)
 {
-    static uint32_t place[H][4];        /* where each background was on each line of the last frame */
-    int mode = 0, y, X, n;
-    uint8_t end_of_frame[SS_LINE_REGISTERS];
-    int per_line = ss_line_registers(0) != NULL;
+    int n = (int)(frame_drawn % KEPT);
+    if (!frame_is_new)
+        return;
+    memcpy(kept[n].oam, OAM, sizeof kept[n].oam);
+    memcpy(kept[n].tiles, VRAM + 0x10000, sizeof kept[n].tiles);
+    memcpy(kept[n].colours, PAL + 0x100, sizeof kept[n].colours);
+}
 
+static void take_view(const struct ss_view *requested)
+{
     if (requested) {
         view = *requested;
     } else {
@@ -892,6 +898,25 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     if (!view.hud_right) view.hud_right = view.width;
     if (view.width < W) view.width = W;
     if (view.width > MAXW) view.width = MAXW;
+}
+
+/* A frame that is not drawn (a machine too slow for every picture leaves some out, see ss_plat_present). Which
+ * sprites alternate is told from every frame in a row, so the frame is still looked at; nothing is drawn. */
+void ss_ppu_unseen(const struct ss_view *requested)
+{
+    take_view(requested);
+    find_alternating();
+    keep_frame();
+}
+
+void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
+{
+    static uint32_t place[H][4];        /* where each background was on each line of the last frame */
+    int mode = 0, y, X, n;
+    uint8_t end_of_frame[SS_LINE_REGISTERS];
+    int per_line = ss_line_registers(0) != NULL;
+
+    take_view(requested);
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     find_alternating();
     line.edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
@@ -966,10 +991,5 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     }
     if (per_line)
         memcpy((void *)(uintptr_t)SS_IO, end_of_frame, sizeof end_of_frame);
-    if (frame_is_new) {
-        n = (int)(frame_drawn % KEPT);
-        memcpy(kept[n].oam, OAM, sizeof kept[n].oam);
-        memcpy(kept[n].tiles, VRAM + 0x10000, sizeof kept[n].tiles);
-        memcpy(kept[n].colours, PAL + 0x100, sizeof kept[n].colours);
-    }
+    keep_frame();
 }

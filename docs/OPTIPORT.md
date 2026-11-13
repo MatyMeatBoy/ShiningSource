@@ -232,3 +232,31 @@ a transcription of the per-pixel version.
 
 Tried and dropped, no measurable gain: composing each line into local buffers.
 
+## A machine too slow for every picture (2026-11-13)
+
+Before: when a picture took longer than a frame, the game itself slowed down
+and the sound device ran dry, because every frame waited for its picture.
+
+Now the platform keeps the console's clock for every game frame, whoever paces
+the game, and says so when a frame ends more than one frame behind
+(`SS_PRESENT_LATE`). The next frame then goes by without its picture
+(`ss_plat_present` with width 0: events, buttons and the clock only), at most
+three in a row. The renderer still looks at such a frame's sprites
+(`ss_ppu_unseen`), because which sprites alternate is told from every frame in
+a row. `SS_FRAMESKIP=0` turns it off.
+
+Test: `SS_TEST_SLOW=ms` makes every picture take that much longer. 1,500
+frames with a window, Windows x64:
+
+| picture slowed by | game frames a second, before | after | pictures left out | sound queue empty |
+|---|---|---|---|---|
+| 0 or 12 ms | 59.69 | 59.69 | 0 | 0 times |
+| 25 ms | 37.91 (sound reserve 0.1 ms throughout) | 59.63 | 546 of 1,500 | 0 times |
+| 40 ms | not measured | 59.62 | 893 of 1,500 | once |
+
+The same with `SS_TEST_REFRESH=60`: 59.62 a second, 748 left out. Not verified:
+a display that really paces the game at 60 Hz on a slow device (this panel is
+144 Hz and the simulated case falls back to the port's own clock), and a real
+phone. Per-pixel smoothing of blinking that is not a sprite sees only the
+pictures that are drawn, so it can miss while pictures are being left out.
+

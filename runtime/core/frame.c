@@ -812,7 +812,19 @@ void VBlankIntrWait(void)
         {
             static uint16_t held;
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
-            if (skip.present) {
+            static int late, left_out;
+            if (skip.present && late && left_out < 3) {
+                /* The machine is more than a frame behind: this frame goes by without its picture, so that the
+                 * game keeps its speed. At most three in a row: a quarter of the pictures is always shown. */
+                left_out++;
+                ss_ppu_unseen(&view);
+                ss_prof(SS_PROF_PRESENT, 1);
+                held = ss_plat_present(pixels, 0);
+                ss_prof(SS_PROF_PRESENT, 0);
+                late = held & SS_PRESENT_LATE;
+                held &= (uint16_t)~SS_PRESENT_LATE;
+            } else if (skip.present) {
+                left_out = 0;
                 ss_prof(SS_PROF_RENDER, 1);
                 ss_ppu_render(pixels, width, &view);
                 ss_prof(SS_PROF_RENDER, 0);
@@ -823,6 +835,8 @@ void VBlankIntrWait(void)
                 ss_prof(SS_PROF_PRESENT, 1);
                 held = ss_plat_present(pixels, width);
                 ss_prof(SS_PROF_PRESENT, 0);
+                late = held & SS_PRESENT_LATE;
+                held &= (uint16_t)~SS_PRESENT_LATE;
             } else if (ss_net_active()) {
                 /* A scene being skipped online. Alone the game runs as fast as the machine allows; with other
                  * players it keeps its normal speed: the game counts its waits for them in frames, and run fast

@@ -368,9 +368,11 @@ What each added is in `docs/RELEASE_*.md`. In short:
 - [ ] Not confirmed by a person yet: combat online with the single order, the
       music by ear, a real controller, a phone, RetroAchievements sign-in.
 - [ ] Joining a game in progress and reconnecting.
-- [ ] The renderer on a slow device: `ss_ppu_render` is 1.8 to 2.5 ms of a frame
-      on the development PC, which a core five times slower no longer fits in the
-      wide view. Skipping pictures needs a phone to tune on.
+- [x] The renderer on a slow device (0.7.2): `ss_ppu_render` costs a third less
+      (0.9 ms classic, 1.4 ms at 480 columns on the development PC), and a
+      machine that still cannot draw every picture leaves pictures out instead
+      of slowing the game (`docs/OPTIPORT.md`). Checked with simulated slowness;
+      a phone has not run it.
 
 ## M8. Everything else ReKHCoM ships
 

@@ -147,6 +147,9 @@ static int by_value(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
+static uint64_t stat_game_first_ns, stat_game_last_ns;
+static unsigned long stat_left_out, stat_game_frames;
+
 static void stats_report(void)
 {
     unsigned n = stat_count < STAT_SLOTS ? stat_count : STAT_SLOTS, i, late = 0, early = 0;
@@ -171,6 +174,10 @@ static void stats_report(void)
         fprintf(stderr, "stats: waited for the next frame %.1f%% of the time (the rest is the game, the picture and the system)\n",
                 stat_wait_ns * 100.0 / (sum * 1000.0));
     }
+    if (stat_game_frames > 1 && stat_game_last_ns > stat_game_first_ns)
+        fprintf(stderr, "stats: %lu game frames in %.2f s: %.2f a second (the console: 59.73); %lu of them without a picture\n",
+                stat_game_frames, (stat_game_last_ns - stat_game_first_ns) / 1e9,
+                (stat_game_frames - 1) * 1e9 / (double)(stat_game_last_ns - stat_game_first_ns), stat_left_out);
     n = stat_part_count < STAT_SLOTS ? stat_part_count : STAT_SLOTS;
     for (i = 0; n > 60 && i < PARTS; i++) {
         static const char *const names[PARTS] = { "texture upload", "drawing calls", "present call" };
@@ -1941,11 +1948,50 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     uint32_t *part = stat_part_us[PART_UPLOAD] ? stat_part_us[PART_UPLOAD] + stat_part_count % STAT_SLOTS : NULL;
     SDL_Event event;
     static int unpaced;                 /* frames in a row the display was to pace and did not */
-    int waiting;
+    static uint64_t ideal_ns;           /* when this game frame was due by the console's clock, however it is paced */
+    static int frameskip = -1, test_slow_ms;
+    int waiting, late;
 
     if (!window)
         return 0;
+    if (frameskip < 0) {
+        /* SS_FRAMESKIP=0: never leave a picture out. SS_TEST_SLOW=ms: every picture takes that much longer, as on
+         * a machine too slow for the game (tests). */
+        frameskip = !(getenv("SS_FRAMESKIP") && getenv("SS_FRAMESKIP")[0] == '0');
+        test_slow_ms = getenv("SS_TEST_SLOW") ? atoi(getenv("SS_TEST_SLOW")) : 0;
+    }
     game_frames++;
+    stat_game_frames++;
+    if (!stat_game_first_ns)
+        stat_game_first_ns = SDL_GetTicksNS();
+    if (!width) {
+        /* a frame without a picture (see runtime.h): everything of a frame but the picture and the wait */
+        while (SDL_PollEvent(&event))
+            handle_event(&event);
+        test_keys();
+        held = read_buttons();
+        next_frame_ns += 16742706;
+        ideal_ns += 16742706;
+        now = SDL_GetTicksNS();
+        stat_game_last_ns = now;
+        stat_left_out++;
+        if (ideal_ns > now) {           /* caught up, with time to spare: the rest of this frame's time is waited out */
+            SDL_DelayPrecise(ideal_ns - now);
+            now = ideal_ns;
+        }
+        if (next_frame_ns < now)
+            next_frame_ns = now;
+        late = now - ideal_ns > 16742706 && !menu_open && !overlay_skipping;
+        if (menu_open) {
+            held = 0;
+        } else {
+            menu_swallow &= held;
+            held &= (uint16_t)~menu_swallow;
+        }
+        return (uint16_t)(held | (late ? SS_PRESENT_LATE : 0));
+    }
+    if (test_slow_ms)
+        SDL_DelayPrecise((uint64_t)test_slow_ms * 1000000u);
     if (part)
         part_from = SDL_GetTicksNS();
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
@@ -2061,5 +2107,13 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
             fprintf(stderr, "input: picture %ld, game frame %ld: the game is given %04X\n", pictures, game_frames, held);
         told = held;
     }
-    return held;
+    /* How far behind the console's clock this frame ended, whoever paces the game. Ahead of it (a display a little
+     * faster than the console) or hopelessly behind (the window was dragged) the clock starts again from now. */
+    ideal_ns += 16742706;
+    now = SDL_GetTicksNS();
+    stat_game_last_ns = now;
+    if (ideal_ns > now || now - ideal_ns > 100000000)
+        ideal_ns = now;
+    late = frameskip && now - ideal_ns > 16742706 && !menu_open && !overlay_skipping;
+    return (uint16_t)(held | (late ? SS_PRESENT_LATE : 0));
 }
