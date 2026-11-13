@@ -332,7 +332,7 @@ int ss_plat_view_width(void)
 
 static void handle_event(const SDL_Event *event)
 {
-    if (event->type == SDL_EVENT_QUIT || (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_ESCAPE))
+    if (event->type == SDL_EVENT_QUIT)      /* closing the window (or Alt+F4); Escape does nothing: too easy to hit */
         exit(0);
     if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
         gamepad = SDL_OpenGamepad(event->gdevice.which);
