@@ -279,6 +279,91 @@ static void choose_rom(const Game &game)
 static int ping_ms = -2;        /* -2 not measured, -1 no answer */
 
 /* Round trip to the relay: the best of five echoes (relay/ss_relay.c, packet type 5). */
+/* ---- online: which server ----
+ * Three ways to meet. The official server is the default and needs nothing. "Host on this PC" starts the relay
+ * that comes with the port (ss_relay.exe, the same program the official server runs) and shows the addresses the
+ * others type; "Connect by IP" is the other side of that. The setting is `connection` (official, host, ip). */
+static std::string with_port(std::string address)
+{
+    while (!address.empty() && (address.back() == ' ' || address.back() == '\r' || address.back() == '\n'))
+        address.pop_back();
+    while (!address.empty() && address.front() == ' ')
+        address.erase(address.begin());
+    if (!address.empty() && address.find(':') == std::string::npos)
+        address += ":47900";
+    return address;
+}
+
+/* The address the game is given. */
+static std::string server_address()
+{
+    std::string how = setting("connection", "official");
+    if (how == "host")
+        return "127.0.0.1:47900";
+    if (how == "ip" && !with_port(setting("server_ip")).empty())
+        return with_port(setting("server_ip"));
+    return DEFAULT_SERVER;
+}
+
+/* This PC's addresses on its networks (not the loopback one), for the others to type. */
+static std::vector<std::string> local_addresses()
+{
+    std::vector<std::string> list;
+    WSADATA data;
+    char name[256];
+    addrinfo hints = {}, *found = nullptr;
+    WSAStartup(MAKEWORD(2, 2), &data);
+    hints.ai_family = AF_INET;
+    if (gethostname(name, sizeof name) == 0 && getaddrinfo(name, nullptr, &hints, &found) == 0) {
+        for (addrinfo *one = found; one; one = one->ai_next) {
+            char text[64];
+            const sockaddr_in *in = (const sockaddr_in *)one->ai_addr;
+            if (InetNtopA(AF_INET, (void *)&in->sin_addr, text, sizeof text) && strncmp(text, "127.", 4) != 0
+                && std::find(list.begin(), list.end(), text) == list.end())
+                list.push_back(text);
+        }
+        freeaddrinfo(found);
+    }
+    return list;
+}
+
+/* The relay on this PC: started hidden, and it ends by itself after ten minutes without a packet. */
+static bool relay_running()
+{
+    HANDLE mark = OpenMutexA(SYNCHRONIZE, FALSE, "ShiningSourceRelay47900");
+    if (mark)
+        CloseHandle(mark);
+    /* the relay holds the port: a second bind fails while it runs */
+    WSADATA data;
+    WSAStartup(MAKEWORD(2, 2), &data);
+    SOCKET sock = socket(AF_INET, SOCK_DGRAM, 0);
+    sockaddr_in any = {};
+    any.sin_family = AF_INET;
+    any.sin_port = htons(47900);
+    bool taken = bind(sock, (sockaddr *)&any, sizeof any) != 0;
+    closesocket(sock);
+    return taken;
+}
+
+static bool start_relay()
+{
+    if (relay_running())
+        return true;
+    std::string program = folder + "ss_relay.exe", command = "\"" + program + "\" 47900";
+    STARTUPINFOA startup = {};
+    PROCESS_INFORMATION process = {};
+    startup.cb = sizeof startup;
+    SetEnvironmentVariableA("SS_RELAY_IDLE_EXIT", "600");
+    BOOL made = CreateProcessA(program.c_str(), &command[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW | DETACHED_PROCESS, nullptr, folder.c_str(), &startup, &process);
+    SetEnvironmentVariableA("SS_RELAY_IDLE_EXIT", nullptr);
+    if (!made)
+        return false;
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    Sleep(200);
+    return relay_running();
+}
+
 static void measure_ping(const std::string &server)
 {
     WSADATA data;
@@ -700,9 +785,11 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
     bool online = setting("online", "1") == "1";
-    SetEnvironmentVariableA("SS_NET", online ? setting("server", DEFAULT_SERVER).c_str() : nullptr);
+    if (online && setting("connection", "official") == "host")
+        start_relay();          /* hosting: the server must be there before the game looks for it */
+    SetEnvironmentVariableA("SS_NET", online ? server_address().c_str() : nullptr);
     SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
-    SetEnvironmentVariableA("SS_NET_DELAY", online && setting("delay_auto", "1") == "0" ? setting("delay", "6").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_NET_DELAY", nullptr);       /* the direct transport has no delay to set */
     /* achievements: where the remembered sign-in, the game's list and the records are (never a password), and
      * the cheats of a Rebel run */
     SetEnvironmentVariableA("SS_RA_DIR", folder.substr(0, folder.size() - 1).c_str());
@@ -1053,10 +1140,8 @@ static void interface_frame(bool &running)
         SDL_free(pads);
     } else if (page == 4) {
         bool online = setting("online", "1") == "1";
-        int delay = atoi(setting("delay", "6").c_str());
-        char room[32], server[96];
+        char room[32];
         snprintf(room, sizeof room, "%s", setting("room", "shining").c_str());
-        snprintf(server, sizeof server, "%s", setting("server", DEFAULT_SERVER).c_str());
         ImGui::TextColored(gold, "%s", text("Online play (2 to 4 players)", "Juego en l\xC3\xADnea (2 a 4 jugadores)"));
         if (ImGui::Checkbox(text("Play online", "Jugar en l\xC3\xADnea"), &online)) {
             settings["online"] = online ? "1" : "0";
@@ -1070,36 +1155,76 @@ static void interface_frame(bool &running)
         }
         ImGui::TextWrapped("%s", text("Everyone types the same room name. The first to enter is the host (player 1). In the game choose MULTIPLAYER MODE: the cable is the network.",
                                       "Todos escriben el mismo nombre de sala. El primero en entrar es el anfitri\xC3\xB3n (jugador 1). En el juego elige MULTIPLAYER MODE: el cable es la red."));
-        bool automatic = setting("delay_auto", "1") != "0";
-        if (ImGui::Checkbox(text("Automatic delay (recommended): as short as the connection allows", "Retardo autom\xC3\xA1tico (recomendado): tan corto como permita la conexi\xC3\xB3n"), &automatic)) {
-            settings["delay_auto"] = automatic ? "1" : "0";
-            save_settings();
-        }
-        ImGui::BeginDisabled(automatic);
-        ImGui::SetNextItemWidth(260);
-        if (ImGui::SliderInt(text("Delay (host decides)", "Retardo (lo decide el anfitri\xC3\xB3n)"), &delay, 2, 30, text("%d frames", "%d cuadros"))) {
-            settings["delay"] = std::to_string(delay);
-            save_settings();
-        }
-        ImGui::TextWrapped("%s", text("Same country: 3 or 4. Same continent: 6. Between continents: 10 to 14. Too low and the game slows down, it never disconnects; too high and the other players react later.",
-                                      "Mismo pa\xC3\xADs: 3 o 4. Mismo continente: 6. Entre continentes: 10 a 14. Si es muy bajo el juego va m\xC3\xA1s lento, nunca se desconecta; si es muy alto los dem\xC3\xA1s reaccionan m\xC3\xA1s tarde."));
-        ImGui::EndDisabled();
-        ImGui::SetNextItemWidth(260);
-        if (ImGui::InputText(text("Server", "Servidor"), server, sizeof server)) {
-            settings["server"] = server;
-            save_settings();
-            ping_ms = -2;
+        ImGui::Separator();
+        ImGui::TextColored(gold, "%s", text("Server", "Servidor"));
+        {
+            std::string how = setting("connection", "official");
+            static std::string notice;
+            auto choose = [&](const char *value) { settings["connection"] = value; save_settings(); ping_ms = -2; notice.clear(); };
+            if (ImGui::RadioButton(text("Official server (default)", "Servidor oficial (por defecto)"), how == "official"))
+                choose("official");
+            if (ImGui::RadioButton(text("Host on this PC", "Alojar en este PC"), how == "host"))
+                choose("host");
+            if (ImGui::RadioButton(text("Connect by IP", "Conectar por IP"), how == "ip"))
+                choose("ip");
+            how = setting("connection", "official");
+            if (how == "host") {
+                bool running = relay_running();
+                ImGui::TextWrapped("%s", text("This PC runs the server. Give the others one of these addresses; they choose \"Connect by IP\" and paste it. The server starts when you press Play and ends by itself ten minutes after the last game.",
+                                              "Este PC hace de servidor. Pasa a los dem\xC3\xA1s una de estas direcciones; ellos eligen \"Conectar por IP\" y la pegan. El servidor arranca al pulsar Jugar y se cierra solo diez minutos despu\xC3\xA9s de la \xC3\xBAltima partida."));
+                if (!running) {
+                    if (ImGui::Button(text("Start the server now", "Arrancar el servidor ahora")))
+                        notice = start_relay() ? "" : text("The server could not be started (ss_relay.exe must be next to the launcher, and UDP port 47900 free).",
+                                                           "No se pudo arrancar el servidor (ss_relay.exe debe estar junto al launcher y el puerto UDP 47900 libre).");
+                } else {
+                    ImGui::TextColored(green, "%s", text("The server is running.", "El servidor est\xC3\xA1 en marcha."));
+                }
+                std::vector<std::string> own = local_addresses();
+                for (size_t i = 0; i < own.size(); i++) {
+                    std::string address = own[i] + ":47900";
+                    ImGui::PushID((int)i);
+                    ImGui::TextUnformatted(address.c_str());
+                    ImGui::SameLine();
+                    if (ImGui::SmallButton(text("Copy IP", "Copiar IP"))) {
+                        SDL_SetClipboardText(address.c_str());
+                        notice = text("Copied.", "Copiada.");
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::TextWrapped("%s", text("These are this PC's addresses on its own networks. Players outside them reach it through your public address, with UDP port 47900 open towards this PC.",
+                                              "Estas son las direcciones de este PC en sus propias redes. Quien est\xC3\xA9 fuera de ellas llega por tu direcci\xC3\xB3n p\xC3\xBA" "blica, con el puerto UDP 47900 abierto hacia este PC."));
+            } else if (how == "ip") {
+                char address[96];
+                snprintf(address, sizeof address, "%s", setting("server_ip").c_str());
+                ImGui::SetNextItemWidth(260);
+                if (ImGui::InputText(text("Host's address", "Direcci\xC3\xB3n del anfitri\xC3\xB3n"), address, sizeof address)) {
+                    settings["server_ip"] = address;
+                    save_settings();
+                    ping_ms = -2;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button(text("Paste", "Pegar"))) {
+                    char *clip = SDL_GetClipboardText();
+                    if (clip && *clip) {
+                        settings["server_ip"] = with_port(clip);
+                        save_settings();
+                        ping_ms = -2;
+                    }
+                    SDL_free(clip);
+                }
+                ImGui::TextWrapped("%s", text("The address the host copied from their launcher, for example 192.168.1.20:47900.",
+                                              "La direcci\xC3\xB3n que el anfitri\xC3\xB3n copi\xC3\xB3 de su launcher, por ejemplo 192.168.1.20:47900."));
+            }
+            if (!notice.empty())
+                ImGui::TextColored(dim, "%s", notice.c_str());
         }
         if (ImGui::Button(text("Measure my connection", "Medir mi conexi\xC3\xB3n")))
-            measure_ping(server);
+            measure_ping(server_address());
         ImGui::SameLine();
         if (ping_ms == -1)
             ImGui::TextColored(red, "%s", text("The server does not answer.", "El servidor no responde."));
-        else if (ping_ms >= 0) {
-            int suggested = (ping_ms + 40 + 16) / 17;
-            ImGui::TextColored(green, text("%d ms. If the others measure about the same, delay %d.", "%d ms. Si los dem\xC3\xA1s miden parecido, retardo %d."),
-                               ping_ms, suggested < 2 ? 2 : suggested > 30 ? 30 : suggested);
-        }
+        else if (ping_ms >= 0)
+            ImGui::TextColored(green, text("%d ms to the server.", "%d ms hasta el servidor."), ping_ms);
         ImGui::EndDisabled();
     } else if (page == 5) {
         achievements_page(game, gold, dim, red, green);

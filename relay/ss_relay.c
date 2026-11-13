@@ -150,6 +150,9 @@ static int same_address(const struct sockaddr_in *a, const struct sockaddr_in *b
     return a->sin_addr.s_addr == b->sin_addr.s_addr && a->sin_port == b->sin_port;
 }
 
+static int idle_exit;
+static time_t last_packet;
+
 int main(int argc, char **argv)
 {
     int port = argc > 1 ? atoi(argv[1]) : 47900;
@@ -160,6 +163,7 @@ int main(int argc, char **argv)
     WSADATA data;
     WSAStartup(MAKEWORD(2, 2), &data);
 #endif
+    idle_exit = getenv("SS_RELAY_IDLE_EXIT") ? atoi(getenv("SS_RELAY_IDLE_EXIT")) : 0;
     sim_loss = getenv("SS_RELAY_LOSS") ? atoi(getenv("SS_RELAY_LOSS")) : 0;
     sim_lag = getenv("SS_RELAY_LAG") ? atoi(getenv("SS_RELAY_LAG")) : 0;
     sim_jitter = getenv("SS_RELAY_JITTER") ? atoi(getenv("SS_RELAY_JITTER")) : 0;
@@ -194,6 +198,14 @@ int main(int argc, char **argv)
         if (held)
             release_held(sock);
         now = time(NULL);
+        /* SS_RELAY_IDLE_EXIT=seconds: a relay a player started on their own PC ends by itself when nobody has
+         * sent it anything for that long, so it is not left running for ever after the game. */
+        if (size > 0 || !last_packet)
+            last_packet = now;
+        if (idle_exit && now - last_packet > idle_exit) {
+            fprintf(stderr, "no packet for %d seconds: leaving\n", idle_exit);
+            return 0;
+        }
         if (now != swept) {
             swept = now;
             for (i = 0; i < ROOMS; i++)
