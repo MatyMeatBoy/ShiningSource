@@ -31,8 +31,11 @@
  * SS_NET_LOG=file (one line
  * per delivered frame: label, players, hash of the blocks; identical on every player), SS_NET_PLAYERS=n (tests:
  * wait at the start of the session until n players are in the room), SS_NET_MSG_LOG=file (the message channel,
- * see "messages" below: one line per message handed over and per message dispatched), SS_NET_TEST_CHATTER and
- * SS_NET_TEST_MSG (tests: messages of the test's own, see test_chatter and test_message).
+ * see "messages" below: one line per message handed over and per message dispatched; with SS_NET_MSG_DUMP=1 the
+ * message itself follows in hexadecimal), SS_NET_TEST_CHATTER and SS_NET_TEST_MSG (tests: messages of the test's
+ * own, see test_chatter and test_message), SS_NET_JOIN=1 (off by default: a program started later is let into
+ * the game in progress, see "joining a game in progress" below and docs/JOIN_IN_PROGRESS.md; every player of
+ * the session needs it, they meet in a room of their own).
  */
 #include "shiningsource/runtime.h"
 
@@ -178,6 +181,30 @@ static struct {                 /* what is kept of a player given up for silence
     int in_valid;
 } away[SEATS];
 
+/* joining a game in progress (see below) */
+enum { J_INFO = 0xF1, J_ADMIT = 0xF2, J_SNAP = 0xF4, J_SNAP_END = 0xF5 };      /* this layer's own entries of the order */
+enum { JR_NONE, JR_LOBBY, JR_PARKED, JR_SNAP, JR_BRINGUP, JR_LIVE };
+enum { JOIN_PARKED = 0x40 };            /* in the header's delay byte: this candidate's game waits at its barrier */
+enum { SNAP_KINDS = 6, SNAP_GLOBALS = 4 };
+static int join_mode;                   /* SS_NET_JOIN=1 */
+static uint32_t candidate;              /* seats whose stream is here but whose player is not in the game yet */
+static uint32_t cand_owed, cand_told, cand_ready, cand_admitted;       /* the host's: info to send, sent, parked, let in */
+static uint32_t cand_info_at[SEATS];    /* the host's: the number of the entry that told the candidate about the session */
+static int join_role;                   /* this program is entering a game in progress: how far it is (JR_*) */
+static int join_anchor;                 /* the game is at the point of a map's set-up where a player can be let in */
+static int join_first_init;             /* the newcomer's first set-up of a map: the part the others did before is left out */
+static uint8_t lobby_byte;              /* the host's lobby settings (byte 10 of its block when it said "GO") */
+static uint8_t join_info[40], join_admit[24];
+static uint32_t grow_pending;           /* seats the game must make a player for (ss_net_join_grow) */
+static uint32_t join_prefill;           /* the newcomer's: seats whose barrier token it is given again */
+static int tokens_out;                  /* own barrier tokens handed over that have not come round in the order */
+static uint32_t joined;                 /* seats that were let into the game in progress */
+static int join_drop_tokens;            /* the newcomer's: barrier tokens of its session's start still to be dropped */
+static int join_admit_seen;             /* the newcomer's: the entry that lets it in has arrived */
+static int lobby_done;                  /* the host has said "GO" in the game's lobby: the session's seats are fixed */
+static uint8_t snap_size[SEATS][SNAP_KINDS], snap_data[SEATS][SNAP_KINDS][MSG_BYTES];
+static uint8_t snap_global_size[SNAP_GLOBALS], snap_global_who[SNAP_GLOBALS], snap_global[SNAP_GLOBALS][MSG_BYTES];
+
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 static void wr32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
 
@@ -231,6 +258,13 @@ static int configure(void)
         room = fnv(room, (const void *)(uintptr_t)SS_ROM, 0x1000000);
         room = fnv(room, &rules, sizeof rules);
         room = fnv(room, &direct, sizeof direct);      /* the two transports do not mix */
+        /* SS_NET_JOIN=1: a player can be let into a game in progress ("joining a game in progress", below). The
+         * players of such a session all have to know how, so they meet in a room of their own; without the
+         * setting the room is the one it always was and nothing below is ever reached. Only with the direct
+         * transport (on the stepped one a newcomer has no place on the timeline of the game in progress). */
+        join_mode = direct && getenv("SS_NET_JOIN") && getenv("SS_NET_JOIN")[0] == '1';
+        if (join_mode)
+            room = fnv(room, "join", 4);
     }
     token = getenv("SS_NET_TOKEN") ? (uint32_t)strtoul(getenv("SS_NET_TOKEN"), NULL, 10)
                                    : fnv(ss_plat_ticks_ms() * 2654435761u, &text, sizeof text) | 1;
@@ -250,7 +284,7 @@ static void header(uint8_t *packet, int type, int count, uint32_t first_label)
     wr32(packet, MAGIC);
     packet[4] = (uint8_t)type;
     packet[5] = (uint8_t)seat;
-    packet[6] = (uint8_t)delay;
+    packet[6] = (uint8_t)(delay | (join_role == JR_PARKED ? JOIN_PARKED : 0));
     packet[7] = (uint8_t)count;
     wr32(packet + 8, room);
     wr32(packet + 12, token);
@@ -286,7 +320,14 @@ static int message_part(uint8_t *part, int room, uint32_t first, uint32_t stop, 
         struct stream *s = &streams[i];
         if (i == seat)
             continue;
-        wr32(entry, s->known ? s->msg_start : 0);
+        /* A candidate for a game in progress that has been told about the session is given nothing more of the
+         * order until it is let in: the start of its stream moves along with the newest entry, here, where
+         * the packet is made (an entry appended in this frame must not slip through). */
+        if (seat == 0 && ((candidate & cand_told & ~cand_admitted) >> i & 1) && s->msg_acked > cand_info_at[i])
+            s->msg_start = s->msg_acked = out_next;
+        /* (and no start at all before the host has put the entry that tells it about the session into the
+         * order: its stream starts there) */
+        wr32(entry, s->known && !(seat == 0 && (candidate & ~cand_told) >> i & 1) ? s->msg_start : 0);
         wr32(entry + 4, s->known && s->in_valid ? s->in_next : 0);
         entry += 8;
     }
@@ -355,6 +396,8 @@ static void send_data(void)
             struct stream *s = &streams[i];
             if (i == seat || !s->known || !(seat == 0 ? now - s->heard < 500 : i == 0))
                 continue;
+            if (seat == 0 && ((candidate & ~cand_told) >> i & 1))
+                continue;       /* a candidate that has not been told about the session: its stream has not begun */
             if (s->msg_acked < first)
                 first = s->msg_acked;
             if (s->msg_acked < kept_up && out_next - s->msg_acked <= MSG_NEAR)
@@ -423,6 +466,18 @@ static void drop(int who, const char *why, int may_return)
     const uint8_t *seen = s->has_last ? s->last : s->next > s->floor ? s->block[(s->next - 1) % RING] : NULL;
     int stays = in_play && who != 0 && who != seat && s->known && seen && (connected & 1u << who);
 
+    if (candidate >> who & 1) {
+        /* a program that wanted to join the game in progress and was not let in yet: the game never knew it.
+         * (On a seat whose player left, that player's standing character stays as it was.) */
+        net_say("net: player %d, which wanted to join, %s\n", who + 1, why);
+        candidate &= ~(1u << who);
+        cand_owed &= ~(1u << who);
+        cand_told &= ~(1u << who);
+        cand_ready &= ~(1u << who);
+        cand_admitted &= ~(1u << who);
+        memset(s, 0, sizeof *s);
+        return;
+    }
     if (s->known)
         net_say("net: player %d %s%s\n", who + 1, why, stays ? " (its character stays)" : "");
     if (stays) {
@@ -611,8 +666,15 @@ static void msg_note(char what, int who, const uint8_t *data, int size)
     if (msg_log) {
         /* the last field is a hash of the whole message: two logs then show not only the same kinds of
          * messages in the same order but the same messages, none twice and none missing */
-        fprintf(msg_log, "%u %u %c %d %02X %d %08X\n", (unsigned)ss_plat_ticks_ms(), (unsigned)frame_label, what, who,
+        static int whole = -1;  /* SS_NET_MSG_DUMP=1: an eighth field, the message itself in hexadecimal */
+        int i;
+        if (whole < 0)
+            whole = getenv("SS_NET_MSG_DUMP") != NULL;
+        fprintf(msg_log, "%u %u %c %d %02X %d %08X", (unsigned)ss_plat_ticks_ms(), (unsigned)frame_label, what, who,
                 size > 0 ? data[0] : 0, size, (unsigned)fnv(2166136261u, data, size));
+        for (i = 0; whole && i < size; i++)
+            fprintf(msg_log, i ? "%02X" : " %02X", data[i]);
+        fprintf(msg_log, "\n");
         fflush(msg_log);
     }
 }
@@ -629,7 +691,7 @@ static void test_chatter(void)
     uint8_t message[10];
     if (every < 0)
         every = getenv("SS_NET_TEST_CHATTER") ? (int)strtoul(getenv("SS_NET_TEST_CHATTER"), NULL, 10) : 0;
-    if (every <= 0 || !in_play || frame_label - last < (uint32_t)every)
+    if (every <= 0 || !in_play || frame_label - last < (uint32_t)every || (join_role != JR_NONE && join_role != JR_LIVE))
         return;
     message[0] = 0xFE;
     message[1] = 1;             /* one piece of eight bytes, as the game's own messages are built */
@@ -696,6 +758,14 @@ static void msg_reset(void)
     memset(away, 0, sizeof away);
     host_knew = 0;
     disowned_since = 0;
+    candidate = cand_owed = cand_told = cand_ready = cand_admitted = 0;
+    join_role = JR_NONE;
+    join_first_init = 0;
+    grow_pending = join_prefill = joined = 0;
+    lobby_done = join_admit_seen = join_drop_tokens = 0;
+    tokens_out = 0;
+    memset(snap_size, 0, sizeof snap_size);
+    memset(snap_global_size, 0, sizeof snap_global_size);
     for (i = 0; i < SEATS; i++) {
         streams[i].msg_start = streams[i].msg_acked = 1;
         streams[i].in_valid = 0;
@@ -711,8 +781,8 @@ static int msg_room(void)
     int i;
     if (seat == 0) {
         for (i = 1; i < SEATS; i++)
-            if (streams[i].known && streams[i].msg_acked < have)
-                have = streams[i].msg_acked;
+            if (streams[i].known && streams[i].msg_acked < have && !((candidate & ~cand_told) >> i & 1))
+                have = streams[i].msg_acked;    /* (nothing is kept for a candidate that has not been told about the session) */
         if (out_own < have)
             have = out_own;
         /* A player given up for silence may come back (revive) and then needs every entry it has not had.
@@ -739,6 +809,59 @@ static int msg_room(void)
     return out_next - out_base < MSG_OUT;
 }
 
+/* ---- joining a game in progress (SS_NET_JOIN=1, off by default; docs/JOIN_IN_PROGRESS.md) ----
+ * A program that is started while the others are already playing. What it lacks, and how it is given it:
+ *
+ *   - The lobby. The newcomer's game opens its link and waits in the game's lobby for the host's "GO". The others
+ *     left the lobby long ago, so this layer plays it: the host's block says "GO" with the lobby byte the real
+ *     host had, every other seat says "OK", and the game counts the seats the session has plus its own.
+ *   - A seat. The game takes the players to be seats 0..n-1 and makes a task and a record for each when the
+ *     session starts. The relay gives the newcomer the lowest free seat. Until it is let in it is a candidate:
+ *     the others' games are told nothing of it. When it is let in the others' games are given one seat more and
+ *     make the record and the task for it then (ss_net_join_grow, games/<game>/port/patches.json); a seat whose
+ *     player left (drop) has them already and is simply played by the newcomer from then on.
+ *   - A moment. The newcomer's game goes through the start of a session as far as its first barrier (the game's
+ *     "is everybody ready" token, tag 0x84) and waits there. The host lets it in when its own game enters a map:
+ *     at the message with which the host announces the map's layouts (0x85) inside the map's set-up (the game
+ *     tells this layer that it is there: ss_net_join_anchor). Enemies and items of the new map do not exist
+ *     yet at that point, so nothing of them has to be copied.
+ *   - What it missed. The host keeps the last message of every kind that says what a player or the session is
+ *     (name, class, weapon, flags, the two blocks of statistics per player; the session's settings) and puts
+ *     them into the order for the newcomer, wrapped so that the others pass over them, then where the session
+ *     is (map, area and the fields of the scene the set-up of a map reads) and which players' tokens for the
+ *     barrier under way are already in the order (the newcomer is given those again: its rings of tokens then
+ *     are the host's at that point of the order, and from there on it is given what the host is given).
+ *   - Its place in the game. Released from its barrier, the newcomer's game selects that map (the game's own
+ *     function for it, ss_net_join_place) and sets it up as the others do from the point where the host stood,
+ *     taking part in the barriers that follow like everybody else.
+ *
+ * All of this travels in the message channel, as entries with tags the game does not use (the game's are 0x81
+ * to 0xB0), in the host's one order: every machine reaches them at the same point of the order. Nothing in the
+ * packets' layout changed except one bit in the header's delay byte (JOIN_PARKED). Programs with the setting
+ * meet in a room of their own (see configure), so a program without it never sees any of it. */
+static const uint8_t *msg_head(int *size);
+static const uint8_t snap_kind[SNAP_KINDS] = { 0x81, 0x82, 0x83, 0x8C, 0x8E, 0x8F };
+static const uint8_t snap_global_kind[SNAP_GLOBALS] = { 0xAB, 0xAC, 0xAD, 0xAE };
+
+/* The host's: remember the last message of every kind that says what a player or the session is. */
+static void join_remember(int who, const uint8_t *data, int size)
+{
+    int i;
+    if (who < 0 || who >= SEATS || size < 1 || size > MSG_BYTES)
+        return;
+    for (i = 0; i < SNAP_KINDS; i++)
+        if (data[0] == snap_kind[i]) {
+            memcpy(snap_data[who][i], data, (size_t)size);
+            snap_size[who][i] = (uint8_t)size;
+        }
+    for (i = 0; i < SNAP_GLOBALS; i++)
+        if (data[0] == snap_global_kind[i]) {
+            memcpy(snap_global[i], data, (size_t)size);
+            snap_global_size[i] = (uint8_t)size;
+            snap_global_who[i] = (uint8_t)who;
+        }
+}
+
 /* Put a message of seat `who` at the end of my stream. */
 static void msg_append(int who, const uint8_t *data, int size)
 {
@@ -747,6 +870,279 @@ static void msg_append(int who, const uint8_t *data, int size)
     memcpy(entry + 1, data, (size_t)size);
     out_size[out_next % MSG_OUT] = (uint8_t)(1 + size);
     out_next++;
+    if (join_mode && seat == 0 && data[0] < J_INFO)
+        join_remember(who, data, size);
+}
+
+/* The game's memory, as games/ss2 lays it out (like the test hooks in core/frame.c): the scene record
+ * gUnk_03005CF4 points to (map +0, area +0x40, the exit's way +0x44, the callback column +0x36), and the
+ * players' rings of barrier tokens (cursors gUnk_03006210, ten words each at gUnk_03006260; the default token
+ * is 0x37564, sub_08067C18). */
+static uint32_t peek32(uint32_t address)
+{
+    uint32_t value;
+    memcpy(&value, (const void *)(uintptr_t)address, 4);
+    return value;
+}
+
+static int ring_holds_token(int who)
+{
+    uint32_t cursor = peek32(0x03006210u + (uint32_t)who * 4), j;
+    for (j = 0; j <= cursor && j < 10; j++)
+        if (peek32(0x03006260u + (uint32_t)who * 40 + j * 4) == 0x37564u)
+            return 1;
+    return 0;
+}
+
+static int contiguous(uint32_t mask)
+{
+    return mask && !(mask & (mask + 1));
+}
+
+/* The host's: tell a candidate about the session (the lobby byte, which seats the game counts, which of them
+ * are players that left and where those stand), in an entry of the order its stream then starts at. */
+static void join_tell(void)
+{
+    int k, i;
+    uint8_t info[40];
+    for (k = 1; k < SEATS; k++)
+        if ((cand_owed >> k & 1) && (candidate >> k & 1))
+            break;
+    /* one at a time: what a second one is told changes when the first is let in */
+    if (k == SEATS || (cand_told & ~cand_admitted) || (candidate & cand_admitted) || grow_pending || !msg_room())
+        return;
+    cand_owed &= ~(1u << k);
+    if (!contiguous(connected | joined | 1u << k)) {
+        net_say("net: player %d cannot join: its seat does not follow the seats the game has\n", k + 1);
+        return;
+    }
+    memset(info, 0, sizeof info);
+    info[0] = J_INFO;
+    info[1] = 4;
+    info[2] = (uint8_t)k;
+    info[3] = lobby_byte;
+    info[4] = (uint8_t)(connected | joined);
+    info[5] = (uint8_t)(gone & ~(1u << k));
+    for (i = 0; i < SEATS; i++)
+        if ((gone >> i & 1) && i != k)
+            memcpy(info + 8 + i * 8, gone_block[i], 8);
+    cand_info_at[k] = out_next;
+    streams[k].msg_start = streams[k].msg_acked = out_next;
+    msg_append(0, info, sizeof info);
+    cand_told |= 1u << k;
+    cand_admitted &= ~(1u << k);
+    net_say("net: player %d wants to join the game in progress; it will be let in at the next change of map\n", k + 1);
+}
+
+/* The host's game hands over the message that announces a map's layouts, inside the map's set-up: a candidate
+ * whose game waits at its barrier is let in here. Before that message go, in the order: the entry that lets
+ * it in (for everybody), what it missed (for it alone), and the end of that. */
+static void join_admit_now(void)
+{
+    uint32_t scene = peek32(0x03005CF4u), tokens = 0;
+    uint8_t entry[MSG_BYTES];
+    int k, i, kind;
+
+    for (k = 1; k < SEATS; k++)
+        if ((candidate & cand_told & cand_ready & ~cand_admitted) >> k & 1)
+            break;
+    if (k == SEATS || scene < SS_EWRAM || scene >= SS_EWRAM + 0x40000 - 0x48)
+        return;
+    msg_room();
+    if (MSG_OUT - (out_next - out_base) < 8 + SEATS * SNAP_KINDS + SNAP_GLOBALS)
+        return;                 /* no room for all of it now: at the next map */
+    for (i = 0; i < SEATS; i++)
+        if ((connected >> i & 1) && ring_holds_token(i))
+            tokens |= 1u << i;
+    memset(entry, 0, sizeof entry);
+    entry[0] = J_ADMIT;
+    entry[1] = 2;
+    entry[2] = (uint8_t)k;
+    entry[3] = (uint8_t)tokens;
+    memcpy(entry + 4, (const void *)(uintptr_t)scene, 2);               /* the map */
+    memcpy(entry + 6, (const void *)(uintptr_t)(scene + 0x36), 2);
+    memcpy(entry + 8, (const void *)(uintptr_t)(scene + 0x40), 8);      /* the area, and the way the exit gave */
+    entry[16] = (uint8_t)(gone & ~(1u << k));           /* players that left since it was told about the session */
+    streams[k].msg_start = streams[k].msg_acked = out_next;
+    cand_admitted |= 1u << k;
+    memset(snap_size[k], 0, sizeof snap_size[k]);       /* (if a player that left had that seat: not the newcomer's) */
+    msg_append(0, entry, 18);
+    for (kind = 0; kind < SNAP_GLOBALS; kind++)
+        if (snap_global_size[kind]) {
+            entry[0] = J_SNAP;
+            memcpy(entry + 1, snap_global[kind], snap_global_size[kind]);
+            msg_append(snap_global_who[kind], entry, 1 + snap_global_size[kind] > MSG_BYTES ? MSG_BYTES : 1 + snap_global_size[kind]);
+        }
+    for (i = 0; i < SEATS; i++)
+        for (kind = 0; kind < SNAP_KINDS; kind++)
+            if ((connected >> i & 1) && snap_size[i][kind]) {
+                entry[0] = J_SNAP;
+                memcpy(entry + 1, snap_data[i][kind], snap_size[i][kind]);
+                msg_append(i, entry, 1 + snap_size[i][kind] > MSG_BYTES ? MSG_BYTES : 1 + snap_size[i][kind]);
+            }
+    entry[0] = J_SNAP_END;
+    entry[1] = 1;
+    entry[2] = (uint8_t)k;
+    msg_append(0, entry, 10);
+    net_say("net: player %d is let in at this change of map\n", k + 1);
+}
+
+/* An entry of the order that is this layer's own. 0: done with it, go on to the next; 1: it holds a message for
+ * the game (`*inner`, `*inner_size`); 2: it has to wait, nothing after it may be acted on yet. */
+static int join_entry(const uint8_t *entry, int size, const uint8_t **inner, int *inner_size)
+{
+    int k = size > 3 ? entry[3] : -1;
+
+    switch (entry[1]) {
+    case J_INFO:
+        if (k == seat && seat > 0 && join_role == JR_NONE && size >= 1 + (int)sizeof join_info) {
+            int i;
+            memcpy(join_info, entry + 1, sizeof join_info);
+            connected = join_info[4] | 1u << seat;
+            /* (the session's players are no candidates, whatever this program took them for before it knew:
+             * it may have seen the host's "GO" still standing in its block and heard a player only after) */
+            candidate &= ~(uint32_t)join_info[4];
+            lobby_done = 1;
+            gone = join_info[5];
+            for (i = 0; i < SEATS; i++)
+                if (gone >> i & 1) {
+                    memset(gone_block[i], 0, BLOCK);
+                    memcpy(gone_block[i], join_info + 8 + i * 8, 8);
+                    gone_block[i][8] = (uint8_t)i;
+                    gone_block[i][9] = 0x80;
+                    memset(gone_block[i] + 20, 0x80, 4);
+                }
+            join_role = JR_LOBBY;
+            net_say("net: the game is in progress (seats %X); this player joins it at the next change of map\n", (unsigned)join_info[4]);
+        }
+        return 0;
+    case J_ADMIT:
+        if (k == seat) {
+            if (join_role == JR_PARKED && size >= 19) {
+                int i;
+                memcpy(join_admit, entry + 1, 18);
+                join_role = JR_SNAP;
+                /* a player the host gave up meanwhile and this program never heard: it stands for this one too */
+                for (i = 1; i < SEATS; i++)
+                    if ((join_admit[16] >> i & 1) && i != seat && !(gone >> i & 1) && !streams[i].known) {
+                        memset(gone_block[i], 0, BLOCK);
+                        gone_block[i][8] = (uint8_t)i;
+                        gone_block[i][9] = 0x80;
+                        memset(gone_block[i] + 20, 0x80, 4);
+                        gone |= 1u << i;
+                    }
+            }
+            return 0;
+        }
+        if (k < 1 || k >= SEATS || !(candidate >> k & 1))
+            return 0;
+        /* The others are given one seat more, at a moment when no barrier of theirs counts the seats with one
+         * too few or too many: a machine whose token for the barrier of this map's layouts is not in the order
+         * before this entry, and that has not handed it over yet, is still in the barrier before; it goes on
+         * when it has (it hands that token over as soon as it is through). */
+        if (!(size > 4 && (entry[4] >> seat & 1)) && tokens_out <= 0)
+            return 2;
+        candidate &= ~(1u << k);
+        joined |= 1u << k;
+        if (gone >> k & 1) {
+            gone &= ~(1u << k);         /* a seat whose player left: the newcomer plays it from here on */
+            away[k].epoch = 0;
+        } else {
+            grow_pending |= 1u << k;
+        }
+        net_say("net: player %d joined the game in progress\n", k + 1);
+        return 0;
+    case J_SNAP:
+        if (join_role == JR_SNAP && size >= 4) {
+            *inner = entry + 2;
+            *inner_size = size - 2;
+            return 1;
+        }
+        return 0;
+    case J_SNAP_END:
+        if (join_role == JR_SNAP && k == seat) {
+            join_role = JR_BRINGUP;
+            net_say("net: this player has what it missed; its game goes on into the map\n");
+        }
+        return 0;
+    }
+    return 0;
+}
+
+/* Once a frame, with the game's own block of this frame. */
+static void join_frame(const uint8_t *own_block)
+{
+    if (seat == 0) {
+        if (!in_play && own_block[8] == 'G' && own_block[9] == 'O')
+            lobby_byte = own_block[10];         /* the lobby's settings, for whoever joins later */
+        if (cand_owed)
+            join_tell();
+    }
+}
+
+/* The game asks, once per frame from its receiver tasks, for which seat it must make a player now (-1: none). */
+int ss_net_join_grow(void)
+{
+    int k;
+    if (configured != 1 || !grow_pending)
+        return -1;
+    for (k = 1; k < SEATS; k++)
+        if (grow_pending >> k & 1)
+            break;
+    grow_pending &= ~(1u << k);
+    return k;
+}
+
+/* The game says that it is (1) or is no longer (0) at the point of a map's set-up where the host announces the
+ * layouts: the one place where a player is let in. */
+void ss_net_join_anchor(int on)
+{
+    join_anchor = on;
+}
+
+/* The newcomer's game asks, after the start of its session, where the game in progress is: 1 and where[0..3] =
+ * map, area, the way the exit gave, the callback column; 0 in every other program. From here on it is a
+ * player like the others: its barriers are real (the game's function that selects the map ends in the barrier
+ * the others stand in), and it is first given again the tokens the host held when it let it in. */
+int ss_net_join_place(int *where)
+{
+    uint16_t half;
+    uint32_t word;
+    if (configured != 1 || join_role != JR_BRINGUP)
+        return 0;
+    memcpy(&half, join_admit + 4, 2);
+    where[0] = half;
+    memcpy(&word, join_admit + 8, 4);
+    where[1] = (int)word;
+    memcpy(&word, join_admit + 12, 4);
+    where[2] = (int)word;
+    memcpy(&half, join_admit + 6, 2);
+    where[3] = half;
+    net_say("net: this player enters map %d, area %d\n", where[0], where[1]);
+    join_prefill = join_admit[3] & ~(1u << seat);
+    {
+        /* Tokens of the barriers behind it may still wait in the game's own queue of messages (games/ss2: 50
+         * entries of 0x88 bytes at the address in gUnk_03006300, their number in gUnk_03006338, the tag in an
+         * entry's first byte); the game's sender hands them over later. They are for nobody, like the ones
+         * before. */
+        uint32_t queue = peek32(0x03006300u), waiting = peek32(0x03006338u), i;
+        join_drop_tokens = 0;
+        for (i = 0; i < waiting && i < 50 && queue >= SS_EWRAM && queue < SS_EWRAM + 0x40000 - 50 * 0x88; i++)
+            join_drop_tokens += *(const uint8_t *)(uintptr_t)(queue + i * 0x88) == 0x84;
+    }
+    join_role = JR_LIVE;
+    join_first_init = 1;
+    return 1;
+}
+
+/* 1 once, in the newcomer's first set-up of a map: the barrier and the announcement of the layouts that open a
+ * set-up are behind the others already (the newcomer stands where the host stood when it let it in). */
+int ss_net_join_first_init(void)
+{
+    if (!join_first_init)
+        return 0;
+    join_first_init = 0;
+    return 1;
 }
 
 /* Is a session online, so that the game's messages go through this channel? It stays true while the session
@@ -759,7 +1155,9 @@ int ss_net_msg_online(void)
 /* Did that player leave the game in progress (its character stays, see drop)? It will send nothing more. */
 int ss_net_msg_gone(int who)
 {
-    return configured == 1 && who >= 0 && who < SEATS && (gone >> who & 1);
+    /* (a newcomer that has been given what it missed passes the barriers of its session's start without
+     * anybody: the others passed theirs long ago; see "joining a game in progress") */
+    return configured == 1 && who >= 0 && who < SEATS && ((gone >> who & 1) || join_role == JR_BRINGUP);
 }
 
 /* Did that player leave for good? Its character stays, and it cannot come back: it said goodbye, its program
@@ -794,6 +1192,36 @@ int ss_net_msg_send(const void *data, int size)
 {
     if (configured != 1 || !synced || seat < 0 || size < 1 || size > MSG_BYTES || !msg_room())
         return 0;
+    if (join_mode && ((const uint8_t *)data)[0] == 0x84) {
+        if (join_role != JR_NONE && join_role != JR_LIVE) {
+            /* A newcomer's game before it is let in: the barrier tokens of its session's start are for nobody
+             * (the others' games do not know it yet). The first one says that its game has reached the
+             * barrier it waits at. */
+            if (join_role == JR_LOBBY) {
+                join_role = JR_PARKED;
+                net_say("net: this player's game is ready; waiting for the others to change map\n");
+            }
+            in_play = 1;
+            return 1;
+        }
+        if (join_drop_tokens > 0) {
+            join_drop_tokens--;         /* (see ss_net_join_place) */
+            return 1;
+        }
+        tokens_out++;
+    } else if (join_role != JR_NONE && join_role != JR_LIVE) {
+        /* Whatever else a newcomer's game says before it is let in is kept for the others only if it says who
+         * this player is (its stream holds it until then); nothing else it could say now is about the game
+         * the others are playing. */
+        int i, keep = 0;
+        for (i = 0; i < SNAP_KINDS; i++)
+            keep |= ((const uint8_t *)data)[0] == snap_kind[i];
+        in_play = 1;
+        if (!keep)
+            return 1;
+    }
+    if (join_mode && seat == 0 && join_anchor && ((const uint8_t *)data)[0] == 0x85)
+        join_admit_now();
     msg_append(seat, data, size);
     msg_note('S', seat, data, size);
     in_play = 1;
@@ -822,20 +1250,65 @@ static const uint8_t *msg_head(int *size)
 int ss_net_msg_next(int *who, void *data, int capacity)
 {
     int size = 0;
-    const uint8_t *entry = msg_head(&size);
+    const uint8_t *entry, *message;
 
-    if (!entry || size < 2 || entry[0] >= SEATS)
-        return 0;
+    for (;;) {
+        if (join_mode) {
+            /* joining a game in progress: a seat the game has to make a player for comes first; a newcomer
+             * that has what it missed is given nothing more until its game has selected the map; then, before
+             * anything else, the barrier tokens the host held when it let it in */
+            if (grow_pending || join_role == JR_BRINGUP)
+                return 0;
+            if (join_prefill && capacity >= 10) {
+                static const uint8_t token[10] = { 0x84, 1, 0x64, 0x75, 0x03, 0x00, 0, 0, 0, 0 };
+                int i;
+                for (i = 0; !(join_prefill >> i & 1); i++)
+                    ;
+                join_prefill &= ~(1u << i);
+                *who = i;
+                memcpy(data, token, sizeof token);
+                if (msg_log) {
+                    fprintf(msg_log, "%u %u P %d 84\n", (unsigned)ss_plat_ticks_ms(), (unsigned)frame_label, i);
+                    fflush(msg_log);
+                }
+                return (int)sizeof token;
+            }
+        }
+        entry = msg_head(&size);
+        if (!entry || size < 2 || entry[0] >= SEATS)
+            return 0;
+        message = entry + 1;
+        size--;
+        if (join_mode && entry[1] >= J_INFO && entry[1] <= J_SNAP_END) {
+            int what = join_entry(entry, size + 1, &message, &size);
+            if (what == 2)
+                return 0;
+            if (msg_log) {      /* (fewer fields than a message's line: the tools that compare messages pass over it) */
+                fprintf(msg_log, "%u %u J %d %02X\n", (unsigned)ss_plat_ticks_ms(), (unsigned)frame_label, entry[0], entry[1]);
+                fflush(msg_log);
+            }
+            if (what == 0) {
+                if (seat == 0)
+                    out_own++;
+                else
+                    streams[0].in_tail++;
+                continue;
+            }
+        }
+        break;
+    }
+    *who = entry[0];
+    if (size > capacity)
+        size = capacity;
+    memcpy(data, message, (size_t)size);
     if (seat == 0)
         out_own++;
     else
         streams[0].in_tail++;
-    *who = entry[0];
-    size--;
-    if (size > capacity)
-        size = capacity;
-    memcpy(data, entry + 1, (size_t)size);
-    msg_note('R', *who, entry + 1, size);
+    if (join_mode && *who == seat && message[0] == 0x84 && message == entry + 1 && tokens_out > 0)
+        tokens_out--;
+    if (message == entry + 1)
+        msg_note('R', *who, message, size);
     in_play = 1;
     return size;
 }
@@ -885,14 +1358,30 @@ static void receive_messages(struct stream *s, int from, const uint8_t *part, in
         /* in order only: a later one is repeated until the ones before it are here; with no room nothing is
          * taken, so the sender repeats until there is */
         if (number == s->in_next && length >= 2) {
-            if (seat == 0) {
+            if (seat == 0 && (candidate >> from & 1) && !(cand_admitted >> from & 1)) {
+                /* a candidate's messages wait in its own stream until it is let in: the others' games have no
+                 * player for them yet */
+            } else if (seat == 0) {
                 /* the host: this is the moment the message gets its place in the order */
                 if (msg_room()) {
                     msg_append(from, part + at + 2, length - 1);
                     s->in_next++;
                     relay_fresh = 1;
                 }
+            } else if (join_mode && join_role == JR_NONE && length >= 4 && part[at + 2] == J_INFO && part[at + 4] == seat) {
+                /* The host tells this program that it is joining a game in progress. Taken here and not by
+                 * the game, which has no task yet that takes messages. */
+                const uint8_t *inner;
+                int inner_size;
+                join_entry(part + at + 1, length, &inner, &inner_size);
+                s->in_next++;
+            } else if (join_mode && (join_role == JR_LOBBY || join_role == JR_PARKED) && !join_admit_seen
+                       && !(length >= 4 && part[at + 2] == J_ADMIT && part[at + 4] == seat)) {
+                /* a candidate takes nothing of the order before the entry that lets it in: what the others
+                 * play now is not for its game (the host moves the start of its stream along) */
             } else if (s->in_head - s->in_tail < MSG_IN) {
+                if (join_mode && (join_role == JR_LOBBY || join_role == JR_PARKED))
+                    join_admit_seen = 1;
                 s->in_size[s->in_head % MSG_IN] = (uint8_t)length;
                 memcpy(s->in_data[s->in_head % MSG_IN], part + at + 1, (size_t)length);
                 s->in_head++;
@@ -932,9 +1421,11 @@ static void receive(void)
              * says its program ended meanwhile. */
             if (type == T_END && rd32(packet + 16) == away[from].epoch)
                 away[from].epoch = 0;
-            if (type != T_DATA || size < HEADER + count * BLOCK || !away[from].epoch || rd32(packet + 16) != away[from].epoch)
+            if (type == T_DATA && size >= HEADER + count * BLOCK && away[from].epoch && rd32(packet + 16) == away[from].epoch)
+                revive(from, rd32(packet + 20), rd32(packet + 24));
+            else if (!join_mode || (type == T_DATA && rd32(packet + 16) == old_epoch[from]))
                 continue;
-            revive(from, rd32(packet + 20), rd32(packet + 24));
+            /* (with SS_NET_JOIN another program on that seat is a candidate for it: it goes on below) */
         }
         s = &streams[from];
         if (type == T_END) {
@@ -963,9 +1454,21 @@ static void receive(void)
             s->cursor = 0;
             s->has_last = s->repeats = 0;
             s->msg_start = s->msg_acked = out_next;     /* it was not here for what I sent before */
+            if (join_mode && (in_play || lobby_done) && (!(connected >> from & 1) || (gone >> from & 1))) {
+                /* a program started while the game is in progress: a candidate until the host lets it in
+                 * ("joining a game in progress") */
+                candidate |= 1u << from;
+                cand_told &= ~(1u << from);
+                cand_ready &= ~(1u << from);
+                cand_admitted &= ~(1u << from);
+                if (seat == 0)
+                    cand_owed |= 1u << from;
+            }
             net_say("net: player %d connected\n", from + 1);
         }
         s->heard = ss_plat_ticks_ms();
+        if (seat == 0 && (candidate >> from & 1) && (packet[6] & JOIN_PARKED))
+            cand_ready |= 1u << from;   /* its game waits at its first barrier: it can be let in */
         if (rd32(packet + 44 + seat * 4) == epoch)
             s->acked = rd32(packet + 28 + seat * 4);
         if (from == 0 && synced) {
@@ -1015,7 +1518,7 @@ static void receive(void)
             s->next++;
         if (from == 0 && !synced && seat > 0 && s->next > s->first) {
             /* adopt the host's timeline and delay; start an own stream on it */
-            delay = packet[6] ? packet[6] : delay;
+            delay = (packet[6] & 0x3F) ? (packet[6] & 0x3F) : delay;
             frame_label = own_first = s->next;
             last_target = 0;
             epoch = fnv(epoch + 1, &s->heard, 4) | 1;
@@ -1090,7 +1593,7 @@ void ss_net_votes(int *have, int *need)
     *have = my_vote;
     *need = 1;
     for (i = 0; i < SEATS; i++)
-        if (i != seat && streams[i].known) {
+        if (i != seat && streams[i].known && !(candidate >> i & 1)) {
             *have += streams[i].vote;
             *need += 1;
         }
@@ -1216,6 +1719,12 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
             if (!offline_since && now - s->heard > patience(i))
                 drop(i, "timed out", 1);
         }
+        if (join_mode && i == 0 && block && !lobby_done && block[8] == 'G' && block[9] == 'O') {
+            lobby_done = 1;     /* from here on a program that turns up is one that joins a game in progress */
+            net_say("net: the lobby is over; whoever comes now joins a game in progress\n");
+        }
+        if ((candidate | grow_pending) >> i & 1)
+            block = NULL;       /* it wants to join the game in progress: the game does not know it yet */
         if (gone >> i & 1) {
             block = gone_block[i];
             /* A player that is itself cut off waits SS_NET_AWAY for its connection and then gives the session
@@ -1225,6 +1734,28 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
                 net_say("net: player %d has been away for %u seconds; it is not expected back\n", i + 1,
                         (unsigned)((now - away[i].since + patience(i)) / 1000));
             }
+        }
+        if (join_role != JR_NONE && !in_play && i != seat && (connected >> i & 1)) {
+            /* This program is joining a game in progress and its game is in the lobby: the others are played
+             * as the lobby wants them, the host saying "GO" with the settings it had, everybody else "OK"
+             * (games/ss2: the lobby reads bytes 8 to 10 of the blocks). Their state bytes are the real ones. */
+            static uint8_t lobby[SEATS][BLOCK];
+            memset(lobby[i], 0, BLOCK);
+            if (block)
+                memcpy(lobby[i], block, 8);
+            lobby[i][8] = i == 0 ? 'G' : 'O';
+            lobby[i][9] = i == 0 ? 'O' : 'K';
+            lobby[i][10] = i == 0 ? join_info[3] : 0;
+            block = lobby[i];
+        } else if (join_role != JR_NONE && !block && i != seat && (connected >> i & 1)) {
+            /* A seat the session counts and this program, which came later, has never heard (its player may
+             * be gone, or about to be given up by the others): the game is given an idle block for it. Told
+             * that a counted seat is silent, the game would end the session here after 80 frames. */
+            static uint8_t idle[SEATS][BLOCK];
+            idle[i][8] = (uint8_t)i;
+            idle[i][9] = 0x80;
+            memset(idle[i] + 20, 0x80, 4);
+            block = idle[i];
         }
         if (block) {
             memcpy((uint8_t *)recvp + i * BLOCK, block, BLOCK);
@@ -1375,6 +1906,8 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
         farewell_epoch = epoch;
     }
     last_sendp = sendp;
+    if (join_mode)
+        join_frame(sendp);
     test_chatter();
     test_message();
     if (flushed_label != frame_label) {         /* not already sent at the end of the frame that wrote it */

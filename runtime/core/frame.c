@@ -15,6 +15,14 @@
  *   SS_INPUT_HUNT=F  from frame F on, while an enemy lives, the script's buttons are replaced: walk to the nearest
  *                   enemy and strike it (games/ss2; online tests, so that enemies die and come back). The
  *                   player's seat varies the rhythm, so the players do not act as one.
+ *   SS_INPUT_EXIT=F  from frame F on, once no enemy lives and the map's exit is open, the script's buttons are
+ *                   replaced: walk to the nearest exit (games/ss2; online tests of a change of map; with
+ *                   SS_INPUT_HUNT the players first clear the map).
+ *   SS_INPUT_GOTO=F:X:Y[:T]  from frame F on (up to frame T), while no enemy lives, the script's direction buttons
+ *                   are replaced: walk to the point X,Y of the map (pixels), first across, then along
+ *                   (games/ss2; online tests).
+ *   SS_STATE_LOG=file  where the game is (mode, scene flags, map, area, seats, the players' states), a line per
+ *                   change: see state_log below.
  *   SS_ENEMY_LOG=file  four times a second, at the same moments of the clock on every machine, write the state of
  *                   every live enemy (games/ss2: the five records at gUnk_030056F4). tools/enemy_compare.py
  *                   compares the files of the players of one session.
@@ -276,6 +284,9 @@ void ss_audio_report(void)
 }
 
 static uint16_t script_extra;       /* the extra buttons the script holds (core/qol.c), SS_QOL_BARS=1 only */
+enum { EXITS = 8 };
+static int exit_known[EXITS];
+static long exit_at[EXITS][2];      /* SS_INPUT_EXIT: the exits of the current map, in pixels */
 
 static void scripted_input(void)
 {
@@ -333,7 +344,11 @@ static void scripted_input(void)
             if (best >= 0) {
                 unsigned long beat = (frame_count + (unsigned long)me * 7) % (unsigned long)(20 + me * 3);
                 /* stand beside it, on the left or the right by seat, turn to it, strike */
-                int side = me & 1 ? 20 : -20;
+                static int reach = -1;  /* SS_INPUT_HUNT_REACH=pixels: how far beside the enemy to stand (20) */
+                int side;
+                if (reach < 0)
+                    reach = getenv("SS_INPUT_HUNT_REACH") ? (int)strtoul(getenv("SS_INPUT_HUNT_REACH"), NULL, 10) : 20;
+                side = me & 1 ? reach : -reach;
                 dx += side;
                 held = 0;
                 if (dx > 4) held |= 0x10;               /* right */
@@ -348,8 +363,141 @@ static void scripted_input(void)
             }
         }
     }
+    {   /* SS_INPUT_EXIT=F, see the top of this file. The exits are those the game's exit tasks named
+         * (ss_test_exit_note); the scene's flags are the halfword at +4 of the record gUnk_03005CF4 points to
+         * (bit 3: the exit is open, bit 4: the change of map is under way). */
+        static unsigned long exit_from = ~0ul;
+        if (exit_from == ~0ul)
+            exit_from = getenv("SS_INPUT_EXIT") ? strtoul(getenv("SS_INPUT_EXIT"), NULL, 10) : 0;
+        if (exit_from && frame_count >= exit_from) {
+            uint32_t scene = *(const uint32_t *)(uintptr_t)0x03005CF4u, live = *(const uint32_t *)(uintptr_t)0x030056FCu & 31;
+            uint16_t flags = 0;
+            int me = REG16(0x128) >> 4 & 3, i, best = -1;
+            int32_t mine[2];
+            long nearest = 0;
+            if (scene >= SS_EWRAM && scene < SS_EWRAM + 0x40000 - 8)
+                memcpy(&flags, (const uint8_t *)(uintptr_t)(scene + 4), 2);
+            if (flags & 0x10) {
+                memset(exit_known, 0, sizeof exit_known);      /* the map goes: its exits with it */
+                held = 0;
+            }
+            memcpy(mine, (const uint8_t *)(uintptr_t)(0x03003CE0u + (uint32_t)me * 0x14C + 0x8C), 8);
+            for (i = 0; i < EXITS; i++)
+                if (exit_known[i]) {
+                    long ax = exit_at[i][0] - (mine[0] >> 8), ay = exit_at[i][1] - (mine[1] >> 8);
+                    long far = (ax < 0 ? -ax : ax) + (ay < 0 ? -ay : ay);
+                    if (best < 0 || far < nearest) {
+                        best = i;
+                        nearest = far;
+                    }
+                }
+            if (best >= 0 && (flags & 8) && !(flags & 0x10) && !live) {
+                long dx = exit_at[best][0] - (mine[0] >> 8), dy = exit_at[best][1] - (mine[1] >> 8);
+                /* a step aside now and then: the way is not always free */
+                unsigned long beat = frame_count % 240;
+                held = 0;
+                if (dx > 3) held |= 0x10;
+                if (dx < -3) held |= 0x20;
+                if (dy > 3) held |= 0x80;
+                if (dy < -3) held |= 0x40;
+                if (held && beat >= 200)
+                    held = (uint16_t)(beat < 220 ? 0x40 : 0x10);
+            }
+        }
+    }
+    {   /* SS_INPUT_GOTO=F:X:Y, see the top of this file */
+        static unsigned long goto_from = ~0ul, goto_until = ~0ul;
+        static long goto_x, goto_y;
+        if (goto_from == ~0ul) {
+            const char *text = getenv("SS_INPUT_GOTO");
+            char *end = NULL;
+            goto_from = text ? strtoul(text, &end, 10) : 0;
+            goto_x = end && *end == ':' ? (long)strtoul(end + 1, &end, 10) : 0;
+            goto_y = end && *end == ':' ? (long)strtoul(end + 1, &end, 10) : 0;
+            if (end && *end == ':')
+                goto_until = strtoul(end + 1, &end, 10);
+        }
+        if (goto_from && frame_count >= goto_from && frame_count < goto_until && !(*(const uint32_t *)(uintptr_t)0x030056FCu & 31)) {
+            int me = REG16(0x128) >> 4 & 3;
+            int32_t mine[2];
+            long dx, dy;
+            memcpy(mine, (const uint8_t *)(uintptr_t)(0x03003CE0u + (uint32_t)me * 0x14C + 0x8C), 8);
+            dx = goto_x - (mine[0] >> 8);
+            dy = goto_y - (mine[1] >> 8);
+            held &= 0x030F;             /* the script's other buttons stay (A moves a dialogue on) */
+            /* across first, then along: the ways of a map are not straight lines */
+            if (dx > 3) held |= 0x10;
+            else if (dx < -3) held |= 0x20;
+            else if (dy > 3) held |= 0x80;
+            else if (dy < -3) held |= 0x40;
+        }
+    }
     REG_KEYINPUT = (uint16_t)(~held & 0x03FF);
     script_extra = ss_qol_scripted(held);
+}
+
+/* Called by the game's exit task when it starts (games/ss2/port/patches.json): where an exit of the current map
+ * is, in pixels. Only kept for SS_INPUT_EXIT; nothing in the game depends on it. */
+void ss_test_exit_note(int slot, int x, int y)
+{
+    if (slot < 0 || slot >= EXITS)
+        return;
+    exit_known[slot] = 1;
+    exit_at[slot][0] = x;
+    exit_at[slot][1] = y;
+    if (getenv("SS_INPUT_EXIT"))
+        fprintf(stderr, "test: frame %lu exit %d at %d,%d\n", frame_count, slot, x, y);
+}
+
+/* SS_STATE_LOG=file (tests): where this machine's game is, one line whenever it changes and at least once a
+ * second: the clock in quarters of a second, the frame, the game's mode flags (gUnk_03003478), the scene's
+ * flags (the halfword at +4 of the record gUnk_03005CF4 points to), the map set and the area in it
+ * (gUnk_03003170 + 0x8C and + 0x90), the number of players the game counts (the connected bits of the link
+ * status word gUnk_03002730), then per player record (gUnk_03003CE0, 0x14C bytes each) its state (+0x20), its
+ * flags (+0x30) and its position in pixels (+0x8C, +0x90). Offsets are those of games/ss2. A player that joined
+ * a game in progress is in the same place as the others when these lines agree (tools/net_join_report.py). */
+static void state_log(void)
+{
+    static FILE *file;
+    static int asked;
+    static char last[200];
+    static unsigned long last_frame;
+    char line[200];
+    uint32_t scene = *(const uint32_t *)(uintptr_t)0x03005CF4u, status = *(const uint32_t *)(uintptr_t)0x03002730u;
+    uint16_t scene_flags = 0xFFFF, level, area;
+    int i, at;
+
+    if (!asked) {
+        asked = 1;
+        if (getenv("SS_STATE_LOG"))
+            file = fopen(getenv("SS_STATE_LOG"), "w");
+    }
+    if (!file)
+        return;
+    if (scene >= SS_EWRAM && scene < SS_EWRAM + 0x40000 - 8)
+        memcpy(&scene_flags, (const uint8_t *)(uintptr_t)(scene + 4), 2);
+    memset(line, 0, sizeof line);       /* (compared whole below: the game image's C library has no strcmp) */
+    memcpy(&level, (const uint8_t *)(uintptr_t)(0x03003170u + 0x8C), 2);
+    memcpy(&area, (const uint8_t *)(uintptr_t)(0x03003170u + 0x90), 2);
+    at = snprintf(line, sizeof line, "%08X %04X %u %u %X |", (unsigned)*(const uint32_t *)(uintptr_t)0x03003478u, scene_flags,
+                  level, area, (unsigned)(status >> 8 & 15));
+    for (i = 0; i < 4 && at < (int)sizeof line - 40; i++) {
+        const uint8_t *player = (const uint8_t *)(uintptr_t)(0x03003CE0u + (uint32_t)i * 0x14C);
+        uint16_t state;
+        uint32_t flags;
+        int32_t where[2];
+        memcpy(&state, player + 0x20, 2);
+        memcpy(&flags, player + 0x30, 4);
+        memcpy(where, player + 0x8C, 8);
+        at += snprintf(line + at, sizeof line - (size_t)at, " %u %X %d %d", state, (unsigned)flags, (int)(where[0] >> 12), (int)(where[1] >> 12));
+    }
+    /* (positions are compared in steps of 16 pixels, so a walking player does not write a line a frame) */
+    if (!memcmp(line, last, sizeof last) && frame_count - last_frame < 60)
+        return;
+    memcpy(last, line, sizeof last);
+    last_frame = frame_count;
+    fprintf(file, "%u %lu %s\n", (unsigned)(ss_plat_ticks_ms() / 250), frame_count, line);
+    fflush(file);
 }
 
 /* SS_ENEMY_LOG (tests): the live enemies as this machine has them, sampled when the clock passes a quarter of a
@@ -795,6 +943,7 @@ void VBlankIntrWait(void)
     ss_prof(SS_PROF_BLANK, 0);
     frame_count++;
     enemy_log();
+    state_log();
     scene_log();
     ss_prof(SS_PROF_EXTRAS, 1);
     ss_rebel_frame();                   /* cheats of a Rebel run, then the platform's achievements (core/rebel.c) */

@@ -92,6 +92,16 @@ int ss_net_msg_gone(int who);
 int ss_net_msg_left(int who);                  /* gone, and it cannot come back */
 void ss_net_msg_passed(unsigned seats);        /* the game passed a barrier without these seats (a bit each) */
 void ss_net_flush(void);       /* end of a game frame: send this frame's block now */
+/* Joining a game in progress (core/netlink.c, SS_NET_JOIN=1), called from the game through
+ * games/<game>/port/patches.json: which seat the game must make a player for now (-1: none); the game is at
+ * the point of a map's set-up where a player can be let in; where the game in progress is, for a newcomer
+ * (1 and where[0..3], else 0); 1 once in the newcomer's first set-up of a map. */
+int ss_net_join_grow(void);
+void ss_net_join_anchor(int on);
+int ss_net_join_place(int *where);
+int ss_net_join_first_init(void);
+/* Tests (core/frame.c, SS_INPUT_EXIT): the game's exit task says where an exit of the current map is. */
+void ss_test_exit_note(int slot, int x, int y);
 /* What the next presented frame carries over the picture: black of the given strength and one line of text
  * (UTF-8; written with the game's typeface when the platform finds it in the ROM, else in capitals without
  * accents). */

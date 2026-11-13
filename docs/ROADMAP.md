@@ -401,7 +401,15 @@ What each added is in `docs/RELEASE_*.md`. In short:
       others back, untested), a real network (the tests cut the relay's
       forwarding on one machine), a host away for more than a minute (the
       session still ends).
-- [ ] Joining a game in progress with a freshly started program.
+- [ ] Joining a game in progress with a freshly started program. Prototype
+      behind `SS_NET_JOIN=1` (off by default; `docs/JOIN_IN_PROGRESS.md`): the
+      newcomer's game is taken through a lobby this layer plays, waits at its
+      first barrier, and is let in when the host sets a dungeon map up, with
+      the last message of every kind that says who the players are and with
+      the host's barrier tokens; the others' games are given one seat more.
+      Checked on one machine with `tools/net_join_test.sh`. Open: the town
+      (nobody is let in there), a join at a map with exits and fights, the
+      scene's flag words, two newcomers at once, a real network, the launcher.
 - [x] The renderer on a slow device (0.7.2): `ss_ppu_render` costs a third less
       (0.9 ms classic, 1.4 ms at 480 columns on the development PC), and a
       machine that still cannot draw every picture leaves pictures out instead

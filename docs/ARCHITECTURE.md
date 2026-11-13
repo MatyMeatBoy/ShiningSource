@@ -145,6 +145,17 @@ shows a need.
 ReKHCoM's on the same server and sharing nothing with it. Rooms by name, four
 seats, a token per player. It can simulate loss, lag and jitter for tests.
 
+**Joining a game in progress** (prototype, `SS_NET_JOIN=1`, off by default).
+The game makes its players when a session starts and says most things once,
+so a program started later lacks a lobby, a seat and everything said before.
+The layer plays the lobby for it, keeps it waiting at its game's first
+barrier, and lets it in where the host announces a map's layouts: there the
+newcomer is made a copy of the host's place in the order of messages (the
+last message of every kind about the players and the session, the host's
+barrier tokens, the map) and is given the host's messages from then on, while
+the others' games are given one seat more. What the game does at a change of
+map, the mechanism and its limits: `docs/JOIN_IN_PROGRESS.md`.
+
 **Crossplay.** All platforms compile the same integer-only game code and the
 same `netlink.c`; the socket is the only platform part
 (`runtime/plat/net_udp.c`, reached through the bridge on 64-bit builds).

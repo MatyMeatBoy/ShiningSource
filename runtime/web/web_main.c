@@ -122,6 +122,10 @@ int ss_net_msg_next(int *who, void *data, int capacity) { (void)who; (void)data;
 int ss_net_msg_gone(int who) { (void)who; return 0; }
 int ss_net_msg_left(int who) { (void)who; return 0; }
 void ss_net_msg_passed(unsigned seats) { (void)seats; }
+int ss_net_join_grow(void) { return -1; }
+void ss_net_join_anchor(int on) { (void)on; }
+int ss_net_join_place(int *where) { (void)where; return 0; }
+int ss_net_join_first_init(void) { return 0; }
 void ss_plat_net_wait(int milliseconds) { emscripten_sleep((unsigned)milliseconds); }
 uint32_t ss_plat_ticks_ms(void) { return (uint32_t)emscripten_get_now(); }
 
