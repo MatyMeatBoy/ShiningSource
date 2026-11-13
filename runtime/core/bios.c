@@ -159,5 +159,7 @@ void RegisterRamReset(uint32_t flags)
 void SoftReset(uint32_t flags)
 {
     fprintf(stderr, "SoftReset(%u) called by the game\n", (unsigned)flags);
-    exit(0);
+    /* The console starts the cartridge again (the game does this after a link error, for one). Here that is
+     * the program started again: exit code SS_EXIT_RESTART asks the host for it. A test run just ends. */
+    exit(getenv("SS_FRAMES") ? 0 : SS_EXIT_RESTART);
 }

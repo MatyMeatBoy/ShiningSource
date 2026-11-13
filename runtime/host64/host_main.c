@@ -146,7 +146,19 @@ static SYSV int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
     return (int)length;
 }
 
-static SYSV void b_exit(int code) { exit(code); }
+static SYSV void b_exit(int code)
+{
+    if (code == SS_EXIT_RESTART) {      /* the game reset itself: the same program again, same settings */
+        STARTUPINFOA start = { sizeof start };
+        PROCESS_INFORMATION made;
+        if (CreateProcessA(NULL, GetCommandLineA(), NULL, NULL, FALSE, 0, NULL, NULL, &start, &made)) {
+            CloseHandle(made.hThread);
+            CloseHandle(made.hProcess);
+        }
+        code = 0;
+    }
+    exit(code);
+}
 static SYSV uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static SYSV int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
 static void sign_of_life(void);

@@ -37,6 +37,9 @@ struct ss_view {
 };
 
 /* Draw the current frame into 32-bit ARGB pixels, `view->width` wide (240 when view is NULL). */
+/* Exit code with which the game asks to be started again (its SoftReset). */
+enum { SS_EXIT_RESTART = 75 };
+
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *view);
 /* The video registers as they were on scanline y of the frame being shown, or NULL when the game changed
  * nothing during the frame (then the registers themselves are the whole frame's). */
