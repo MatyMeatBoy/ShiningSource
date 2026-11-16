@@ -18,7 +18,7 @@ Add device/build/ABI/page-size/image-slide diagnostics, preserve useful error de
 - [x] Implement bounded image loading and relocation, free-range reservation, W^X code with file-backed executable fallback, and linked-address crash diagnostics. Test forced movement, malformed images and occupied ranges.
 - [x] Complete independent Java/SDL compatibility audit; implement applicable findings with behavioral verification.
 - [x] Build final APK 0.8.8, run Android 5/14/15, 4/16 KiB, ARM64 and x86_64 cold/moved runs, save restart, renderer/lifecycle/log export checks and appropriate online smoke test.
-- [ ] Review final code, check signature/ELF/ZIP alignment/no-ROM packaging, record limitations and checksums. Commit/push tested source, publish a new GitHub release, verify public asset hashes. Carry forward unchanged non-Android packages with explicit versions.
+- [x] Review final code, check signature/ELF/ZIP alignment/no-ROM packaging, record limitations and checksums. Commit/push tested source, publish a new GitHub release, verify public asset hashes. Rebuild Windows/Linux for online rules6; retain the older untested Vita package with an explicit version.
 
 ## Review focus
 
@@ -49,3 +49,8 @@ Android11 ARMv7 native bridge passes1200 rendered frames with lifecycle/density
 and600 with missing audio. Legacy API21 GLES emulation is unsuitable for graphics,
 so native ARM CPU and modern graphics coverage are distinguished. Fifteen Python
 and twenty Java checks pass, and final independent review has no open findings.
+
+Published v0.8.8 from3433811. Downloaded all four public platform assets and
+verified their hashes against the published/local SHA256SUMS. Sent the source-
+pinned Android/online handoff to ReKHCoM issue647. No ReKHCoM code changes made.
+Physical confirmation on the Galaxy A11 and RobNick's device remains pending.

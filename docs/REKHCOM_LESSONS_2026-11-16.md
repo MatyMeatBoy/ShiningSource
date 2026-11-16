@@ -2,6 +2,9 @@
 
 Fecha: 2026-11-16. Informe técnico de la actualización ShiningSource 0.8.8.
 
+Enviado de vuelta como [ReKHCoM #647](https://github.com/MatyMeatBoy/ReKHCoM/issues/647)
+después de publicar la versión y verificar por descarga los cuatro paquetes.
+
 **English summary.** ReKHCoM supplied the relocatable Android image and executable-memory fallback that informed ShiningSource's compatibility work. The strongest lesson to return is SDL3 lifecycle delivery: application lifecycle events reach event watchers without entering the polled queue. Other useful transfers are deterministic identity captured before native pointer patching, adversarial low-memory allocation tests, optional audio initialization, explicit exit diagnostics, and game-aware recovery tests. ReKHCoM already implements acknowledgements, retransmission, adaptive timing, rollback and desync checks; this report does not describe those as missing features.
 
 ## Fuentes y alcance
@@ -91,5 +94,5 @@ el toolchain real, más trazas intermedias, no sólo un checksum al final.
 El Galaxy A11 del usuario rechazó la instalación. El APK añade un backend ARMv7 nativo de 32 bits probado en emulación ARM/API21, además de ARM64 y x86_64; **la instalación y ejecución no están verificadas en ese teléfono físico**. Corregir direcciones bajas y relocations en huéspedes ARM64/x86_64 no añade por sí mismo una ABI ausente al APK. Conservar la distinción entre error del instalador, fallo del loader, fallo gráfico/audio y fallo del juego. No deducir la ABI real del sistema instalado únicamente del nombre comercial o del SoC.
 
 Los resultados concretos y limitaciones quedan en el registro de verificación
-enlazado. Este documento no demuestra por sí mismo que se haya enviado un issue
-ni constituye una promesa de compatibilidad universal.
+enlazado. El issue contiene la propuesta para revisión; no se aplicaron cambios
+al código de ReKHCoM ni se promete compatibilidad universal.
