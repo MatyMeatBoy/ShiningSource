@@ -178,6 +178,8 @@ void ss_audio_report(void);
 
 /* Replace ROM words that hold game function addresses by the native functions. Returns how many. */
 unsigned ss_patch_code_pointers(void);
+/* Fixed-seed FNV-1a of the original 16 MiB ROM, cached before native pointer patching. */
+uint32_t ss_rom_fingerprint(void);
 
 /* Absorb a memory access the console would have ignored (see stray.c). `context` is the CPU context of the fault. */
 int ss_stray_access(void *context, uint32_t address, int is_write);

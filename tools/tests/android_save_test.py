@@ -35,7 +35,7 @@ def main():
 
     def run(name, frames, save_at=0):
         env = args.out / 'shiningsource.test.env'
-        env.write_text('SS_SKIP=0\nSS_INPUT_FILE=play_input.txt\nSS_FRAMES=%d\nSS_TEST_SAVE=%d\n' % (frames, save_at))
+        env.write_text('SS_SKIP=0\nSS_NET=\nSS_INPUT_FILE=play_input.txt\nSS_FRAMES=%d\nSS_TEST_SAVE=%d\n' % (frames, save_at))
         adb('push', str(env), FOLDER + '/shiningsource.test.env')
         shell('am force-stop ' + PACKAGE)
         shell('rm -f ' + FOLDER + '/shiningsource.log')

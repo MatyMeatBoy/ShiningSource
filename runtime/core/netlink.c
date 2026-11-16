@@ -254,8 +254,14 @@ static int configure(void)
         /* Players only meet if they run the same game and the same rules: the room is the name together with
          * the cartridge's contents and the version of this protocol. Another version of the port or another
          * ROM lands in another room instead of producing a session that drifts apart. */
-        static const uint32_t rules = 5;        /* raise when the transport or anything the players must agree on changes */
-        room = fnv(room, (const void *)(uintptr_t)SS_ROM, 0x1000000);
+        static const uint32_t rules = 6;        /* raise when the transport or anything the players must agree on changes */
+        uint32_t fingerprint = ss_rom_fingerprint();
+        uint8_t identity[4] = {
+            (uint8_t)fingerprint, (uint8_t)(fingerprint >> 8),
+            (uint8_t)(fingerprint >> 16), (uint8_t)(fingerprint >> 24)
+        };
+        /* Rules 6 changes room identity: every peer needs an updated client. */
+        room = fnv(room, identity, sizeof identity);
         room = fnv(room, &rules, sizeof rules);
         room = fnv(room, &direct, sizeof direct);      /* the two transports do not mix */
         /* SS_NET_JOIN=1: a player can be let into a game in progress ("joining a game in progress", below). The

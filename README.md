@@ -42,13 +42,14 @@ These are illustrated feature summaries; see the sections below for current plat
 
 [Releases](https://github.com/MatyMeatBoy/ShiningSource/releases): Windows x64
 (`.zip`: unpack it and start `ShiningSource.exe`), Android (`.apk`,
-arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
+armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
-Android **0.8.6** fixes the EWRAM address reservation failure when loading a ROM.
-See the [fix and verification notes](docs/RELEASE_0.8.6.md). Windows and Linux
-remain at 0.8.5.
+Android **0.8.8** improves startup compatibility with relocatable game images,
+movable stacks and shareable diagnostics. Thanks to **RobNick** for the Android
+bug report. Windows and Linux **0.8.8** share the corrected online room identity;
+all players should update together. See the [release and verification notes](docs/RELEASE_0.8.8.md).
 
 0.8 is the first public release; the versions before it were test builds.
 Each release's notes say what was checked and, just as plainly, what was not.
@@ -150,7 +151,7 @@ display stays at the left edge.*
 | Platform | State |
 |---|---|
 | Windows x64 | Released; the main test platform |
-| Android (arm64-v8a, x86_64) | Released; tested in the x86_64 emulator (0.8.4), online against Windows there (0.8.5), not yet on a phone |
+| Android (armeabi-v7a, arm64-v8a, x86_64) | 0.8.8 compatibility work: Android 5/14/15 emulators, 4/16 KiB pages, save/restart and relocated Android/Windows online; physical-device confirmation pending ([verification](docs/ANDROID_0.8.8_VERIFICATION.md)) |
 | Linux x64, ARM64 | x64 released (`.tar.gz`, no launcher yet); x64 passes the reference run, an online session and a lost connection that returns in a virtual machine (Debian 12, 0.8.4; ARM64 last run with 0.8); not tried with a window on a desktop |
 | Browser (WebAssembly) | Builds from source and plays from your ROM file, saves kept in the browser; offline only; no hosted page |
 | PS Vita | Untested alpha package from 0.8.5: built with the Vita SDK, never run on a console ([docs/CONSOLES_NX_VITA.md](docs/CONSOLES_NX_VITA.md)) |

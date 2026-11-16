@@ -20,11 +20,13 @@ static unsigned long ss_tolerated;
 
 #include <math.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <ucontext.h>
 #include <unistd.h>
 #ifdef __ANDROID__
@@ -32,6 +34,7 @@ static unsigned long ss_tolerated;
 #include <SDL3/SDL_main.h>
 #include <android/log.h>
 #include <sys/stat.h>
+#include <sys/system_properties.h>
 #endif
 
 #define PTR(a) ((void *)(uintptr_t)(uint32_t)(a))
@@ -39,13 +42,13 @@ static unsigned long ss_tolerated;
 #define MAP_FIXED_NOREPLACE 0x100000
 #endif
 
-static uint32_t image_low, image_high;
+static uint32_t image_low, image_high, image_slide;
 
 #ifdef __ANDROID__
-/* Claim only the image/stack window before graphics initialization. Never
+/* Claim only the linked image window before graphics initialization. Never
  * assume the GBA's hardware addresses are free in a process inherited from ART. */
 #ifdef SS_REBASED_HOST
-enum { LOW_BASE = 0x0A000000u, LOW_END = 0x11000000u };
+enum { LOW_BASE = 0x0A000000u, LOW_END = 0x0C800000u };
 #else
 enum { LOW_BASE = 0x02000000u, LOW_END = 0x10000000u };
 #endif
@@ -63,6 +66,7 @@ __attribute__((constructor)) static void reserve_low_memory(void)
 enum { low_reserved = 0, LOW_BASE = 0, LOW_END = 0 };
 #endif
 
+#ifndef SS_REBASED_HOST
 static void *low_map(uint32_t address, uint32_t size, int protection)
 {
     void *got;
@@ -95,12 +99,87 @@ static void *low_map(uint32_t address, uint32_t size, int protection)
     }
     return got;
 }
+#endif
 
 enum { STACK_SLOT = 0x80000, STACK_SLOTS = 128 };
 #ifdef SS_REBASED_HOST
-static const uint32_t stack_arena = 0x0C800000u, main_stack = 0x10800000u;
+static uint32_t stack_arena, main_stack;
+
+/* Guest pointers (including SP and bridge entries) are 32 bits. A hint can
+ * return somewhere else, so validate the complete range before narrowing it.
+ * No MAP_FIXED: ART/firmware may already own any proposed address. */
+static void *guest_map_at(uint64_t hint, uint32_t size, int protection, int *reason)
+{
+    void *got = mmap((void *)(uintptr_t)hint, size, protection,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (got == MAP_FAILED) {
+        *reason = errno;
+        return NULL;
+    }
+    if ((uintptr_t)got >= 0x11000000u &&
+        (uint64_t)(uintptr_t)got + size < UINT64_C(0x100000000)) {
+        fprintf(stderr, "guest map %08X-%08X\n", (unsigned)(uintptr_t)got,
+                (unsigned)((uintptr_t)got + size));
+        return got;
+    }
+    munmap(got, size);
+    *reason = ENOMEM;
+    return NULL;
+}
+
+static void *guest_map(uint32_t size, int protection)
+{
+    int reason = ENOMEM;
+    void *got = guest_map_at(0x20000000u, size, protection, &reason);
+    FILE *maps;
+    if (got)
+        return got;
+    maps = fopen("/proc/self/maps", "r");
+    if (maps) {
+        char line[1024];
+        unsigned long long low, high;
+        uint64_t next = 0x11000000u;
+        /* A coarse hint scan misses exact-size holes and gaps below its first
+         * hint. Walk actual gaps; mmap remains non-replacing if maps race. */
+        while (fgets(line, sizeof line, maps)) {
+            if (sscanf(line, "%llx-%llx", &low, &high) != 2)
+                continue;
+            if (low > next && low - next >= size && next + size < UINT64_C(0x100000000)) {
+                got = guest_map_at(next, size, protection, &reason);
+                if (got)
+                    break;
+            }
+            if (high > next)
+                next = high;
+            if (next + size >= UINT64_C(0x100000000))
+                break;
+        }
+        if (!got && next + size < UINT64_C(0x100000000))
+            got = guest_map_at(next, size, protection, &reason);
+        fclose(maps);
+    } else {
+        /* Self maps are normally readable on Android. If restricted, probe
+         * page-aligned hints so a sufficient gap cannot fall between them. */
+        long page = sysconf(_SC_PAGESIZE);
+        uint64_t hint;
+        if (page <= 0)
+            page = 0x10000;
+        for (hint = 0x11000000u; hint + size < UINT64_C(0x100000000); hint += (unsigned long)page) {
+            got = guest_map_at(hint, size, protection, &reason);
+            if (got)
+                break;
+        }
+    }
+    if (got)
+        return got;
+    fprintf(stderr, "no free 32-bit guest range for %u bytes: %s (errno %d)\n",
+            size, strerror(reason), reason);
+    errno = reason;
+    return NULL;
+}
 #else
 static const uint32_t stack_arena = 0x0B000000u, main_stack = 0x0F000000u;
+static const uint32_t image_limit = 0x0B000000u;
 #endif
 static uint8_t stack_used[STACK_SLOTS];
 
@@ -182,6 +261,13 @@ static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 
 static void b_exit(int code)
 {
+    int reported_code = code;
+#ifdef __ANDROID__
+    /* Android returns to the launcher on a soft reset; its exit is normal. */
+    if (reported_code == SS_EXIT_RESTART)
+        reported_code = 0;
+#endif
+    fprintf(stderr, "host64: exit code %d\n", reported_code);
     if (ss_tolerated)
         fprintf(stderr, "%lu stray accesses were tolerated\n", ss_tolerated);
 #ifdef __ANDROID__
@@ -194,7 +280,7 @@ static void b_exit(int code)
         ss_plat_last_words();
     }
     fflush(NULL);
-    _exit(code == SS_EXIT_RESTART ? 0 : code);
+    _exit(reported_code);
 #endif
     exit(code);
 }
@@ -264,6 +350,8 @@ static void on_fault(int number, siginfo_t *info, void *raw)
     }
     fprintf(stderr, "crash: signal %d at rip %016llx (%s), address %p; %lu stray accesses had been tolerated\n", number,
             (unsigned long long)g[REG_RIP], in_image ? "game image" : "host", info->si_addr, ss_tolerated);
+    if (in_image)
+        fprintf(stderr, "linked game pc %08X (slide %08X)\n", (unsigned)((uint32_t)g[REG_RIP] - image_slide), image_slide);
     _exit(3);
 }
 
@@ -314,6 +402,8 @@ static void on_fault(int number, siginfo_t *info, void *raw)
     }
     fprintf(stderr, "crash: signal %d at pc %016llx (%s), address %p; %lu stray accesses had been tolerated\n", number,
             (unsigned long long)pc, in_image ? "game image" : "host", info->si_addr, ss_tolerated);
+    if (in_image)
+        fprintf(stderr, "linked game pc %08X (slide %08X)\n", (unsigned)((uint32_t)pc - image_slide), image_slide);
     _exit(3);
 }
 
@@ -365,6 +455,142 @@ static int load_file(const char *path, uint32_t address, uint32_t capacity)
 }
 #endif
 
+#ifdef SS_REBASED_HOST
+#include "image_format.h"
+
+/* Executable memory is never writable at the same time. Some Android policies
+ * reject anonymous execmem: a private memory file supplies the executable pages
+ * in that case. MAP_FIXED below only replaces pages this host already owns. */
+static int make_executable(void *memory, uint32_t bytes)
+{
+    int fd = -1, reason;
+    size_t written = 0;
+    const char *force = getenv("SS_EXEC_MEMFD");
+    __builtin___clear_cache((char *)memory, (char *)memory + bytes);
+    if ((!force || atoi(force) == 0) && mprotect(memory, bytes, PROT_READ | PROT_EXEC) == 0)
+        return 1;
+    reason = errno;
+#ifdef __NR_memfd_create
+    fd = (int)syscall(__NR_memfd_create, "shiningsource-code", 1u);
+#endif
+    if (fd >= 0) {
+        while (written < bytes) {
+            ssize_t put = write(fd, (const uint8_t *)memory + written, bytes - written);
+            if (put < 0 && errno == EINTR)
+                continue;
+            if (put <= 0)
+                break;
+            written += (size_t)put;
+        }
+        if (written == bytes && mmap(memory, bytes, PROT_READ | PROT_EXEC,
+                                     MAP_SHARED | MAP_FIXED, fd, 0) == memory) {
+            close(fd);
+            __builtin___clear_cache((char *)memory, (char *)memory + bytes);
+            fprintf(stderr, "executable code: memory-file RX mapping\n");
+            return 1;
+        }
+        reason = errno;
+        close(fd);
+    } else
+        reason = errno;
+    fprintf(stderr, "cannot make code executable: %s (errno %d)\n", strerror(reason), reason);
+    return 0;
+}
+
+static uint8_t *claim_image(uint32_t linked, uint32_t bytes)
+{
+    void *got;
+    const char *move = getenv("SS_IMAGE_MOVE");
+    if (!move || !atoi(move)) {
+        if (low_reserved && linked >= LOW_BASE && (uint64_t)linked + bytes <= LOW_END) {
+            if (mprotect(PTR(linked), bytes, PROT_READ | PROT_WRITE) == 0)
+                return PTR(linked);
+            return NULL;
+        }
+        got = mmap(PTR(linked), bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (got == PTR(linked))
+            return got;
+        if (got != MAP_FAILED)
+            munmap(got, bytes);
+    }
+    /* guest_map searches actual gaps and checks the complete 32-bit extent. */
+    return guest_map(bytes, PROT_READ | PROT_WRITE);
+}
+
+static uint32_t load_image(const uint8_t *data, size_t size)
+{
+    struct ss_image image;
+    char error[192];
+    uint8_t *memory;
+    uint32_t slide, bytes;
+    uint32_t run = 0;
+    unsigned previous = 0;
+    long page = sysconf(_SC_PAGESIZE);
+    unsigned i;
+#ifdef __aarch64__
+    int macho = 1;
+#else
+    int macho = 0;
+#endif
+    if (!ss_image_parse(data, size, macho, &image, error, sizeof error)) {
+        fprintf(stderr, "game image rejected: %s\n", error);
+        return 0;
+    }
+    if (page <= 0 || page > 0x10000 || (page & (page - 1))) {
+        fprintf(stderr, "unsupported host page size: %ld\n", page);
+        return 0;
+    }
+    bytes = image.high - image.low;
+    memory = claim_image(image.low, bytes);
+    if (!memory) {
+        fprintf(stderr, "no free %u-byte image range below 4 GiB\n", bytes);
+        return 0;
+    }
+    slide = (uint32_t)(uintptr_t)memory - image.low;
+    for (i = 0; i < image.count; ++i) {
+        const struct ss_image_segment *segment = image.segments + i;
+        if (segment->bytes)
+            memcpy(memory + segment->address - image.low, data + segment->offset, segment->bytes);
+    }
+    if (!ss_image_relocate(data, size, &image, memory, slide, error, sizeof error)) {
+        fprintf(stderr, "game image relocation rejected: %s\n", error);
+        munmap(memory, bytes);
+        return 0;
+    }
+    /* Segment protection boundaries must be real system page boundaries. A
+     * combined W+X page is rejected instead of weakening Android's policy. */
+    for (uint32_t at = 0; at <= bytes; at += (uint32_t)page) {
+        unsigned protection = 0;
+        uint64_t linked = (uint64_t)image.low + at;
+        for (i = 0; i < image.count; ++i) {
+            const struct ss_image_segment *segment = image.segments + i;
+            if (at < bytes && segment->memory && linked < (uint64_t)segment->address + segment->memory &&
+                linked + (unsigned long)page > segment->address)
+                protection |= segment->protection;
+        }
+        if (at && (protection != previous || at == bytes)) {
+            if ((previous & (PROT_WRITE | PROT_EXEC)) == (PROT_WRITE | PROT_EXEC) ||
+                ((previous & PROT_EXEC) ? !make_executable(memory + run, at - run)
+                                       : mprotect(memory + run, at - run, (int)previous) != 0)) {
+                fprintf(stderr, "image page permissions failed at %08X (protection %u)\n",
+                        (unsigned)(uintptr_t)(memory + run), previous);
+                munmap(memory, bytes);
+                return 0;
+            }
+            run = at;
+        }
+        previous = protection;
+        if (at == bytes)
+            break;
+    }
+    image_low = (uint32_t)(uintptr_t)memory;
+    image_high = image_low + bytes;
+    image_slide = slide;
+    fprintf(stderr, "host64: image %s; linked %08X-%08X, actual %08X-%08X, slide %08X\n",
+            slide ? "moved" : "at linked address", image.low, image.high, image_low, image_high, slide);
+    return image.entry + slide;
+}
+#else
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 
 #ifdef __x86_64__
@@ -391,7 +617,7 @@ static uint32_t load_image(const uint8_t *data, size_t size)
     }
     low &= ~0xFFFFu;
     high = (high + 0xFFFFu) & ~0xFFFFu;
-    if (low >= high || high > stack_arena || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC))
+    if (low >= high || high > image_limit || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC))
         return 0;
     for (i = 0; i < count; i++) {
         const uint8_t *program = data + offset + (uint32_t)(i * stride);
@@ -426,7 +652,7 @@ static uint32_t load_image(const uint8_t *data, size_t size)
             if (address && memory && memcmp(command + 8, "__LINKEDIT", 10) != 0) {
                 first = address & ~0xFFFFu;
                 last = (address + memory + 0xFFFFu) & ~0xFFFFu;
-                if (last > stack_arena)
+                if (last > image_limit)
                     return 0;
                 if (first < high) first = high;                 /* segments share a 64 KiB block with the previous one */
                 if (last > first && !low_map(first, last - first, PROT_READ | PROT_WRITE | PROT_EXEC))
@@ -452,6 +678,8 @@ static uint32_t load_image(const uint8_t *data, size_t size)
 }
 
 #endif
+
+#endif /* SS_REBASED_HOST */
 
 /* Run the image's entry on its own low stack. Never returns: the image ends through the exit service. */
 uint64_t ss_host_sp __attribute__((visibility("hidden")));
@@ -533,17 +761,25 @@ static uint32_t *low_bridge(const uint64_t *targets, int count)
 {
     uint32_t *table;
 #ifdef SS_REBASED_HOST
-    uint32_t base = 0x10C00000u;
+    long page = sysconf(_SC_PAGESIZE);
+    uint32_t code_at = page > 0x4000 ? (uint32_t)page : 0x4000;
+    uint32_t mapping_bytes = code_at > 0x4000 ? code_at * 2 : 0x10000;
+    void *mapping = guest_map(mapping_bytes, PROT_READ | PROT_WRITE);
+    uint32_t base;
+    if (!mapping)
+        return NULL;
+    base = (uint32_t)(uintptr_t)mapping;
 #else
     uint32_t base = 0x0F800000u;
+    uint32_t code_at = 0x1000;
+    if (!low_map(base, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC))
+        return NULL;
 #endif
     uint64_t through = (uint64_t)(uintptr_t)ss_host_call;
     uint8_t *code;
     int i;
-    if (!low_map(base, 0x10000, PROT_READ | PROT_WRITE | PROT_EXEC))
-        return NULL;
     table = PTR(base);
-    code = PTR(base + 0x1000);
+    code = PTR(base + code_at);
     for (i = 0; i < count; i++) {
         uint8_t *slot = code + i * 32;
 #ifdef __x86_64__
@@ -562,8 +798,14 @@ static uint32_t *low_bridge(const uint64_t *targets, int count)
         memcpy(slot + 16, &targets[i], 8);
         memcpy(slot + 24, &through, 8);
 #endif
-        table[i] = base + 0x1000 + (uint32_t)i * 32;
+        table[i] = base + code_at + (uint32_t)i * 32;
     }
+#ifdef SS_REBASED_HOST
+    if (mprotect(PTR(base), code_at, PROT_READ) || !make_executable(PTR(base + code_at), mapping_bytes - code_at)) {
+        munmap(PTR(base), mapping_bytes);
+        return NULL;
+    }
+#endif
     __builtin___clear_cache((char *)code, (char *)code + count * 32);
     return table;
 }
@@ -623,13 +865,31 @@ int main(int argc, char **argv)
     static char rom_path[1024];
     (void)argc; (void)argv;
     if (!folder || chdir(folder) != 0) {
-        say("the app's folder is not available");
+        say("startup failure: the app's folder is not available");
         return 2;
     }
     freopen("shiningsource.log", "w", stderr);
     setvbuf(stderr, NULL, _IOLBF, 0);
     read_settings("shiningsource.env");
     read_settings("shiningsource.test.env");        /* tests: SS_FRAMES, SS_INPUT and the like, pushed with adb */
+#ifndef SS_HOST_VERSION
+#define SS_HOST_VERSION "development"
+#endif
+    {
+        char maker[PROP_VALUE_MAX] = "", model[PROP_VALUE_MAX] = "", release[PROP_VALUE_MAX] = "", api[PROP_VALUE_MAX] = "";
+        __system_property_get("ro.product.manufacturer", maker);
+        __system_property_get("ro.product.model", model);
+        __system_property_get("ro.build.version.release", release);
+        __system_property_get("ro.build.version.sdk", api);
+        fprintf(stderr, "ShiningSource %s; %s %s; Android %s (API %s); %s; page %ld\n",
+                SS_HOST_VERSION, maker, model, release, api,
+#ifdef __aarch64__
+                "arm64-v8a",
+#else
+                "x86_64",
+#endif
+                sysconf(_SC_PAGESIZE));
+    }
     snprintf(rom_path, sizeof rom_path, "%s/rom.gba", folder);
     rom = rom_path;
     snprintf(image_path, sizeof image_path, "%s", IMAGE_NAME);
@@ -667,10 +927,22 @@ int main(int argc, char **argv)
         }
     }
 #endif
+#ifdef SS_REBASED_HOST
+    {
+        void *stacks = guest_map(STACK_SLOT * STACK_SLOTS + 0x400000, PROT_READ | PROT_WRITE);
+        if (!stacks) {
+            fprintf(stderr, "startup failure: no free address range for the game's stacks\n");
+            return 3;
+        }
+        stack_arena = (uint32_t)(uintptr_t)stacks;
+        main_stack = stack_arena + STACK_SLOT * STACK_SLOTS;
+    }
+#else
     if (!low_map(stack_arena, STACK_SLOT * STACK_SLOTS, PROT_READ | PROT_WRITE) || !low_map(main_stack, 0x400000, PROT_READ | PROT_WRITE)) {
         fprintf(stderr, "the address range for the game's stacks is not free\n");
         return 3;
     }
+#endif
 #ifndef SS_REBASED_HOST
     if (load_file(rom, SS_ROM, 0x1000000) < 0x100000) {
         fprintf(stderr, "the ROM file could not be read: %s\n", rom);
@@ -682,7 +954,7 @@ int main(int argc, char **argv)
     if (image)
         release_whole(image);
     if (!entry) {
-        fprintf(stderr, "the game image is missing, damaged, or its address range is taken: %s\n", image_path);
+        fprintf(stderr, "startup failure: the game image could not be loaded: %s\n", image_path);
         return 4;
     }
     alternate.ss_sp = signal_stack;
@@ -706,7 +978,7 @@ int main(int argc, char **argv)
     ENTRY(SS_B_ACHIEVEMENTS, b_achievements); ENTRY(SS_B_OPTION_HOOK, b_option_hook);
     table = (uintptr_t)low_bridge(bridge, SS_B_COUNT);
     if (!table) {
-        fprintf(stderr, "the address range for the service jumps is not free\n");
+        fprintf(stderr, "startup failure: the service jumps could not be created\n");
         return 3;
     }
     fprintf(stderr, "host64: image loaded (image %08X-%08X, entry %08X)\n",

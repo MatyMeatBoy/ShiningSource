@@ -18,6 +18,7 @@
         android:requestLegacyExternalStorage="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:hardwareAccelerated="true">
+        <!-- The Java launcher recreates for locale, density and font changes to rebuild its text and spacing. -->
         <activity android:name="com.shiningsource.android.MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"
             android:exported="true">
@@ -34,6 +35,6 @@
             android:alwaysRetainTaskState="true"
             android:preferMinimalPostProcessing="true"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
-            android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+            android:configChanges="mcc|mnc|density|layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
     </application>
 </manifest>

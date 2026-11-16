@@ -67,7 +67,7 @@ public class MainActivity extends Activity {
     private static final int NOT_A_ROM = 0, OTHER_GAME = 1, OTHER_VERSION = 2, MODIFIED = 3, VERIFIED = 4;
     private static final int RED = Color.rgb(242, 115, 102), GREEN = Color.rgb(115, 217, 128), AMBER = Color.rgb(232, 190, 96);
 
-    private boolean spanish, played, alive;
+    private boolean spanish, alive;
     private int busy;                           // ROM jobs queued or running
     private String note;                        // what the last ROM job has to say
     private boolean noteIsError;
@@ -169,6 +169,10 @@ public class MainActivity extends Activity {
         gameNote.setTextColor(RED);
         set(gameNote, "");
         foot.addView(gameNote);
+        Button report = new Button(this);
+        report.setText(text("Share report...", "Compartir informe..."));
+        report.setOnClickListener(view -> shareReport());
+        foot.addView(report);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(page);
@@ -639,40 +643,46 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             // the game then starts offline with its defaults
         }
-        played = true;
+        DiagnosticReport.stage(getFilesDir(), "launch_requested", "");
         set(gameNote, "");
         Log.i(TAG, "starting the game with " + new File(folder, "rom.gba"));
-        startActivity(new Intent(this, GameActivity.class));
+        try {
+            startActivity(new Intent(this, GameActivity.class));
+        } catch (RuntimeException failure) {
+            DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
+            showGameLog();
+        }
+    }
+
+    private void shareReport() {
+        String version = "unknown";
+        try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
+        catch (PackageManager.NameNotFoundException ignored) { }
+        String device = "App: " + getPackageName() + " " + version
+            + "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL
+            + "\nAndroid: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
+            + "\nABIs: " + android.text.TextUtils.join(", ", Build.SUPPORTED_ABIS);
+        Intent send = new Intent(Intent.ACTION_SEND);
+        send.setType("text/plain");
+        send.putExtra(Intent.EXTRA_SUBJECT, "ShiningSource report");
+        send.putExtra(Intent.EXTRA_TEXT, DiagnosticReport.create(device, getFilesDir(), folder()));
+        try { startActivity(Intent.createChooser(send, text("Share report", "Compartir informe"))); }
+        catch (RuntimeException unavailable) {
+            set(gameNote, text("No app is available to share the report.", "No hay una app para compartir el informe."));
+        }
     }
 
     /** Back from the game: if it could not start or it crashed, say why (the game writes shiningsource.log). */
     private void showGameLog() {
         File folder = folder();
-        if (!played || folder == null)
-            return;
-        String log = "";
-        try {
-            RandomAccessFile in = new RandomAccessFile(new File(folder, "shiningsource.log"), "r");
-            try {
-                byte[] tail = new byte[(int) Math.min(in.length(), 4096)];
-                in.seek(in.length() - tail.length);
-                in.readFully(tail);
-                log = new String(tail, "UTF-8");
-            } finally {
-                in.close();
-            }
-        } catch (Exception error) {
-            // no log: the game is still starting, or it never got that far
-        }
-        if (log.contains("crash:") || (!log.trim().isEmpty() && !log.contains("host64: GBA memory mapped"))) {
-            String[] lines = log.trim().split("\n");
-            String last = lines[lines.length - 1].trim();       // a start that failed ends with its reason
-            for (String line : lines)
-                if (line.contains("crash:"))
-                    last = line.trim();
-            set(gameNote, text("The game stopped with an error:\n", "El juego se detuvo con un error:\n") + last
-                          + text("\nThe whole report is in ", "\nEl informe completo está en ") + shown(folder) + "/shiningsource.log");
-            Log.w(TAG, "the game stopped with an error: " + last);
+        String startup = DiagnosticReport.tail(DiagnosticReport.statusFile(getFilesDir()), DiagnosticReport.STATUS_BYTES);
+        File logFile = folder == null ? null : new File(folder, "shiningsource.log");
+        String failure = DiagnosticReport.failure(DiagnosticReport.tail(logFile, DiagnosticReport.LOG_BYTES), startup,
+            logFile == null ? 0 : logFile.lastModified());
+        if (!failure.isEmpty()) {
+            set(gameNote, text("The game stopped with an error:\n", "El juego se detuvo con un error:\n") + failure
+                + text("\nUse Share report to see the diagnostic details.", "\nUsa Compartir informe para ver los detalles."));
+            Log.w(TAG, "game failure: " + failure);
         } else {
             set(gameNote, "");
         }

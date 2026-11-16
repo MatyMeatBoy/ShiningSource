@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Android app (debug-signed APK) for arm64-v8a and x86_64.
+"""Build the Android app (debug-signed APK) for ARMv7, ARM64 and x86_64.
 
   build_android.py [--game ss2] [--abi arm64-v8a x86_64] [--test]
 
@@ -7,8 +7,9 @@ Needs, under SHININGSOURCE_ANDROID (default D:/01Claude/ReKHCoM-build/toolchain/
 (platform 35, build-tools, cmake 3.22.1), the NDK, a JDK 17, the SDL3 source tree and a Gradle cache.
 Output: build/android/ShiningSource-debug.apk. No ROM is ever packaged; the build checks it.
 
-Per ABI the APK carries libSDL3.so, libmain.so and a rebased game image built by build_android_image.py:
-ss2_game.macho for arm64-v8a, ss2_game.elf for x86_64. --test makes the game activity startable from adb.
+Every ABI carries libSDL3.so and libmain.so. ARMv7 embeds the private PIC guest
+built by build_android32.py; the 64-bit ABIs carry ss2_game.macho/ss2_game.elf
+built by build_android_image.py. --test makes the game activity startable from adb.
 """
 import argparse, os, shutil, subprocess, sys, zipfile
 from pathlib import Path
@@ -17,14 +18,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build
 
 ROOT = build.ROOT
-IMAGES = {"arm64-v8a": "build/android/images/arm64-v8a/%s/%s_game.macho",
+IMAGES = {"armeabi-v7a": None, "arm64-v8a": "build/android/images/arm64-v8a/%s/%s_game.macho",
           "x86_64": "build/android/images/x86_64/%s/%s_game.elf"}
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--game", default="ss2", choices=sorted(build.GAMES))
-    parser.add_argument("--abi", nargs="+", default=["arm64-v8a", "x86_64"], choices=sorted(IMAGES))
+    parser.add_argument("--abi", nargs="+", default=["armeabi-v7a", "arm64-v8a", "x86_64"], choices=sorted(IMAGES))
     parser.add_argument("--test", action="store_true", help="test build: the game activity can be started with adb")
     parser.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 4) // 2))
     args = parser.parse_args()
@@ -66,14 +67,18 @@ def main():
                                          'android:process=":game"\n            android:exported="true"'), encoding="utf-8")
 
     for abi in args.abi:
-        image = ROOT / (IMAGES[abi] % (args.game, args.game))
+        image = ROOT / (IMAGES[abi] % (args.game, args.game)) if IMAGES[abi] else None
         # The image is always built again here. Taking whatever file was there shipped several packages whose
         # ARM64 half was hours older than the rest: both halves must be the same game.
-        done = subprocess.run([sys.executable, str(ROOT / "tools/build_android_image.py"), "--game", args.game, "--abi", abi, "-j", str(args.j)])
-        if done.returncode or not image.exists():
-            sys.exit("%s could not be built (tools/build_android_image.py)" % image.relative_to(ROOT))
+        if abi == "armeabi-v7a":
+            done = subprocess.run([sys.executable, str(ROOT / "tools/build_android32.py"), "--game", args.game, "-j", str(args.j)])
+        else:
+            done = subprocess.run([sys.executable, str(ROOT / "tools/build_android_image.py"), "--game", args.game, "--abi", abi, "-j", str(args.j)])
+        if done.returncode or (image and not image.exists()):
+            sys.exit("the game could not be built for " + abi)
         native = ROOT / "build/android" / ("native-" + abi)
-        run([cmake, "-S", ROOT / "android", "-B", native, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=%s" % ninja,
+        native_guest = ["-DANDROID32_GUEST=" + (ROOT / "build/android/native32" / args.game / "guest.o").as_posix()] if abi == "armeabi-v7a" else []
+        run([cmake, "-S", ROOT / "android", "-B", native, "-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=%s" % ninja, *native_guest,
              "-DCMAKE_TOOLCHAIN_FILE=%s/build/cmake/android.toolchain.cmake" % ndk, "-DANDROID_ABI=" + abi,
              "-DANDROID_PLATFORM=android-21", "-DSDL_SOURCE_DIR=%s" % sdl, "-DCMAKE_BUILD_TYPE=Release"])
         run([ninja, "-C", native, "-j", args.j])
@@ -85,7 +90,8 @@ def main():
             run([strip, "--strip-unneeded", libs / name])
         assets = main_dir / "assets"
         assets.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(image, assets / image.name)
+        if image:
+            shutil.copy2(image, assets / image.name)
     notices = main_dir / "assets/licenses"
     notices.mkdir(parents=True, exist_ok=True)
     shutil.copy2(sdl / "LICENSE.txt", notices / "SDL3.txt")
@@ -106,7 +112,7 @@ android {
  namespace 'com.shiningsource.android'
  compileSdk 35
  ndkVersion '%s'
- defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 18; versionName '0.8.6' }
+ defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 20; versionName '0.8.8' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { debug { debuggable true }; release { minifyEnabled false } }
  lint { abortOnError false }

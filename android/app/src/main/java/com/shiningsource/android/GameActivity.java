@@ -13,6 +13,30 @@ import org.libsdl.app.SDLActivity;
  */
 public class GameActivity extends SDLActivity {
     @Override
+    public void loadLibraries() {
+        DiagnosticReport.stage(getFilesDir(), "loading_libraries", "");
+        try {
+            super.loadLibraries();
+            DiagnosticReport.stage(getFilesDir(), "libraries_loaded", "");
+        } catch (RuntimeException | Error failure) {
+            DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
+            throw failure; // SDL retains its normal error dialog and cleanup.
+        }
+    }
+
+    @Override
+    protected void main() {
+        DiagnosticReport.stage(getFilesDir(), "native_enter", "");
+        try {
+            super.main();
+            DiagnosticReport.stage(getFilesDir(), "native_return", "");
+        } catch (RuntimeException | Error failure) {
+            DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
+            throw failure;
+        }
+    }
+
+    @Override
     protected String[] getLibraries() {
         return new String[] { "SDL3", "main" };
     }

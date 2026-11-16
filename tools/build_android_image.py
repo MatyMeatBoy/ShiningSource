@@ -29,7 +29,7 @@ def main():
     cc = build.clang()
     bindir = Path(cc).parent
     out = ROOT / 'build/android/images' / args.abi / args.game
-    target = build_arm64.GUEST_TARGET if arm else build_win64.GUEST_TARGET
+    target = [f for f in (build_arm64.GUEST_TARGET if arm else build_win64.GUEST_TARGET) if f != '-fno-pic'] + ['-fPIC']
     game_flags = [f for f in build.CFLAGS if not f.startswith('--target') and f not in ('-g', '-mno-ms-bitfields')]
     gen = build.prepare(args.game, prefix=False, abi_flags=game_flags + target,
                         variant='gen-android-' + args.abi, prefix_after=arm,
@@ -60,10 +60,10 @@ def main():
     image = out / (args.game + ('_game.macho' if arm else '_game.elf'))
     if arm:
         command = [bindir / 'ld.lld.exe', '-flavor', 'darwin', '-arch', 'arm64_32', '-platform_version', 'watchos', '9.0', '9.0',
-                   '-e', '_ss_guest_entry', '-pagezero_size', '0x0A000000', '-no_fixup_chains', '-map', out / 'image.map']
+                   '-e', '_ss_guest_entry', '-pagezero_size', '0x0A000000', '-pie', '-no_fixup_chains', '-map', out / 'image.map']
     else:
-        command = [bindir / 'ld.lld.exe', '-m', 'elf32_x86_64', '-static', '-T', ROOT / 'runtime/guest/guest.ld',
-                   *['--wrap=' + n for n in link.WRAPS], '-z', 'noexecstack']
+        command = [bindir / 'ld.lld.exe', '-m', 'elf32_x86_64', '-pie', '--no-dynamic-linker', '-T', ROOT / 'runtime/guest/android.ld',
+                   *['--wrap=' + n for n in link.WRAPS], '-z', 'noexecstack', '-z', 'max-page-size=0x4000']
     subprocess.run([str(c) for c in [*command, '-o', image, '@' + str(response)]], check=True)
     print('%s: rebased GBA memory; %d functions still stubbed' % (image.relative_to(ROOT), len(stubs)))
 

@@ -14,6 +14,24 @@ static SDL_Texture *texture;
 static SDL_Gamepad *gamepad;
 static SDL_AudioStream *audio;
 static uint64_t next_frame_ns;
+static uint64_t ideal_ns;
+static int unpaced, after_left_out;
+#ifdef __ANDROID__
+static int android_background, android_keys_release, android_touch_release;
+static unsigned android_input_generation;
+static int android_lifecycle_watch_installed;
+static void handle_event(const SDL_Event *event);
+static bool SDLCALL android_lifecycle_watch(void *userdata, SDL_Event *event)
+{
+    (void)userdata;
+    /* SDL_SendAppEvent calls watchers directly: these events never reach PollEvent.
+     * Android dispatches them on the game thread inside its event pump. */
+    if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND || event->type == SDL_EVENT_DID_ENTER_BACKGROUND
+        || event->type == SDL_EVENT_DID_ENTER_FOREGROUND)
+        handle_event(event);
+    return true;                        /* a watch does not consume events */
+}
+#endif
 /* Who keeps time (SS_VSYNC): 1, the default, synchronises with the display; when its refresh rate is a whole
  * multiple of about 60 Hz the display itself paces the game (no tearing, no stutter; the game then runs 0.45%
  * fast and the sound is resampled by the same amount). 2 is for variable-refresh displays: the game keeps its own
@@ -279,14 +297,33 @@ int ss_plat_video_init(const char *title)
     stat_start_ms[0] = process_age_ms();
     read_bindings("SS_KEYS", (int *)keys, 1, SDL_SCANCODE_COUNT);
     read_bindings("SS_PAD", (int *)pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
+#ifdef __ANDROID__
+    /* A missing/broken optional audio driver must not prevent video and input. */
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
+#else
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMEPAD)) {
+#endif
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
+#ifdef __ANDROID__
+    if (!android_lifecycle_watch_installed) {
+        android_lifecycle_watch_installed = SDL_AddEventWatch(android_lifecycle_watch, NULL);
+        if (!android_lifecycle_watch_installed)
+            fprintf(stderr, "android: lifecycle watch unavailable; SDL default lifecycle remains active: %s\n", SDL_GetError());
+        else
+            fprintf(stderr, "android: lifecycle watch installed\n");
+    }
+#endif
     stat_start_ms[1] = process_age_ms();
     spec.format = SDL_AUDIO_S16;
     spec.channels = 2;
     spec.freq = 48000;
+#ifdef __ANDROID__
+    if (!SDL_InitSubSystem(SDL_INIT_AUDIO))
+        fprintf(stderr, "android: audio unavailable; continuing silently: %s\n", SDL_GetError());
+    else
+#endif
     audio = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, NULL, NULL);
     {
         const char *volume = setting_text(SET_VOLUME);      /* 0..100, set by the launcher or the menu */
@@ -374,6 +411,8 @@ int ss_plat_video_init(const char *title)
  * SS_TEST_REFRESH=N makes this believe the display runs at N Hz (tests of the decision on one monitor). */
 static float audio_ratio = 1.0f;        /* how much faster than recorded the sound is played: the display's pace */
 static int audio_trim;                  /* -1, 0, 1: played 0.4% slower, as it is, 0.4% faster (ss_plat_audio) */
+static int audio_level = 36 * 192;
+static uint64_t audio_last_ns;
 
 static void set_vsync(int wanted)
 {
@@ -418,6 +457,10 @@ static void set_vsync(int wanted)
 
 void ss_plat_audio(const int16_t *samples, int frames)
 {
+#ifdef __ANDROID__
+    if (android_background)
+        return;                         /* never accumulate sound that belongs to time spent away */
+#endif
     int queued = audio ? SDL_GetAudioStreamQueued(audio) : 0;
     if (audio && stat_interval_us) {
         if (stat_audio_frames > 30) {           /* after the first half second: the queue starts empty */
@@ -443,19 +486,17 @@ void ss_plat_audio(const int16_t *samples, int frames)
          * near the middle. That is a few cents of pitch, and most of the time nothing is changed at all. */
         enum { MS = 48000 * 4 / 1000, RESERVE = 36 * MS, LOW = 20 * MS, HIGH = 55 * MS };
         static const int16_t silence[RESERVE / 2];
-        static int level = RESERVE;
-        static uint64_t last_ns;
         uint64_t now_ns = SDL_GetTicksNS();
         int trim = audio_trim;
-        if (queued <= 0 && now_ns - last_ns > 100000000) {
+        if (queued <= 0 && now_ns - audio_last_ns > 100000000) {
             SDL_PutAudioStreamData(audio, silence, RESERVE);
-            queued = level = RESERVE;
+            queued = audio_level = RESERVE;
         }
-        last_ns = now_ns;
-        level += (queued - level) / 16;
-        if (level < LOW) trim = -1;
-        else if (level > HIGH) trim = 1;
-        else if ((trim < 0 && level >= RESERVE) || (trim > 0 && level <= RESERVE)) trim = 0;
+        audio_last_ns = now_ns;
+        audio_level += (queued - audio_level) / 16;
+        if (audio_level < LOW) trim = -1;
+        else if (audio_level > HIGH) trim = 1;
+        else if ((trim < 0 && audio_level >= RESERVE) || (trim > 0 && audio_level <= RESERVE)) trim = 0;
         if (trim != audio_trim) {
             audio_trim = trim;
             SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio * (1.0f + 0.004f * (float)trim));
@@ -651,6 +692,46 @@ int ss_plat_view_width(void)
 
 static void handle_event(const SDL_Event *event)
 {
+#ifdef __ANDROID__
+    /* SDL's Android EGL context is restored between WILL and DID foreground. */
+    if (event->type == SDL_EVENT_WILL_ENTER_FOREGROUND)
+        return;
+    if (event->type == SDL_EVENT_WILL_ENTER_BACKGROUND || event->type == SDL_EVENT_DID_ENTER_BACKGROUND
+        || event->type == SDL_EVENT_DID_ENTER_FOREGROUND) {
+        int background = event->type == SDL_EVENT_WILL_ENTER_BACKGROUND || event->type == SDL_EVENT_DID_ENTER_BACKGROUND;
+        if (background != android_background) {
+            android_background = background;
+            android_keys_release = android_touch_release = 1;
+            android_input_generation++;
+            SDL_ResetKeyboard();
+            if (audio) {
+                SDL_PauseAudioStreamDevice(audio);
+                SDL_ClearAudioStream(audio);
+            }
+            audio_level = 36 * 192;
+            audio_last_ns = 0;
+            audio_trim = 0;
+            next_frame_ns = ideal_ns = SDL_GetTicksNS();
+            unpaced = after_left_out = 0;
+            stat_last_ns = 0;
+            if (!background) {
+                if (window && renderer)
+                    set_vsync(option_vsync);
+                if (audio && !SDL_ResumeAudioStreamDevice(audio))
+                    fprintf(stderr, "android: audio resume failed: %s\n", SDL_GetError());
+            }
+            fprintf(stderr, "android: lifecycle %s; input cleared, audio %s, pacing reset\n",
+                    background ? "background" : "foreground", audio ? (background ? "paused" : "resumed") : "unavailable");
+        }
+        return;
+    }
+    if (android_background && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN
+        || event->type == SDL_EVENT_MOUSE_BUTTON_DOWN || event->type == SDL_EVENT_MOUSE_MOTION))
+        return;
+    /* Polling also waits for release; menu hotkeys must obey the same gate. */
+    if (android_keys_release && (event->type == SDL_EVENT_KEY_DOWN || event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN))
+        return;
+#endif
     if (event->type == SDL_EVENT_QUIT)      /* closing the window (or Alt+F4); Escape opens the options menu */
         exit(0);
     if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
@@ -1161,6 +1242,11 @@ static uint16_t touch_buttons(int width)
     SDL_FRect box;
     uint16_t held = 0;
     int count = 0, d, i, n, window_w = 1, window_h = 1, menu_now = 0;
+#ifdef __ANDROID__
+    int active_fingers = 0;
+    if (android_background)
+        return 0;
+#endif
 
     if (wanted < 0) {
         const char *text = getenv("SS_TOUCH");
@@ -1182,6 +1268,9 @@ static uint16_t touch_buttons(int width)
     for (d = 0; devices && d < count; d++) {
         int fingers = 0, f;
         SDL_Finger **list = SDL_GetTouchFingers(devices[d], &fingers);
+#ifdef __ANDROID__
+        active_fingers += fingers;
+#endif
         for (f = 0; list && f < fingers; f++) {
             float x, y, dx, dy;
             SDL_RenderCoordinatesFromWindow(renderer, list[f]->x * (float)window_w, list[f]->y * (float)window_h, &x, &y);
@@ -1202,6 +1291,13 @@ static uint16_t touch_buttons(int width)
         SDL_free(list);
     }
     SDL_free(devices);
+#ifdef __ANDROID__
+    if (android_touch_release) {
+        android_touch_release = active_fingers != 0;
+        held = 0;
+        menu_now = menu_before = 0;
+    }
+#endif
 
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
     for (i = 0; i < n; i++) {
@@ -1619,6 +1715,14 @@ static uint16_t menu_chord(uint16_t pad)
     static uint16_t past[LATE];
     static int hidden, at;
     uint16_t late;
+#ifdef __ANDROID__
+    static unsigned generation;
+    if (generation != android_input_generation) {
+        generation = android_input_generation;
+        memset(past, 0, sizeof past);
+        hidden = at = 0;
+    }
+#endif
     if ((pad & BOTH) == BOTH && !hidden) {
         hidden = 1;
         memset(past, 0, sizeof past);
@@ -1870,6 +1974,14 @@ static uint16_t read_buttons(void)
         if (y < -12000) pad |= 1 << 6;
         if (y > 12000) pad |= 1 << 7;
     }
+#ifdef __ANDROID__
+    if (android_background)
+        return 0;
+    if (android_keys_release) {
+        android_keys_release = (held | pad | qol_buttons(state)) != 0;
+        return 0;
+    }
+#endif
     held |= menu_chord(pad);
     menu_buttons(pad);
     if ((held & 0x30) == 0x30) held &= ~0x30;       /* left+right or up+down cannot happen on the console's pad */
@@ -2037,9 +2149,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     uint64_t now, part_from = 0, part_to;
     uint32_t *part = stat_part_us[PART_UPLOAD] ? stat_part_us[PART_UPLOAD] + stat_part_count % STAT_SLOTS : NULL;
     SDL_Event event;
-    static int unpaced;                 /* frames in a row the display was to pace and did not */
-    static uint64_t ideal_ns;           /* when this game frame was due by the console's clock, however it is paced */
-    static int frameskip = -1, test_slow_ms, after_left_out;
+    static int frameskip = -1, test_slow_ms;
     int waiting, late, hud = width & SS_PRESENT_HUD;
 
     width &= ~SS_PRESENT_HUD;

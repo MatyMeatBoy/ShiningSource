@@ -3,8 +3,8 @@
 # as an asset of the APK. tools/build_android.py drives all of it.
 cmake_minimum_required(VERSION 3.22)
 project(ShiningSourceAndroid C)
-if(NOT ANDROID OR (NOT ANDROID_ABI STREQUAL "arm64-v8a" AND NOT ANDROID_ABI STREQUAL "x86_64"))
-    message(FATAL_ERROR "Android ABIs: arm64-v8a and x86_64 (the port is 64-bit)")
+if(NOT ANDROID OR (NOT ANDROID_ABI STREQUAL "armeabi-v7a" AND NOT ANDROID_ABI STREQUAL "arm64-v8a" AND NOT ANDROID_ABI STREQUAL "x86_64"))
+    message(FATAL_ERROR "Android ABIs: armeabi-v7a, arm64-v8a and x86_64")
 endif()
 if(NOT SDL_SOURCE_DIR)
     message(FATAL_ERROR "Set SDL_SOURCE_DIR to an SDL3 source tree")
@@ -15,11 +15,23 @@ set(SDL_STATIC OFF CACHE BOOL "" FORCE)
 set(SDL_TESTS OFF CACHE BOOL "" FORCE)
 add_subdirectory("${SDL_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/SDL")
 
-add_library(main SHARED
-    "${ROOT}/runtime/host64/host_linux.c"
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    if(NOT ANDROID32_GUEST OR NOT EXISTS "${ANDROID32_GUEST}")
+        message(FATAL_ERROR "Build tools/build_android32.py and set ANDROID32_GUEST")
+    endif()
+    set_source_files_properties("${ANDROID32_GUEST}" PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
+    set(HOST_SOURCES "${ROOT}/runtime/android32/host.c" "${ANDROID32_GUEST}")
+else()
+    set(HOST_SOURCES "${ROOT}/runtime/host64/host_linux.c")
+endif()
+add_library(main SHARED ${HOST_SOURCES}
     "${ROOT}/runtime/win32/plat_sdl.c"
     "${ROOT}/runtime/plat/net_udp.c")
 target_include_directories(main PRIVATE "${ROOT}/runtime/include")
 target_compile_options(main PRIVATE -O2 -Wall)
-target_compile_definitions(main PRIVATE SS_REBASED_HOST=1)
+target_compile_definitions(main PRIVATE SS_HOST_VERSION="0.8.8")
+if(NOT ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_definitions(main PRIVATE SS_REBASED_HOST=1)
+endif()
+target_link_options(main PRIVATE -Wl,--no-undefined)
 target_link_libraries(main PRIVATE SDL3::SDL3 log android m)

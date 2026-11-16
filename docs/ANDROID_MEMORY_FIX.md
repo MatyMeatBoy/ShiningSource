@@ -1,5 +1,9 @@
 # Android 0.8.6: memory fix and verification
 
+Subsequent phone reports reached a different startup failure in the fixed stack
+window. See [0.8.8](RELEASE_0.8.8.md) for movable images, stacks and service jumps;
+the 0.8.6 verification below remains a historical record.
+
 Verified on November 16, 2026. Final APK SHA-256:
 `7e65d256a062f0996b374d5111ccdd4e60ae01f7dc17bdf5f9a3e7dabfa8552d`.
 
