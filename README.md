@@ -1,15 +1,12 @@
 # ShiningSource
 
-**Shining Soul II as a native program**: widescreen, online for 2 to 4
-players, achievements, on Windows, Linux and Android.
+**ShiningSource** is a native port of **Shining Soul II** for Windows, Linux and
+Android, built from the [matching C decompilation](https://github.com/MatyMeatBoy/SS2Decomp).
+It runs the game's own code on modern hardware, with real widescreen, online co-op
+for 2–4 players, crossplay, achievements and configurable controls. The original
+pixel art and game timing are preserved; no emulator or static recompilation is used.
 
-ShiningSource is a port of the Game Boy Advance *Shining Soul* games built from
-their matching decompilations. The game's own code is compiled for today's
-machines; nothing is emulated and nothing is statically recompiled.
-
-![Shining Soul II in the port's wide view](docs/img/game-wide.png)
-
-*The wide view: the same moment shows more of the map than the console did.*
+[![ShiningSource project overview: native Shining Soul II, widescreen, online co-op and crossplay.](docs/showcase/overview.png)](docs/showcase/overview.png)
 
 | Game | Source | Status |
 |---|---|---|
@@ -27,14 +24,7 @@ from it when you play.
 
 ## Project showcase
 
-[![Native Shining Soul II port: real widescreen, online co-op for 2–4 players, Windows/Linux/Android crossplay, achievements and remappable controls.](docs/showcase/overview.png)](docs/showcase/overview.png)
-
-<details>
-<summary>Original game vs ShiningSource</summary>
-
 [![Comparison of the original GBA game and ShiningSource, including classic and wide views.](docs/showcase/comparison.png)](docs/showcase/comparison.png)
-
-</details>
 
 These are illustrated feature summaries; see the sections below for current platform and feature details.
 
