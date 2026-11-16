@@ -25,6 +25,19 @@ from it when you play.
 
 *The launcher, drawn in the port's own "Soul" look.*
 
+## Project showcase
+
+[![Native Shining Soul II port: real widescreen, online co-op for 2–4 players, Windows/Linux/Android crossplay, achievements and remappable controls.](docs/showcase/overview.png)](docs/showcase/overview.png)
+
+<details>
+<summary>Original game vs ShiningSource</summary>
+
+[![Comparison of the original GBA game and ShiningSource, including classic and wide views.](docs/showcase/comparison.png)](docs/showcase/comparison.png)
+
+</details>
+
+These are illustrated feature summaries; see the sections below for current platform and feature details.
+
 ## Download
 
 [Releases](https://github.com/MatyMeatBoy/ShiningSource/releases): Windows x64
