@@ -1,6 +1,6 @@
 # Native side of the Android app: SDL3 and the host library SDL's activity loads (libmain.so).
-# The game itself is not built here: it is the image tools/build_arm64.py (arm64-v8a) or tools/build_win64.py
-# (x86_64, the emulator) produce, shipped as an asset of the APK. tools/build_android.py drives all of it.
+# The rebased game image is built by tools/build_android_image.py and shipped
+# as an asset of the APK. tools/build_android.py drives all of it.
 cmake_minimum_required(VERSION 3.22)
 project(ShiningSourceAndroid C)
 if(NOT ANDROID OR (NOT ANDROID_ABI STREQUAL "arm64-v8a" AND NOT ANDROID_ABI STREQUAL "x86_64"))
@@ -21,4 +21,5 @@ add_library(main SHARED
     "${ROOT}/runtime/plat/net_udp.c")
 target_include_directories(main PRIVATE "${ROOT}/runtime/include")
 target_compile_options(main PRIVATE -O2 -Wall)
+target_compile_definitions(main PRIVATE SS_REBASED_HOST=1)
 target_link_libraries(main PRIVATE SDL3::SDL3 log android m)

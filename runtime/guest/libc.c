@@ -259,3 +259,12 @@ void bzero(void *destination, size_t size)
 {
     memset(destination, 0, size);
 }
+
+#ifdef SS_REBASED_HOST
+/* Explicit calls in the cartridge's C also need its division contract. These
+ * are library entry points, in addition to the operators guarded in LLVM IR. */
+int __divsi3(int a, int b) { return b == 0 ? 0 : (b == -1 ? (int)(0u - (unsigned)a) : a / b); }
+int __modsi3(int a, int b) { return b == 0 || b == -1 ? 0 : a % b; }
+unsigned __udivsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a / b; }
+unsigned __umodsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a % b; }
+#endif

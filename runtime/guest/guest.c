@@ -168,7 +168,13 @@ void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_h
 #ifdef SS_REBASED
     {
         const char *error = "";
-        if (ss_memory_init(ss_guest_rom, &error) != 0) {
+        if (ss_memory_init(
+#ifdef SS_REBASED_HOST
+                getenv("SHININGSOURCE_ROM"),
+#else
+                ss_guest_rom,
+#endif
+                &error) != 0) {
             fprintf(stderr, "memory setup failed: %s\n", error);
             exit(91);
         }

@@ -38,8 +38,12 @@ def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix):
     totals = {}
 
     def plain_name(name):
-        name = name.strip('"').replace("\\01", "")
-        if prefix and name.startswith("_"):
+        name = name.strip('"')
+        # LLVM IR keeps ordinary C names unprefixed, even on Mach-O/i686.
+        # Only an explicit assembler alias (\01) already includes that prefix.
+        assembler = name.startswith("\\01")
+        name = name.replace("\\01", "")
+        if assembler and prefix and name.startswith("_"):
             name = name[1:]
         return re.sub(r'^(?:__wrap_|__real_)', "", name)
 
@@ -60,7 +64,8 @@ def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix):
             print(name, "\n", "\n".join(l for l in errors.splitlines() if "error" in l)[:2500])
         sys.exit("%d file(s) do not compile" % len(failed))
 
-    # rule 5 of rebase_ir: the game's functions, and the runtime's functions the game names
+    # Rule 5 also covers callbacks installed in cartridge memory. The game
+    # reaches those indirectly, so they need not appear in a game declaration.
     texts = {u[0]: (out / "ir" / (u[0].stem + ".ll")).read_text(encoding="utf-8") for u in units if u[3] != "plain"}
     game, core, named = {}, {}, set()
     for unit in units:
@@ -70,7 +75,9 @@ def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix):
         (game if unit[3] == "game" else core).update(found)
         if unit[3] == "game":
             named.update(plain_name(m) for m in re.findall(r'^declare [^@\n]*@("[^"]+"|[-\w.$]+)\(', texts[unit[0]], re.M))
-    game.update({name: kinds for name, kinds in core.items() if name in named or name in game})
+    addressed = {plain_name(name) for text in texts.values()
+                 for name in re.findall(r'\bptr @("[^"]+"|[-\w.$]+)(?![-\w.$]|\s*\()', text)}
+    game.update({name: kinds for name, kinds in core.items() if name in named or name in game or name in addressed})
 
     def one(unit):
         path, flags, cwd, kind = unit

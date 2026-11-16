@@ -7,7 +7,7 @@
  * jumps placed in low memory, so the host can be loaded anywhere.
  * Android: the host is the library SDL's activity loads (libmain.so), so it is never below 4 GiB and always
  * uses the jumps. The image comes from the APK's assets, the ROM and the saves live in the app's own folder,
- * and the low address range is claimed the moment the library loads, before anything else can settle there.
+ * and GBA memory is rebased inside the image: Java may own its original hardware addresses.
  */
 #define _GNU_SOURCE
 #include "../guest/bridge.h"
@@ -19,6 +19,7 @@ static unsigned long ss_tolerated;
 #endif
 
 #include <math.h>
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,10 +42,13 @@ static unsigned long ss_tolerated;
 static uint32_t image_low, image_high;
 
 #ifdef __ANDROID__
-/* Everything the game needs lives between these two addresses. In a 64-bit Android process the range is free
- * when the library loads (the Java heap starts above it); claim it before the graphics driver or the heap's
- * growth can land there. */
+/* Claim only the image/stack window before graphics initialization. Never
+ * assume the GBA's hardware addresses are free in a process inherited from ART. */
+#ifdef SS_REBASED_HOST
+enum { LOW_BASE = 0x0A000000u, LOW_END = 0x11000000u };
+#else
 enum { LOW_BASE = 0x02000000u, LOW_END = 0x10000000u };
+#endif
 static int low_reserved;
 
 __attribute__((constructor)) static void reserve_low_memory(void)
@@ -64,18 +68,40 @@ static void *low_map(uint32_t address, uint32_t size, int protection)
     void *got;
     if (low_reserved && address >= LOW_BASE && address + size <= LOW_END)       /* inside the claimed range */
         got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
-    else
+    else {
         got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+        /* Kernels predating MAP_FIXED_NOREPLACE may reject it. A checked hint
+         * is safe too: it never replaces somebody else's mapping. */
+        if (got == MAP_FAILED && errno == EINVAL)
+            got = mmap(PTR(address), size, protection, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    }
     if (got != PTR(address)) {
+        int reason = got == MAP_FAILED ? errno : EEXIST;
         if (got != MAP_FAILED)
             munmap(got, size);
+        fprintf(stderr, "memory map %08X-%08X failed: %s (errno %d)\n",
+                address, address + size, strerror(reason), reason);
+        {
+            FILE *maps = fopen("/proc/self/maps", "r");
+            char line[1024];
+            unsigned long long low, high;
+            while (maps && fgets(line, sizeof line, maps))
+                if (sscanf(line, "%llx-%llx", &low, &high) == 2 && low < (uint64_t)address + size && high > address)
+                    fprintf(stderr, "overlapping mapping: %s", line);
+            if (maps) fclose(maps);
+        }
+        errno = reason;
         return NULL;
     }
     return got;
 }
 
 enum { STACK_SLOT = 0x80000, STACK_SLOTS = 128 };
+#ifdef SS_REBASED_HOST
+static const uint32_t stack_arena = 0x0C800000u, main_stack = 0x10800000u;
+#else
 static const uint32_t stack_arena = 0x0B000000u, main_stack = 0x0F000000u;
+#endif
 static uint8_t stack_used[STACK_SLOTS];
 
 static uint32_t b_stack_alloc(uint32_t size)
@@ -326,6 +352,7 @@ static void release_whole(uint8_t *data)
 #endif
 }
 
+#ifndef SS_REBASED_HOST
 static int load_file(const char *path, uint32_t address, uint32_t capacity)
 {
     FILE *file = fopen(path, "rb");
@@ -336,6 +363,7 @@ static int load_file(const char *path, uint32_t address, uint32_t capacity)
     fclose(file);
     return (int)got;
 }
+#endif
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
 
@@ -363,7 +391,7 @@ static uint32_t load_image(const uint8_t *data, size_t size)
     }
     low &= ~0xFFFFu;
     high = (high + 0xFFFFu) & ~0xFFFFu;
-    if (low >= high || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC))
+    if (low >= high || high > stack_arena || !low_map(low, high - low, PROT_READ | PROT_WRITE | PROT_EXEC))
         return 0;
     for (i = 0; i < count; i++) {
         const uint8_t *program = data + offset + (uint32_t)(i * stride);
@@ -398,6 +426,8 @@ static uint32_t load_image(const uint8_t *data, size_t size)
             if (address && memory && memcmp(command + 8, "__LINKEDIT", 10) != 0) {
                 first = address & ~0xFFFFu;
                 last = (address + memory + 0xFFFFu) & ~0xFFFFu;
+                if (last > stack_arena)
+                    return 0;
                 if (first < high) first = high;                 /* segments share a 64 KiB block with the previous one */
                 if (last > first && !low_map(first, last - first, PROT_READ | PROT_WRITE | PROT_EXEC))
                     return 0;
@@ -501,7 +531,12 @@ __asm__(
  * moves there too. */
 static uint32_t *low_bridge(const uint64_t *targets, int count)
 {
-    uint32_t base = 0x0F800000u, *table;
+    uint32_t *table;
+#ifdef SS_REBASED_HOST
+    uint32_t base = 0x10C00000u;
+#else
+    uint32_t base = 0x0F800000u;
+#endif
     uint64_t through = (uint64_t)(uintptr_t)ss_host_call;
     uint8_t *code;
     int i;
@@ -562,11 +597,13 @@ static void read_settings(const char *path)
 
 int main(int argc, char **argv)
 {
+#ifndef SS_REBASED_HOST
     static const struct { uint32_t base, size; const char *name; } regions[] = {
         { SS_EWRAM, 0x40000, "EWRAM" }, { SS_IWRAM, 0x10000, "IWRAM" }, { SS_IO, 0x10000, "I/O registers" },
         { SS_PALETTE, 0x10000, "palette" }, { SS_VRAM, 0x20000, "VRAM" }, { SS_OAM, 0x10000, "OAM" },
         { SS_ROM, 0x1000000, "ROM" },
     };
+#endif
     static uint8_t signal_stack[1 << 16];
     struct sigaction action;
     stack_t alternate;
@@ -576,7 +613,9 @@ int main(int argc, char **argv)
     size_t image_size = 0;
     uint32_t entry;
     uintptr_t table;
+#ifndef SS_REBASED_HOST
     unsigned i;
+#endif
 
 #ifdef __ANDROID__
     /* the app's own folder: ROM, saves, settings and the log; the image is an asset */
@@ -610,6 +649,16 @@ int main(int argc, char **argv)
         strcpy(slash ? slash + 1 : image_path, IMAGE_NAME);
     }
 #endif
+#ifdef SS_REBASED_HOST
+    /* The guest loads the ROM into its own arena through the bridge. Android
+     * may already own any of the original hardware addresses. */
+#ifdef __ANDROID__
+    SDL_setenv_unsafe("SHININGSOURCE_ROM", rom, 1);
+#else
+    setenv("SHININGSOURCE_ROM", rom, 1);
+#endif
+    fprintf(stderr, "host64: rebased GBA memory; page size %ld\n", sysconf(_SC_PAGESIZE));
+#else
     for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
         if (!low_map(regions[i].base, regions[i].size, PROT_READ | PROT_WRITE)) {
             fprintf(stderr, "the address range for the game's %s (0x%08X) is not free; check vm.mmap_min_addr\n",
@@ -617,14 +666,17 @@ int main(int argc, char **argv)
             return 3;
         }
     }
+#endif
     if (!low_map(stack_arena, STACK_SLOT * STACK_SLOTS, PROT_READ | PROT_WRITE) || !low_map(main_stack, 0x400000, PROT_READ | PROT_WRITE)) {
         fprintf(stderr, "the address range for the game's stacks is not free\n");
         return 3;
     }
+#ifndef SS_REBASED_HOST
     if (load_file(rom, SS_ROM, 0x1000000) < 0x100000) {
         fprintf(stderr, "the ROM file could not be read: %s\n", rom);
         return 2;
     }
+#endif
     image = read_whole(image_path, &image_size);
     entry = image ? load_image(image, image_size) : 0;
     if (image)
@@ -657,7 +709,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "the address range for the service jumps is not free\n");
         return 3;
     }
-    fprintf(stderr, "host64: GBA memory mapped, ROM and image loaded (image %08X-%08X, entry %08X)\n",
+    fprintf(stderr, "host64: image loaded (image %08X-%08X, entry %08X)\n",
             (unsigned)image_low, (unsigned)image_high, (unsigned)entry);
     ss_enter_image(entry, main_stack + 0x400000, table, main_stack);
     return 0;

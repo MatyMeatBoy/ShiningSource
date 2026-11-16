@@ -46,6 +46,10 @@ arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+Android **0.8.6** fixes the EWRAM address reservation failure when loading a ROM.
+See the [fix and verification notes](docs/RELEASE_0.8.6.md). Windows and Linux
+remain at 0.8.5.
+
 0.8 is the first public release; the versions before it were test builds.
 Each release's notes say what was checked and, just as plainly, what was not.
 
