@@ -1,4 +1,14 @@
-# ShiningSource
+<p align="center">
+  <img src="docs/logo/shiningsource-logo.svg" alt="ShiningSource: native port, online co-op" width="560">
+</p>
+
+<p align="center">
+  <img alt="Platforms: Windows, Linux, Android" src="https://img.shields.io/badge/platforms-Windows%20%2F%20Linux%20%2F%20Android-194b40">
+  <img alt="Graphics: SDL3" src="https://img.shields.io/badge/graphics-SDL3-476c65">
+  <img alt="Online: 2–4 players" src="https://img.shields.io/badge/online-2%E2%80%934%20players-d6a647">
+  <img alt="Status: in development" src="https://img.shields.io/badge/status-in%20development-194b40">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
 
 **ShiningSource** is a native port of **Shining Soul II** for Windows, Linux and
 Android, built from the [matching C decompilation](https://github.com/MatyMeatBoy/SS2Decomp).
