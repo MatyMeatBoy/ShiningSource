@@ -28,6 +28,7 @@ def main():
     p.add_argument('--apk', required=True, type=Path)
     p.add_argument('--out', required=True, type=Path)
     p.add_argument('--nm', required=True)
+    p.add_argument('--map-exits', action='store_true', help='exercise natural map exits instead of injecting callbacks')
     a = p.parse_args()
     assert a.serial.startswith('emulator-')
     out = a.out.resolve(); out.mkdir(parents=True, exist_ok=True)
@@ -55,6 +56,10 @@ def main():
                     SS_FRAMES='42000', SS_PACE='1', SS_PACE_FAST='42000:12',
                     SS_INPUT_HUNT='23500', SS_INPUT_GOTO='25200:120:100:41000',
                     SS_NET_MSG_LOG='msg.log', SS_NET_MSG_DUMP='1', SS_M4A_LOG='1')
+    if a.map_exits:
+        injected = ''
+        settings.update(SS_INPUT_GOTO='25200:120:100:31000', SS_INPUT_EXIT='31000',
+                        SS_INPUT_PATH='1', SS_STATE_LOG='state.log', SS_SCENE_LOG='scene.log')
     adb('install', '-r', '--abi', 'arm64-v8a', str(a.apk))
     shell('am start -W -n ' + PACKAGE + '/.MainActivity')
     shell('mkdir -p ' + FOLDER)
@@ -91,17 +96,28 @@ def main():
             assert 'frame 42000' in log and 'crash:' not in log and 'stopped safely' not in log, log[-2000:]
             assert peer.wait(timeout=30) == 0
         adb('pull', FOLDER + '/msg.log', str(out / 'android-msg.log'))
+        if a.map_exits:
+            for name in ('state.log', 'scene.log'):
+                adb('pull', FOLDER + '/' + name, str(out / ('android-' + name)))
         logs = [(out / 'android.log').read_text(), (win / 'run.log').read_text()]
-        for log in logs:
-            assert len(re.findall(r'm4a call \d+ m4aSongNumStart 62 ', log)) >= 2, 'callback was not executed'
+        if not a.map_exits:
+            for log in logs:
+                assert len(re.findall(r'm4a call \d+ m4aSongNumStart 62 ', log)) >= 2, 'callback was not executed'
         assert 'host64: image moved;' in logs[0]
         for path in (out / 'android-msg.log', win / 'msg.log'):
             text = path.read_text().upper()
-            assert 'A301596E0008' in text and 'A402596E0008' in text, 'wire callback ID is not canonical'
+            if not a.map_exits:
+                assert 'A301596E0008' in text and 'A402596E0008' in text, 'wire callback ID is not canonical'
             assert 'A301' + struct.pack('<I', native).hex().upper() not in text
+        if a.map_exits:
+            for path in (out / 'android-state.log', win / 'state.log'):
+                areas = {tuple(line.split()[4:6]) for line in path.read_text().splitlines()
+                         if len(line.split()) >= 6 and line.split()[4] != '0'}
+                assert len(areas) >= 2, 'no map change observed: ' + repr(areas)
         result = dict(apk_sha256=hashlib.sha256(a.apk.read_bytes()).hexdigest(),
                       windows_callback=hex(native), wire_callback='0x08006E59', frames=42000,
                       android_abi='arm64-v8a', forced_relocation=True, passed=True)
+        result['map_exits'] = a.map_exits
         (out / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result))
     finally:

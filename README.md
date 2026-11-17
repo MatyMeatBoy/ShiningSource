@@ -46,6 +46,12 @@ armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`,
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+**0.8.11** fixes garbled item descriptions opened with Select and adds automatic
+Android crash reports with a persistent outbox and previous-session logs.
+See [release notes](docs/RELEASE_0.8.11.md) and
+[report details](docs/AUTOMATIC_ANDROID_REPORTS.md). Online rules remain 7,
+compatible with 0.8.10; 0.8.8/0.8.9 clients must update.
+
 **0.8.10** fixes portable multiplayer scene callbacks between Windows, Android
 and Linux. **Everyone in the room must update to 0.8.10** (online rules 7).
 See [release notes](docs/RELEASE_0.8.10.md).
