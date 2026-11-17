@@ -1,5 +1,5 @@
 """Package a Windows release from current build artifacts with an explicit allowlist.
-Usage: python tools/package_windows.py 0.8.12
+Usage: python tools/package_windows.py 0.8.13
 """
 import hashlib,json,re,sys,zipfile
 from pathlib import Path

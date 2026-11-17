@@ -46,6 +46,12 @@ armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`,
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+**0.8.13 (Windows)** shortens narrow-map edge fading from 32 to 8 game pixels,
+covers world sprites at the edge, and keeps the faded world behind menus without
+darkening their colours. Translucent menus and HUD sprite bounds are handled
+separately. See [release notes and verification limits](docs/RELEASE_0.8.13.md).
+Android and Linux remain on 0.8.11; online rules remain 7.
+
 **0.8.12 (Windows)** replaces the custom port achievements with the official
 52-achievement RetroAchievements catalog and badges, included for offline play.
 Local progress, the achievements tab and unlock popups use the same definitions.

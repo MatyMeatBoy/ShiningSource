@@ -26,7 +26,7 @@
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
 
 /* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
-enum { HUD_BAND = SS_HUD_ROWS, HUD_SPLIT = SS_HUD_SPLIT, EDGE_FADE = 32 };
+enum { HUD_BAND = SS_HUD_ROWS, HUD_SPLIT = SS_HUD_SPLIT, EDGE_FADE = 8 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
 /* per scanline, per background: palette index + 1 (0 = transparent); the sprites have their own lines further down */
@@ -298,7 +298,7 @@ enum { TRACKS = 192, KEPT = 3, COPIES = 64, REACH = 4 /* pixels a frame a sprite
 struct obj_line {
     uint16_t colour[MAXW];      /* 0x101 + palette index, or 0x8000 + the colour itself (a copy from a past frame); 0: nothing */
     uint8_t prio[MAXW];
-    uint8_t flags[MAXW];        /* 1 semi-transparent, 2 sprite-window pixel, 4 the sprite is not where it last was */
+    uint8_t flags[MAXW];        /* 1 semi-transparent, 2 sprite-window pixel, 4 moved, 8 HUD/page sprite */
 };
 static struct obj_line obj_now, obj_other;      /* the sprites of this frame, and of the frame that goes with it */
 static struct obj_line hud_now, hud_other;      /* the same for the sprites of the status display's layer (W columns) */
@@ -684,7 +684,7 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
-    int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width;
+    int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width, ui = 0;
     int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
 
     if ((!affine && (a0 & 0x200)) || shape == 3)
@@ -712,8 +712,10 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
     colour256 = a0 & 0x2000;
     tile = a2 & 0x3FF;
     prio = (a2 >> 10) & 3;
+    if (page_shown && prio == 0) ui = 8;
     if ((hud_at_edges || hud_apart) && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
         int centre = x0 + box_w / 2;
+        if (centre < 72 || centre >= HUD_SPLIT) ui = 8;
         if (centre < 72) place = 0;
         else if (centre >= HUD_SPLIT) place = extra;
         if (hud_apart && (centre < 72 || centre >= HUD_SPLIT)) {    /* into the layer, where the console has it */
@@ -762,7 +764,7 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
         if (prio <= line->prio[sx] || !line->colour[sx]) {
             line->colour[sx] = colours ? (uint16_t)(0x8000 | (colours[index] & 0x7FFF)) : (uint16_t)(0x100 + index + 1);
             line->prio[sx] = (uint8_t)prio;
-            line->flags[sx] = (uint8_t)((line->flags[sx] & 2) | (mode == 1) | moved);
+            line->flags[sx] = (uint8_t)((line->flags[sx] & 2) | (mode == 1) | moved | ui);
         }
     }
 }
@@ -842,6 +844,30 @@ static struct {
     int edge_fade;
 } line;
 
+/* Attenuate the field before blending it with UI, so a translucent menu retains its
+ * own colours and shows the same faded field through it as through an empty pixel. */
+static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_line *obj)
+{
+    int from_left, from_right, by = EDGE_FADE, rest;
+    if (!line.edge_fade)
+        return colour;
+    if (layer == LAYER_OBJ) {
+        if (obj->flags[X] & 8)
+            return colour;             /* page and status-display sprites */
+    } else if (layer < 4 && !view.bg[layer].map) {
+        return colour;                 /* UI background */
+    }
+    from_left = X - view.hud_left;
+    from_right = view.hud_right - 1 - X;
+    if (view.hud_left > 0 && from_left < by) by = from_left;
+    if (view.hud_right < view.width && from_right < by) by = from_right;
+    if (by >= EDGE_FADE)
+        return colour;
+    if (by < 0) by = 0;                /* world sprites cannot leak into the black */
+    rest = EDGE_FADE - by;
+    return fade(colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
+}
+
 /* One pixel of the picture with the sprites of `obj`: the layers in their order, the windows, the blending and
  * the fades. `moved` tells whether what is shown in front moved since the last frame. */
 static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
@@ -849,7 +875,7 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
     int mask = 0x3F, top = LAYER_BACKDROP, second = LAYER_BACKDROP, p, n;
     uint16_t dispcnt = line.dispcnt, bldcnt = line.bldcnt;
     uint16_t top_colour = PAL[0], second_colour = PAL[0];
-    int obj_visible, semi = 0;
+    int obj_visible, semi = 0, edge_blended = 0;
 
     if (view.world && (X < view.hud_left || X >= view.hud_right))
         top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
@@ -882,27 +908,24 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
         NEXT_LAYER(second, second_colour)
 #undef NEXT_LAYER
     if (semi && (bldcnt & (0x100 << second))) {
-        top_colour = blend(top_colour, second_colour, line.eva, line.evb);
+        top_colour = blend(edge_colour(top_colour, top, X, obj),
+                           edge_colour(second_colour, second, X, obj), line.eva, line.evb);
+        edge_blended = 1;
     } else if ((mask & 0x20) && (bldcnt & (1 << top))) {
         switch ((bldcnt >> 6) & 3) {
         case 1:
-            if (bldcnt & (0x100 << second)) top_colour = blend(top_colour, second_colour, line.eva, line.evb);
+            if (bldcnt & (0x100 << second)) {
+                top_colour = blend(edge_colour(top_colour, top, X, obj),
+                                   edge_colour(second_colour, second, X, obj), line.eva, line.evb);
+                edge_blended = 1;
+            }
             break;
         case 2: top_colour = fade(top_colour, line.evy, 1); break;
         case 3: top_colour = fade(top_colour, line.evy, 0); break;
         }
     }
-    if (line.edge_fade && (top == LAYER_BACKDROP || (top == LAYER_OBJ ? obj->prio[X] > 0 : view.bg[top].map != NULL))) {
-        /* the last columns of a map narrower than the view sink into the black beside it */
-        int from_left = X - view.hud_left, from_right = view.hud_right - 1 - X, by = -1;
-        if (view.hud_left > 0 && from_left >= 0 && from_left < EDGE_FADE) by = from_left;
-        if (view.hud_right < view.width && from_right >= 0 && from_right < EDGE_FADE) by = from_right;
-        if (by >= 0) {
-            /* a soft curve: most of the darkening in the last few columns, a hint of it further in */
-            int rest = EDGE_FADE - by;                  /* 1 at the inner end .. EDGE_FADE at the edge */
-            top_colour = fade(top_colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
-        }
-    }
+    if (!edge_blended)
+        top_colour = edge_colour(top_colour, top, X, obj);
     *moved = top == LAYER_OBJ ? obj->flags[X] & 4 : top < 4 ? line.moved[top] : 0;
     return top_colour;
 }
