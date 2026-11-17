@@ -36,6 +36,11 @@ matched the one-byte-displaced original glyphs exactly. Public HTTPS checks
 returned health200, new upload201 and duplicate200. An ARM64 Android15 emulator
 test recovered a real SIGKILL record, obtained a real HTTPS upload receipt,
 preserved that session before Play and distinguished a normal exit.
+Final Windows and relocated ARM64 APK builds also matched the canonical
+32,000-frame video hash and audio summary. A paired42,000-frame run executed
+both callback message types on both peers using portable wire IDs without
+crashes. APK signing certificate,16KiB64-bit library alignment and package
+payload checks passed.
 
 Android ARMv7/ARM64/x86_64, Windows x64 and Linux x64 packages are rebuilt.
 Linux is cross-compiled; physical Android confirmation and the reporter's

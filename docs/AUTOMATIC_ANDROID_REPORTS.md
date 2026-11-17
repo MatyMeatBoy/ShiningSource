@@ -47,6 +47,8 @@ Build the repository with `relay/Dockerfile.reports`. Use a persistent volume at
 `/data/reports`; the image runs as UID10001. Route verified public HTTPS to
 container port8080 through the existing reverse proxy. Do not publish the raw
 container port or the storage directory. `/health` returns200.
+Read stored reports through the authenticated service console at `/data/reports`;
+the application exposes no public read/list/delete endpoint.
 
 Current receiver: `https://animaciones-evi-shiningsource-reports.iu0lfs.easypanel.host`.
 It is separate from the running UDP game relay. Public verification returned
