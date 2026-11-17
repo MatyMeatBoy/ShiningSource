@@ -1,8 +1,12 @@
-/* Experimental remote combat sound presentation. The game already receives
- * other actors' actions; only its explicit remote-state sound exclusions change.
+/* Restored multiplayer audio presentation. The game already receives
+ * other actors' actions and accepted combat events; only audio presentation changes.
  * No audio stream, packet or gameplay state is added. */
 #include "shiningsource/runtime.h"
 #include <stdlib.h>
+
+extern int sub_0800CCCC(void);
+extern int sub_0800CD34(void);
+extern void sub_0805865C(int song);
 
 static int enabled = -1;
 
@@ -33,4 +37,12 @@ int ss_remote_sfx_bow_allowed(int original_local, int clock_running)
      * clock prevents a zero-phase release from sounding on every frozen frame.
      * Preserve the original local-player branch, including its timing. */
     return original_local || (clock_running && ss_remote_sfx_allowed(0));
+}
+
+/* Only call from an accepted remote presentation event, never from packet polling.
+ * The sender already played its local cue. Keep the game's scene/audio guards. */
+void ss_remote_sfx_event(int song)
+{
+    if (ss_remote_sfx_allowed(0) && !sub_0800CCCC() && !sub_0800CD34())
+        sub_0805865C(song);
 }

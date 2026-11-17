@@ -1,5 +1,5 @@
 """Package a Windows release from current build artifacts with an explicit allowlist.
-Usage: python tools/package_windows.py 0.8.13
+Usage: python tools/package_windows.py 0.8.14
 """
 import hashlib,json,re,sys,zipfile
 from pathlib import Path
@@ -14,6 +14,7 @@ def main():
     sdk=next(Path(h) for h in link.SDL_HINTS if h and (Path(h)/'x86_64-w64-mingw32/lib').is_dir())
     files={name:game/name for name in ('ShiningSource.exe','ss2_win64.exe','ss2_game.elf','SDL3.dll')}
     files.update({'ss_relay.exe':ROOT/'build/relay/ss_relay.exe','LICENSE.txt':ROOT/'LICENSE','DearImGui-LICENSE.txt':ROOT/'third_party/imgui/LICENSE.txt','rcheevos-LICENSE.txt':ROOT/'third_party/rcheevos/LICENSE','SDL3-LICENSE.txt':sdk/'LICENSE.txt','README.md':ROOT/'README.md',f'docs/RELEASE_{version}.md':ROOT/f'docs/RELEASE_{version}.md','docs/ACHIEVEMENTS_VERIFICATION.md':ROOT/'docs/ACHIEVEMENTS_VERIFICATION.md','docs/RETROACHIEVEMENTS_SOURCE.md':ROOT/'assets/achievements/SOURCE.md'})
+    files['docs/MULTIPLAYER_AUDIO_AUDIT.md']=ROOT/'docs/MULTIPLAYER_AUDIO_AUDIT.md'
     for image in ('launcher-achievements.png','achievement-popup.png'):
         files['docs/img/'+image]=ROOT/'docs/img'/image
     for asset in (ROOT/'assets/achievements').iterdir():

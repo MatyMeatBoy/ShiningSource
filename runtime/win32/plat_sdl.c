@@ -1422,7 +1422,7 @@ static const char *item_label(int item)
         { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
         { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
         { "Experimental: larger status", "Experimental: indicadores grandes" },
-        { "Experimental: remote sounds", "Experimental: sonidos remotos" },
+        { "Restored Multiplayer Audio", "Audio Multijugador Restaurado" },
         { "Quit game", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)

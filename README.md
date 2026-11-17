@@ -46,6 +46,13 @@ armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`,
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+**0.8.14 (Windows, Android and Linux)** expands **Restored Multiplayer Audio**
+(**Audio Multijugador Restaurado**): companion enemy hits, critical markers,
+breakable-object impacts, ability cues and hurt/falling voices share the existing
+toggle. Android and Linux also include the narrow-map fading fixes from 0.8.13.
+See the [release notes](docs/RELEASE_0.8.14.md) and
+[audio source audit](docs/MULTIPLAYER_AUDIO_AUDIT.md). Online rules remain 7.
+
 **0.8.13 (Windows)** shortens narrow-map edge fading from 32 to 8 game pixels,
 covers world sprites at the edge, and keeps the faded world behind menus without
 darkening their colours. Translucent menus and HUD sprite bounds are handled

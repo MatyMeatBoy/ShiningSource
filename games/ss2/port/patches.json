@@ -260,6 +260,26 @@
    "why": "Online: the receiver tasks start together when a session's message tasks are started; what the tasks of an earlier session left in the two lists above (a task can be stopped in the middle of a message) is cleared.",
    "find": "    myId = sub_080020F4();\n    {\n        u8 *p = sub_08002118(myId);",
    "replace": "    ss_net_acting = 0;\n    ss_spawn_waiting = 0;\n    myId = sub_080020F4();\n    {\n        u8 *p = sub_08002118(myId);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: declaration for accepted remote presentation events.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern void ss_remote_sfx_event(int);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: one generic impact for a positive accepted peer hit on an active matching enemy. The high damage bit is not a critical cue. Own echoes and unknown IDs stay silent.",
+   "find": "                            gRxEnts[i].f58 = peer;",
+   "replace": "                            if ((*(u16 *)(hit + 4) & 0x7FFF) != 0)\n                                ss_remote_sfx_event(0x1A);\n                            gRxEnts[i].f58 = peer;"
+  },
+  {
+   "why": "Restored Multiplayer Audio: the explicit A1 critical marker carries the matching critical cue, excluding the sender echo.",
+   "find": "                    gRxEnts[i].f1FC.b1 |= 2;",
+   "replace": "                    if (peer != myId) ss_remote_sfx_event(0x132);\n                    gRxEnts[i].f1FC.b1 |= 2;"
+  },
+  {
+   "why": "Restored Multiplayer Audio: accepted remote breakable-object damage uses the original material cue 29/2A/2B. HP slot is object+10, resource pointer is slot+10. Skip zero damage, dead states, absent records and unknown materials.",
+   "find": "                        if (state != 0xC) {\n                            gRxGs->slot[src->target].hp -= src->amount;",
+   "replace": "                        if (state != 0xC) {\n                            if (src->amount != 0 && src->target < *(u32 *)(gRxGameState + 0x48)) {\n                                const u8 *record = *(const u8 **)((u8 *)&gRxGs->slot[src->target] + 0x10);\n                                if (record != 0 && record[7] <= 2) ss_remote_sfx_event(record[7] + 0x29);\n                            }\n                            gRxGs->slot[src->target].hp -= src->amount;"
   }
  ],
  "code_08067B4C.c": [
@@ -336,7 +356,7 @@
   {
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
    "find": "#include \"global.h\"",
-   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);\nextern int ss_remote_sfx_bow_allowed(int, int);"
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);\nextern int ss_remote_sfx_bow_allowed(int, int);\nextern void ss_remote_sfx_event(int);"
   },
   {
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): normal-attack sounds use the existing per-actor action/animation transition gate, so repeating a network record does not replay an attack. Preserve the class-specific song sequence.",
@@ -352,6 +372,16 @@
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): bow release follows the original animation-phase test. Remote release waits while the animation clock is frozen, preventing repeated sounds at phase zero; local timing is unchanged.",
    "find": "} else if (((struct PlayerD368 *)arg0)->f20 == 0xD) {\n\n                } else if (((struct PlayerD368 *)arg0)->f10 != 4) {",
    "replace": "} else if (!ss_remote_sfx_bow_allowed((((struct PlayerD368 *)arg0)->f20 != 0xD), !(0x200 & M2C_FIELD(d368_gUnk_03005CF4, u16 *, 4)))) {\n\n                } else if (((struct PlayerD368 *)arg0)->f10 != 4) {"
+  },
+  {
+   "why": "Restored Multiplayer Audio: companion hurt voice at the existing action/animation transition only. State13 excludes the local actor; repeated records do not replay the cue. Preserve class8 voice mapping.",
+   "find": "                    temp_r0_151 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x10;",
+   "replace": "                    if (((struct PlayerD368 *)arg0)->f20 == 0xD)\n                        ss_remote_sfx_event(((struct PlayerD368 *)arg0)->fC == 8 ? 0x4B : ((struct PlayerD368 *)arg0)->fC + 0x45);\n                    temp_r0_151 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x10;"
+  },
+  {
+   "why": "Restored Multiplayer Audio: companion death voice at the existing action/animation transition only. State13 excludes the local actor; repeated records do not replay the cue. Preserve class8 voice mapping.",
+   "find": "                    temp_r0_155 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x18;",
+   "replace": "                    if (((struct PlayerD368 *)arg0)->f20 == 0xD)\n                        ss_remote_sfx_event(((struct PlayerD368 *)arg0)->fC == 8 ? 0x53 : ((struct PlayerD368 *)arg0)->fC + 0x4D);\n                    temp_r0_155 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x18;"
   }
  ],
  "code_08073E2C.c": [
@@ -398,6 +428,128 @@
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): thrown-item trajectory sound at its one initial call, before flight/bounce simulation.",
    "find": "if (player->state != 0xD && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);",
    "replace": "if (ss_remote_sfx_allowed(player->state != 0xD) && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);"
+  }
+ ],
+ "code_08068670.c": [
+  {
+   "why": "Restored Multiplayer Audio: audio-only policy for replicated ability tasks; ownership and gameplay gates remain unchanged.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);\nextern void ss_remote_sfx_event(int);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if((local==player || player>3) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x10E);",
+   "replace": "    if(ss_remote_sfx_allowed((local==player || player>3)) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x10E);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if((local==player || player>3) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x115);",
+   "replace": "    if(ss_remote_sfx_allowed((local==player || player>3)) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x115);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if(sub_080020F4()==player && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(0x169);",
+   "replace": "    if(ss_remote_sfx_allowed(sub_080020F4()==player) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(0x169);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if(sub_080020F4()==player && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x147);",
+   "replace": "    if(ss_remote_sfx_allowed(sub_080020F4()==player) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x147);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "        if((local==player || player>3) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);",
+   "replace": "        if(ss_remote_sfx_allowed((local==player || player>3)) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "                    y073Coords(((u16 *)q->sprite)[0]>>4,(u32)(((u16 *)q->sprite)[1]<<20)>>20,&dx,&dy,0x30,0);\n                    shade=sub_0800BC44(x>>8,y>>8,0);\n                    if(delay[i]==0) {\n                        if(frame[i]==1 && phase[i]==0 && (local==player || player>3) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);\n                        if(y073Animate(&sprite,level,&frame[i],(s16 *)&phase[i],0)!=0) {\n                            done=(u16)(done+1);\n                            delay[i]=0xF0;",
+   "replace": "                    y073Coords(((u16 *)q->sprite)[0]>>4,(u32)(((u16 *)q->sprite)[1]<<20)>>20,&dx,&dy,0x30,0);\n                    shade=sub_0800BC44(x>>8,y>>8,0);\n                    if(delay[i]==0) {\n                        if(frame[i]==1 && phase[i]==0 && ss_remote_sfx_allowed((local==player || player>3)) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);\n                        if(y073Animate(&sprite,level,&frame[i],(s16 *)&phase[i],0)!=0) {\n                            done=(u16)(done+1);\n                            delay[i]=0xF0;"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "                        if(frame[i]==1 && phase[i]==0 && (local==player || player>3) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);",
+   "replace": "                        if(frame[i]==1 && phase[i]==0 && ss_remote_sfx_allowed((local==player || player>3)) && sub_0800CCCC()==0 && sub_0800CD34()==0) sub_0805865C(level+0x11C);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "        if (sub_080020F4() == player && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n            sub_0805865C(level + 0x123);",
+   "replace": "        if (ss_remote_sfx_allowed(sub_080020F4() == player) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n            sub_0805865C(level + 0x123);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if (local == player && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x155);",
+   "replace": "    if (ss_remote_sfx_allowed(local == player) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x155);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if (local == player && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x166);",
+   "replace": "    if (ss_remote_sfx_allowed(local == player) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x166);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if (local == player && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x168);",
+   "replace": "    if (ss_remote_sfx_allowed(local == player) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x168);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((local == player || player > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x167);",
+   "replace": "    if (ss_remote_sfx_allowed((local == player || player > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(0x167);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((local == player || player > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(level + 0x140);",
+   "replace": "    if (ss_remote_sfx_allowed((local == player || player > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0) sub_0805865C(level + 0x140);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((local == player || player > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x140);",
+   "replace": "    if (ss_remote_sfx_allowed((local == player || player > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x140);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((sub_080020F4() == player || player > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(tmo + 0x14E);",
+   "replace": "    if (ss_remote_sfx_allowed((sub_080020F4() == player || player > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(tmo + 0x14E);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((myId == owner || owner > 3) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n        t6f_sub_0805865C(arg0->level + 0x15C);",
+   "replace": "    if (ss_remote_sfx_allowed((myId == owner || owner > 3)) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n        t6f_sub_0805865C(arg0->level + 0x15C);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "        if ((myId == owner || owner > 3) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n            t6f_sub_0805865C(arg0->level + 0x15C);",
+   "replace": "        if (ss_remote_sfx_allowed((myId == owner || owner > 3)) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n            t6f_sub_0805865C(arg0->level + 0x15C);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((t6f_sub_080020F4() == owner || owner > 3) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n        t6f_sub_0805865C(level + 0x139);",
+   "replace": "    if (ss_remote_sfx_allowed((t6f_sub_080020F4() == owner || owner > 3)) && t6f_sub_0800CCCC() == 0 && t6f_sub_0800CD34() == 0)\n        t6f_sub_0805865C(level + 0x139);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((myId == owner || owner > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16A);",
+   "replace": "    if (ss_remote_sfx_allowed((myId == owner || owner > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16A);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((myId == owner || owner > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16B);",
+   "replace": "    if (ss_remote_sfx_allowed((myId == owner || owner > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16B);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: replicate this ability cue under the existing option, retaining its phase, scene and coroutine gates.",
+   "find": "    if ((self == owner || owner > 3) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16C);",
+   "replace": "    if (ss_remote_sfx_allowed((self == owner || owner > 3)) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x16C);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: shield/buff cue follows the original readiness wait; effect writes remain local-only.",
+   "find": "    if (local == player) {\n        if (sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n            sub_0805865C(0x2D);\n        e =",
+   "replace": "    if (ss_remote_sfx_allowed(local == player) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(0x2D);\n    if (local == player) {\n        e ="
+  },
+  {
+   "why": "Restored Multiplayer Audio: remote buff activation from its existing action transition; local cost and buff installation unchanged.",
+   "find": "    case 6:\n        if (who == sub_080020F4()) {",
+   "replace": "    case 6:\n        if (who != sub_080020F4()) ss_remote_sfx_event(0x165);\n        if (who == sub_080020F4()) {"
   }
  ]
 }

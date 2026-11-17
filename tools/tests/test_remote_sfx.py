@@ -115,9 +115,9 @@ static void charged_start(int local) {
     player.f20 = local ? 0 : 13;
 @CHARGED@
 }
-static int sub_0800CCCC(void) { return world; }
-static int sub_0800CD34(void) { return map; }
-static void sub_0805865C(int song) { d368_sub_0805865C(song); }
+int sub_0800CCCC(void) { return world; }
+int sub_0800CD34(void) { return map; }
+void sub_0805865C(int song) { d368_sub_0805865C(song); }
 static void extra_task_start(int kind, int local, int n) {
     struct { int state; } actor = { local ? 0 : 13 };
     void *unused = 0;
@@ -364,6 +364,9 @@ int guarded_fprintf(FILE *file, const char *format, ...) {
     return 0;
 }
 int ss_net_active(void) { return 1; }
+int sub_0800CCCC(void) { return 0; }
+int sub_0800CD34(void) { return 0; }
+void sub_0805865C(int song) { if (callback_active) host_calls++; }
 int main(void) {
     int selected;
     callback_active = 1;

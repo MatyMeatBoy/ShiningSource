@@ -81,7 +81,7 @@ def main():
             assert 'frame 27000' in log and 'crash:' not in log
             counts.append(dict(collections.Counter(int(song, 16) for frame, song in re.findall(
                 r'm4a call (\d+) m4aSongNumStart ([0-9A-F]+)', log)
-                if 23400 <= int(frame) < 24000)))
+                if 23400 <= int(frame) < 26300)))
             blocks.append({int(a): (b, c) for a, b, c in
                            (row.split() for row in (folder / 'net.log').read_text().splitlines())})
         common = blocks[0].keys() & blocks[1].keys()
@@ -92,10 +92,14 @@ def main():
     # Require a positive control; a lobby-only run with no attacks must not pass.
     before = sum(peer.get(0x14, 0) for peer in results[0]['cue_counts'])
     after = sum(peer.get(0x14, 0) for peer in results[1]['cue_counts'])
-    receipt = dict(runs=results, weapon_cue='0x14', disabled_calls=before, enabled_calls=after)
+    hits_before = sum(peer.get(0x1A, 0) for peer in results[0]['cue_counts'])
+    hits_after = sum(peer.get(0x1A, 0) for peer in results[1]['cue_counts'])
+    receipt = dict(runs=results, weapon_cue='0x14', disabled_calls=before, enabled_calls=after,
+                   impact_cue='0x1A', disabled_impacts=hits_before, enabled_impacts=hits_after)
     (args.out / 'result.json').write_text(json.dumps(receipt, indent=2) + '\n')
     assert before > 0 and after > before, receipt
-    print('PASS: weapon cue0x14 calls off=%d on=%d; shared blocks match in both sessions' % (before, after))
+    assert hits_before > 0 and hits_after > hits_before, receipt
+    print('PASS: weapon cue0x14 off=%d on=%d; impact cue0x1A off=%d on=%d; shared blocks match' % (before, after, hits_before, hits_after))
 
 
 if __name__ == '__main__':
