@@ -48,6 +48,10 @@ class ReportServer(ThreadingHTTPServer):
             with self.storage_lock:
                 self.prune()
 
+    def handle_error(self, request, address):
+        # socketserver's default traceback includes the remote address.
+        print('report request interrupted', flush=True)
+
     def process_request(self, request, address):
         if not self.slots.acquire(blocking=False):
             self.shutdown_request(request)
