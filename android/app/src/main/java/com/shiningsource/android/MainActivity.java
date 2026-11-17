@@ -72,6 +72,9 @@ public class MainActivity extends Activity {
     private String note;                        // what the last ROM job has to say
     private boolean noteIsError;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();     // ROM jobs, one at a time
+    private static final ExecutorService REPORT_WORKER = Executors.newSingleThreadExecutor();
+    private static final java.util.concurrent.atomic.AtomicBoolean REPORT_SCHEDULED = new java.util.concurrent.atomic.AtomicBoolean();
+    private CrashUpload crashUpload;
     private TextView romStatus, romNote, romHelp, playHint, gameNote;
     private Button choose, play;
     private CheckBox online;
@@ -100,6 +103,8 @@ public class MainActivity extends Activity {
         alive = true;
         spanish = Locale.getDefault().getLanguage().equals("es");
         SharedPreferences saved = getPreferences(MODE_PRIVATE);
+        crashUpload = new CrashUpload(getFilesDir());
+        crashUpload.setEnabled(saved.getBoolean("automatic_reports", true));
         int pad = (int) (16 * getResources().getDisplayMetrics().density);
 
         LinearLayout page = new LinearLayout(this);
@@ -153,6 +158,20 @@ public class MainActivity extends Activity {
         server = field(text("Server", "Servidor"), saved.getString("server", DEFAULT_SERVER), false, page);
         page.addView(label(text("The first to enter a room is the host. In the game choose MULTIPLAYER MODE.",
                                 "El primero en entrar a una sala es el anfitrión. En el juego elige MULTIPLAYER MODE.")));
+        CheckBox automaticReports = new CheckBox(this);
+        automaticReports.setText(text("Automatic crash reports", "Informes automáticos de errores"));
+        automaticReports.setTextColor(Color.WHITE);
+        automaticReports.setChecked(saved.getBoolean("automatic_reports", true));
+        automaticReports.setOnCheckedChangeListener((button, checked) -> {
+            getPreferences(MODE_PRIVATE).edit().putBoolean("automatic_reports", checked).commit();
+            crashUpload.setEnabled(checked);
+            if (checked) { captureCrashReport(); uploadPendingReport(); }
+        });
+        page.addView(automaticReports);
+        page.addView(label(text("On return, send device/version and a short error log to ShiningSource's HTTPS service, without ROMs, saves or room/address/path details. Turning this off deletes pending reports.",
+            "Al volver, envía dispositivo/versión y un registro breve al servicio HTTPS de ShiningSource, sin ROM, partidas ni detalles de sala/dirección/ruta. Desactivarlo borra los informes pendientes.")));
+        if (reportEndpoint().isEmpty()) page.addView(label(text("Reports stay on this device until the HTTPS report service is configured.",
+            "Los informes quedan en este dispositivo hasta configurar el servicio HTTPS.")));
 
         // Play stays at the bottom of the screen, whatever the length of the page above it
         LinearLayout foot = new LinearLayout(this);
@@ -190,6 +209,9 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         look(true);             // also after the user went to copy the file and came back
+        AndroidExitInfo.capture(this, folder());
+        captureCrashReport();
+        uploadPendingReport();
         showGameLog();
     }
 
@@ -643,7 +665,11 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             // the game then starts offline with its defaults
         }
-        DiagnosticReport.stage(getFilesDir(), "launch_requested", "");
+        boolean existingGame = AndroidExitInfo.gamePid(this) > 0;
+        AndroidExitInfo.capture(this, folder);
+        captureCrashReport();          // Durable outbox before native startup can replace the old log.
+        AndroidExitInfo.beforePlay(this, folder);
+        if (!existingGame) DiagnosticReport.stage(getFilesDir(), "launch_requested", "");
         set(gameNote, "");
         Log.i(TAG, "starting the game with " + new File(folder, "rom.gba"));
         try {
@@ -654,18 +680,49 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void shareReport() {
+    private String reportDevice() {
         String version = "unknown";
         try { version = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; }
         catch (PackageManager.NameNotFoundException ignored) { }
-        String device = "App: " + getPackageName() + " " + version
+        return "App: " + getPackageName() + " " + version
             + "\nDevice: " + Build.MANUFACTURER + " " + Build.MODEL
             + "\nAndroid: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")"
             + "\nABIs: " + android.text.TextUtils.join(", ", Build.SUPPORTED_ABIS);
+    }
+
+    private String reportEndpoint() {
+        int resource = getResources().getIdentifier("crash_report_endpoint", "string", getPackageName());
+        return resource == 0 ? "" : getString(resource).trim();
+    }
+
+    private void captureCrashReport() {
+        if (!getPreferences(MODE_PRIVATE).getBoolean("automatic_reports", true) || !AndroidExitInfo.gameAbsent(this)) return;
+        File external = folder();
+        File log = external == null ? null : new File(external, "shiningsource.log");
+        String startup = DiagnosticReport.tail(DiagnosticReport.statusFile(getFilesDir()), DiagnosticReport.STATUS_BYTES);
+        if (DiagnosticReport.shouldQueue(DiagnosticReport.tail(log, DiagnosticReport.LOG_BYTES), startup,
+            log == null ? 0 : log.lastModified()))
+            crashUpload.capture(DiagnosticReport.createCurrent(reportDevice(), getFilesDir(), external));
+    }
+
+    private void uploadPendingReport() {
+        String endpoint = reportEndpoint();
+        if (endpoint.isEmpty() || !getPreferences(MODE_PRIVATE).getBoolean("automatic_reports", true)
+            || !REPORT_SCHEDULED.compareAndSet(false, true)) return;
+        final CrashUpload outbox = crashUpload;
+        REPORT_WORKER.execute(() -> {
+            try { outbox.uploadOne(endpoint, CrashUpload::post); }
+            finally { REPORT_SCHEDULED.set(false); }
+        });
+    }
+
+    private void shareReport() {
+        AndroidExitInfo.capture(this, folder());
+        captureCrashReport();
         Intent send = new Intent(Intent.ACTION_SEND);
         send.setType("text/plain");
         send.putExtra(Intent.EXTRA_SUBJECT, "ShiningSource report");
-        send.putExtra(Intent.EXTRA_TEXT, DiagnosticReport.create(device, getFilesDir(), folder()));
+        send.putExtra(Intent.EXTRA_TEXT, DiagnosticReport.create(reportDevice(), getFilesDir(), folder()));
         try { startActivity(Intent.createChooser(send, text("Share report", "Compartir informe"))); }
         catch (RuntimeException unavailable) {
             set(gameNote, text("No app is available to share the report.", "No hay una app para compartir el informe."));

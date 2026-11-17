@@ -44,14 +44,14 @@ final class DiagnosticReport {
         String first = startup.split("\n", 2)[0];
         if (first.endsWith(" startup_error"))
             return clip(startup.substring(Math.min(startup.length(), first.length() + 1)).trim(), 2048);
-        if (!first.endsWith(" native_enter") && !first.endsWith(" native_return")) return "";
+        if (!hasProcessStage(first)) return "";
         long attempt = attemptTime(startup);
         // Some storage providers round file modification times to whole seconds.
         if (attempt > 0 && logModified < attempt - 1000) return "";
         String failure = "";
         for (String line : log.split("\n")) {
             line = line.trim();
-            if (line.startsWith("crash:") || line.startsWith("startup failure:")) failure = line;
+            if (line.startsWith("crash:") || line.startsWith("startup failure:") || line.startsWith("process error:")) failure = line;
             else if (line.startsWith("host64: exit code ")) {
                 try {
                     int code = Integer.parseInt(line.substring("host64: exit code ".length()).trim());
@@ -61,10 +61,38 @@ final class DiagnosticReport {
         }
         return clip(failure, 2048);
     }
-    static String create(String device, File internal, File external) {
+    private static boolean hasProcessStage(String first) {
+        return first.endsWith(" native_enter") || first.endsWith(" native_return")
+            || first.endsWith(" loading_libraries") || first.endsWith(" libraries_loaded");
+    }
+    static boolean shouldQueue(String log, String startup, long logModified) {
+        if (!failure(log, startup, logModified).isEmpty()) return true;
+        if (!hasProcessStage(startup.split("\n", 2)[0])) return false;
+        long attempt = attemptTime(startup);
+        if (attempt > 0 && logModified < attempt - 1000) return false;
+        java.util.regex.Matcher reason = java.util.regex.Pattern.compile(
+            "(?m)^os-exit: Android process exit reason=([0-9]+) .*? status=(-?[0-9]+) ").matcher(log);
+        boolean queue = false;
+        while (reason.find()) {
+            try {
+                int code = Integer.parseInt(reason.group(1)), status = Integer.parseInt(reason.group(2));
+                queue = code != 10 && code != 11 && !(code == 1 && status == 0);
+            } catch (NumberFormatException malformed) { }
+        }
+        return queue;
+    }
+    static String createCurrent(String device, File internal, File external) {
         return clip("ShiningSource report\n" + clip(device, 2000)
             + "\n--- Java startup ---\n" + tail(statusFile(internal), STATUS_BYTES)
             + "\n--- Native log (tail) ---\n"
             + tail(external == null ? null : new File(external, "shiningsource.log"), LOG_BYTES), MAX_CHARS);
+    }
+    static String create(String device, File internal, File external) {
+        return clip("ShiningSource report\n" + clip(device, 2000)
+            + "\n--- Java startup ---\n" + tail(statusFile(internal), STATUS_BYTES)
+            + "\n--- Native log (tail) ---\n"
+            + tail(external == null ? null : new File(external, "shiningsource.log"), 17000)
+            + "\n--- Previous session (tail) ---\n"
+            + tail(external == null ? null : new File(external, "shiningsource.previous.log"), 7000), MAX_CHARS);
     }
 }

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Configure only after the owned HTTPS service accepts idempotent X-Report-ID POSTs. -->
+    <string name="crash_report_endpoint" translatable="false">https://animaciones-evi-shiningsource-reports.iu0lfs.easypanel.host/v1/crash-reports</string>
+</resources>

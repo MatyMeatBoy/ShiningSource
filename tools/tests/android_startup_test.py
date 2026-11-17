@@ -145,6 +145,7 @@ def main():
                     ui = launcher_ui()
                 online = [node for node in ET.fromstring(ui).iter('node')
                           if node.get('class') == 'android.widget.CheckBox'
+                          and node.get('text', '').startswith(('Play online', 'Jugar en línea'))
                           and node.get('checked') == 'true']
                 if online:
                     left, top, right, bottom = map(int, re.findall(r'\d+', online[0].get('bounds')))

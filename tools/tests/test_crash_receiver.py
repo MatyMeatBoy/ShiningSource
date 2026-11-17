@@ -1,5 +1,7 @@
 import hashlib
 import importlib.util
+import contextlib
+import io
 import os
 from pathlib import Path
 import socket
@@ -109,8 +111,10 @@ class CrashReceiverTests(unittest.TestCase):
                    b'X-Report-ID: ' + b'a' * 64 + b'\r\n\r\n')
         for initial in (b'POST /v1/crash-reports HTTP/1.0\r\nX-Trickle: ', headers):
             with self.subTest(phase='body' if initial == headers else 'headers'):
+                interrupted_output = io.StringIO()
                 with mock.patch.object(receiver.threading, 'Timer', side_effect=quick_deadline), \
-                     mock.patch.object(self.server, 'handle_error'):
+                     contextlib.redirect_stderr(interrupted_output), \
+                     contextlib.redirect_stdout(interrupted_output):
                     with socket.create_connection(self.server.server_address, timeout=1) as client:
                         client.settimeout(.04)
                         client.sendall(initial)
@@ -136,6 +140,8 @@ class CrashReceiverTests(unittest.TestCase):
                     finally:
                         for _ in range(recovered):
                             self.server.slots.release()
+                self.assertNotIn('127.0.0.1', interrupted_output.getvalue())
+                self.assertNotIn('Traceback', interrupted_output.getvalue())
         # Workers must return their slots after expiry; health remains available.
         with request.urlopen(self.url.replace('/v1/crash-reports', '/health'), timeout=2) as response:
             self.assertEqual(response.status, 200)

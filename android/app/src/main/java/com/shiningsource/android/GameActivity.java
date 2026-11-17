@@ -14,24 +14,24 @@ import org.libsdl.app.SDLActivity;
 public class GameActivity extends SDLActivity {
     @Override
     public void loadLibraries() {
-        DiagnosticReport.stage(getFilesDir(), "loading_libraries", "");
+        DiagnosticReport.stage(getFilesDir(), "loading_libraries", "pid=" + android.os.Process.myPid());
         try {
             super.loadLibraries();
-            DiagnosticReport.stage(getFilesDir(), "libraries_loaded", "");
+            DiagnosticReport.stage(getFilesDir(), "libraries_loaded", "pid=" + android.os.Process.myPid());
         } catch (RuntimeException | Error failure) {
-            DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
+            DiagnosticReport.stage(getFilesDir(), "startup_error", "pid=" + android.os.Process.myPid() + "\n" + failure.toString());
             throw failure; // SDL retains its normal error dialog and cleanup.
         }
     }
 
     @Override
     protected void main() {
-        DiagnosticReport.stage(getFilesDir(), "native_enter", "");
+        DiagnosticReport.stage(getFilesDir(), "native_enter", "pid=" + android.os.Process.myPid());
         try {
             super.main();
-            DiagnosticReport.stage(getFilesDir(), "native_return", "");
+            DiagnosticReport.stage(getFilesDir(), "native_return", "pid=" + android.os.Process.myPid());
         } catch (RuntimeException | Error failure) {
-            DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
+            DiagnosticReport.stage(getFilesDir(), "startup_error", "pid=" + android.os.Process.myPid() + "\n" + failure.toString());
             throw failure;
         }
     }
