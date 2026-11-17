@@ -1,0 +1,8 @@
+FROM python:3.12-alpine
+RUN addgroup -g 10001 reports && adduser -D -u 10001 -G reports reports \
+    && mkdir -p /data/reports && chown -R reports:reports /data
+COPY relay/crash_reports.py /app/crash_reports.py
+USER reports
+EXPOSE 8080
+VOLUME ["/data/reports"]
+CMD ["python", "-B", "/app/crash_reports.py", "--bind", "0.0.0.0"]
