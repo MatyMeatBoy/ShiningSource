@@ -254,7 +254,7 @@ static int configure(void)
         /* Players only meet if they run the same game and the same rules: the room is the name together with
          * the cartridge's contents and the version of this protocol. Another version of the port or another
          * ROM lands in another room instead of producing a session that drifts apart. */
-        static const uint32_t rules = 6;        /* raise when the transport or anything the players must agree on changes */
+        static const uint32_t rules = 7;        /* canonical scene callback IDs; never mix native-pointer peers */
         uint32_t fingerprint = ss_rom_fingerprint();
         uint8_t identity[4] = {
             (uint8_t)fingerprint, (uint8_t)(fingerprint >> 8),
@@ -1233,8 +1233,15 @@ void ss_net_msg_passed(unsigned seats)
 /* One whole message of this player, for everybody. 0 if there is no room: the caller tries again next frame. */
 int ss_net_msg_send(const void *data, int size)
 {
+    uint8_t encoded[MSG_BYTES];
     if (configured != 1 || !synced || seat < 0 || size < 1 || size > MSG_BYTES || !msg_room())
         return 0;
+    memcpy(encoded, data, (size_t)size);
+    if (!ss_net_code_message(encoded, size, 0)) {
+        net_say("net: incompatible outgoing scene callback (tag %02X); session stopped safely\n", encoded[0]);
+        exit(86);
+    }
+    data = encoded; /* queues and relay history contain only portable IDs */
     if (join_mode && ((const uint8_t *)data)[0] == 0x84) {
         if (join_role != JR_NONE && join_role != JR_LIVE) {
             /* A newcomer's game before it is let in: the barrier tokens of its session's start are for nobody
@@ -1344,6 +1351,10 @@ int ss_net_msg_next(int *who, void *data, int capacity)
     if (size > capacity)
         size = capacity;
     memcpy(data, message, (size_t)size);
+    if (!ss_net_code_message(data, size, 1)) {
+        net_say("net: incompatible incoming scene callback (tag %02X); session stopped safely\n", message[0]);
+        exit(86);
+    }
     if (seat == 0)
         out_own++;
     else

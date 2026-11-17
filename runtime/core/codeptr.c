@@ -47,6 +47,31 @@ static void (*lookup(uint32_t value))(void)
     return 0;
 }
 
+/* Network callbacks use the original cartridge entry as their stable ID.
+ * Native addresses belong only to this image/architecture/placement. */
+int ss_code_encode(uint32_t native, uint32_t *gba)
+{
+    unsigned i;
+    if (!gba || !native)
+        return 0;
+    for (i = 0; i < ss_code_count; i++) {
+        if ((uint32_t)(uintptr_t)ss_code_table[i].native == native) {
+            *gba = ss_code_table[i].gba; /* table order gives aliases a stable ID */
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int ss_code_decode(uint32_t gba, uint32_t *native)
+{
+    void (*function)(void);
+    if (!native || !(function = lookup(gba)))
+        return 0;
+    *native = (uint32_t)(uintptr_t)function;
+    return 1;
+}
+
 unsigned ss_patch_code_pointers(void)
 {
     unsigned range, patched = 0;

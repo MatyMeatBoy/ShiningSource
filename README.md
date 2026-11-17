@@ -46,6 +46,10 @@ armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`,
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+**0.8.10** fixes portable multiplayer scene callbacks between Windows, Android
+and Linux. **Everyone in the room must update to 0.8.10** (online rules 7).
+See [release notes](docs/RELEASE_0.8.10.md).
+
 **0.8.9** adds companion combat sounds under **Experimental: remote sounds**,
 on by default, and fixes menu font access on rebased hosts. See the
 [release notes](docs/RELEASE_0.8.9.md) and [verification](docs/ANDROID_0.8.9_VERIFICATION.md).

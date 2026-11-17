@@ -187,6 +187,9 @@ void ss_audio_report(void);
 unsigned ss_patch_code_pointers(void);
 /* Fixed-seed FNV-1a of the original 16 MiB ROM, cached before native pointer patching. */
 uint32_t ss_rom_fingerprint(void);
+int ss_code_encode(uint32_t native, uint32_t *gba);
+int ss_code_decode(uint32_t gba, uint32_t *native);
+int ss_net_code_message(void *message, int size, int receiving);
 
 /* Absorb a memory access the console would have ignored (see stray.c). `context` is the CPU context of the fault. */
 int ss_stray_access(void *context, uint32_t address, int is_write);
