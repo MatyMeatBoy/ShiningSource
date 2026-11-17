@@ -2,6 +2,16 @@
 
 Fecha: 2026-11-16. Informe técnico de la actualización ShiningSource 0.8.8.
 
+Seguimiento: el usuario confirmó conexión Android/Windows con0.8.8, sin aportar
+modelo/ABI/duración. [0.8.9](https://github.com/MatyMeatBoy/ShiningSource/releases/tag/v0.8.9)
+añade audio experimental de combate de compañeros y fija los fallos detectados
+en el menú durante esa implementación. La [verificación](ANDROID_0.8.9_VERIFICATION.md)
+distingue fixtures, llamadas al motor y pruebas de pantalla de audición física.
+Las lecciones nuevas de audio por actor, deduplicación, callbacks sin reentrada
+y recursos de UI en hosts rebased están añadidas a
+[ReKHCoM PR648](https://github.com/MatyMeatBoy/ReKHCoM/pull/648) y
+[GBANoCable PR2](https://github.com/MatyMeatBoy/GBANoCable/pull/2), ambos abiertos.
+
 Enviado de vuelta como [ReKHCoM #647](https://github.com/MatyMeatBoy/ReKHCoM/issues/647)
 después de publicar la versión y verificar por descarga los cuatro paquetes.
 

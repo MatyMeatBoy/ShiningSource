@@ -26,7 +26,7 @@ existing host/guest option bridge, Python/compiled-C regression fixtures.
 - [x] Build Windows and Android; verify offline reference hash/audio, real
   multiplayer SFX traces and unchanged shared blocks, menu persistence and ABI
   linkage. Prepare the next testable patch version with honest limits.
-- [ ] Update documentation and the ReKHCoM/GBANoCable handoffs: distinguish the
+- [x] Update documentation and the ReKHCoM/GBANoCable handoffs: distinguish the
   user's confirmed Android/Windows connection from local automation and from
   this newly reported audio defect. Publish reviewable documentary PRs.
 
@@ -43,3 +43,9 @@ the reproductions. Thirty Python tests pass. Windows and Android ARMv7/ARM64
 canonical replay retains reference hash/audio; ARMv7/ARM64 rendered menus and
 setting persistence pass. Two27000-frame Windows sessions show cue0x14 calls
 8→18 with26509 matching labels each. Linux is rebuilt, not newly runtime-tested.
+
+Published v0.8.9 from316a6bf691e9e905d9405f103497cded240f1035; downloaded
+and verified all four platform assets against local/published checksums.
+ReKHCoM PR648 updated at9a4076efcdd1d888debb984265c3a5e56f7ed3f2 and
+GBANoCable PR2 atb62ea9b4a61a5287f2fd628fa4879624ca621ac5. Both remain open
+documentation PRs; no foreign runtime/main changes or merges were performed.
