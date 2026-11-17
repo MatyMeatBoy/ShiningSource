@@ -175,7 +175,8 @@ Online ships on Windows, Linux and Android first.
   SHA-1, settings file, controller probing and remapping, languages `en`/`es`
   first, online lobby). It is also the first screen on Android.
 - Achievements: rcheevos, with the same policy as ReKHCoM (the port must say
-  honestly what it is to the service; local port achievements are separate).
+  honestly what it is to the service). Local progress uses the official RA
+  definitions and badges, with no custom achievements.
 - Saves: the cartridge's own save format in a file, so saves move between this
   port, emulators and the cartridge.
 

@@ -320,8 +320,7 @@ Open:
             the account's set through rcheevos' client, unlocks submitted
             softcore. Always: a local evaluation that needs no account, of the
             set the site once answered (`ra_set_<hash>.json`, kept with the
-            badge images whenever a signed-in launcher or game receives it) and
-            of the port's own list of twelve (`port_list.h`), written to
+            badge images whenever a signed-in launcher or game receives it), written to
             `local_record.txt`. Notices over the top of the picture with the
             achievement's badge. Checked with a pretend server
             (`SS_RA_TEST_SERVER`); **not checked with a real account**: whether

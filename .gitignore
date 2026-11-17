@@ -11,3 +11,5 @@ shiningsource.sav
 shiningsource.ini
 *.png
 !docs/img/*.png
+
+!assets/achievements/*.png

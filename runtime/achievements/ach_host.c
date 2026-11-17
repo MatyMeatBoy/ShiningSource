@@ -12,8 +12,7 @@
  * The local evaluation (every run). It needs no account and no connection:
  *   - the RetroAchievements set as the site once answered it, if ra_set_<hash>.json is in SS_RA_DIR (the wrapper
  *     keeps it, with the badge images, whenever a signed-in launcher or game receives it), evaluated by
- *     rcheevos' runtime alone;
- *   - the port's own short list (port_list.h), whose conditions are the C predicates below.
+ *     rcheevos' runtime alone.
  * Unlocks are appended to a record in SS_RA_DIR, "id <tab> unix time <tab> title" per line: local_record.txt in
  * a normal run, rebel_record.txt in a Rebel run (started with cheats, core/rebel.c). Nothing of a record is
  * ever sent anywhere: RetroAchievements takes unlocks only as they happen in a signed-in session.
@@ -24,7 +23,7 @@
  *   SS_RA_DIR                the launcher's folder. Not set: nothing is evaluated.
  *   SS_LANG=es               notices in Spanish.
  *   SS_RA_TEST_NOTICE=text   tests: show this as an unlocked achievement two seconds into the run, with the
- *                            image SS_RA_TEST_ICON (a PNG file, or "port" for one of the port's jewels) if given.
+ *                            image SS_RA_TEST_ICON (a PNG file) if given.
  *   SS_RA_TEST_SERVER=dir    tests: no connection; every request is answered at once from <dir>/<request>.json
  *                            (login2, achievementsets, startsession, awardachievement, unlocks, ping; an image
  *                            from <dir>/badge.png) and noted in <dir>/requests.log. SS_RA_TEST_LOGIN=1 signs in
@@ -34,7 +33,7 @@
  * account's set is evaluated and shown, and nothing is submitted.
  */
 #include "ach_host.h"
-#include "port_list.h"
+#include "record.h"
 #include "ra_client.h"
 #include "rc_api_runtime.h"
 #include "rc_consoles.h"
@@ -53,8 +52,9 @@ static wchar_t folder[900];             /* SS_RA_DIR */
 static char folder_utf8[2048];
 static const uint8_t *rom_bytes;
 static size_t rom_size;
+static char local_hash[33];
 static int active, rebel_run, spanish, announced, was_online;
-static unsigned long frames, online_frames;
+static unsigned long frames;
 
 static const char *say(const char *english, const char *spanish_text)
 {
@@ -98,7 +98,7 @@ static uint32_t read_memory(uint32_t address, uint8_t *out, uint32_t size, void 
 /* ---- icons ----
  * A RetroAchievements badge is a PNG the wrapper keeps in SS_RA_DIR; SDL's own PNG loader reads it (SDL 3.4,
  * which is why this is here and not in the shared window code: other platforms may build with an older SDL).
- * The port's achievements get a jewel drawn here. Both end as a square of ARGB pixels for ss_plat_notice. */
+ * The image becomes a square of ARGB pixels for ss_plat_notice. */
 static uint32_t icon_pixels[128 * 128];
 
 static int icon_from_png(const char *utf8_path)
@@ -130,28 +130,6 @@ static int icon_of_badge(const char *badge_name)
         return 0;
     snprintf(path, sizeof path, "%s\\badge_%s.png", folder_utf8, badge_name);
     return icon_from_png(path);
-}
-
-/* A jewel of the given colour: a diamond with a light upper-left face, a dark lower-right one and a gold rim. */
-static int icon_of_port(const struct ss_port_achievement *a)
-{
-    enum { SIZE = 32 };
-    int x, y;
-    for (y = 0; y < SIZE; y++)
-        for (x = 0; x < SIZE; x++) {
-            int dx = x - SIZE / 2, dy = y - SIZE / 2, d = (dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy);
-            int shade = d >= 14 ? 0 : 100 - (dx + dy) * 3;         /* percent of the colour */
-            uint32_t r = a->red * shade / 100, g = a->green * shade / 100, b = a->blue * shade / 100;
-            if (d > 15)
-                icon_pixels[y * SIZE + x] = 0;
-            else if (d >= 14)
-                icon_pixels[y * SIZE + x] = 0xFFE8A838u;
-            else
-                icon_pixels[y * SIZE + x] = 0xFF000000u | (r > 255 ? 255 : r) << 16 | (g > 255 ? 255 : g) << 8 | (b > 255 ? 255 : b);
-        }
-    for (x = 0; x < 6; x++)                                         /* the glint */
-        icon_pixels[(9 + x / 2) * SIZE + 11 + x] = 0xFFFFFADCu;
-    return SIZE;
 }
 
 /* ---- the account ---- */
@@ -229,27 +207,28 @@ static int account_loaded(void)
     return ra && rc_client_get_user_info(KhRaClient(ra)) && rc_client_is_game_loaded(KhRaClient(ra));
 }
 
-static void account_frame(void)
+static int have_set;
+static int local_notified(uint32_t id);
+static void account_notices(void)
 {
     const char *notice;
-    KhRaPump(ra, 1);
     while ((notice = KhRaTakeNotice(ra)) != NULL) {     /* "title <newline> description" */
         const rc_client_achievement_t *info = rc_client_get_achievement_info(KhRaClient(ra), KhRaNoticeId(ra));
         char title[200];
         snprintf(title, sizeof title, "%s", notice);
         title[strcspn(title, "\n")] = 0;
-        ss_plat_notice(say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"), title, 0, icon_pixels, info ? icon_of_badge(info->badge_name) : 0);
+        if (!local_notified(KhRaNoticeId(ra)))
+            ss_plat_notice(say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"), title, 0, icon_pixels, info ? icon_of_badge(info->badge_name) : 0);
         fprintf(stderr, "achievements: unlocked \"%s\" (%u)\n", title, (unsigned)KhRaNoticeId(ra));
     }
 }
 
 /* ---- the local evaluation ---- */
 
-struct local_entry { uint32_t id; int earned; char title[120], badge[16]; };
+struct local_entry { uint32_t id; int earned; unsigned long notice_frame; char title[120], badge[16]; };
 static struct local_entry *local_list;
-static unsigned local_total, local_earned, set_total;
+static unsigned local_total, local_earned;
 static rc_runtime_t local_runtime;
-static int have_set;
 
 static struct local_entry *local_find(uint32_t id)
 {
@@ -260,9 +239,15 @@ static struct local_entry *local_find(uint32_t id)
     return NULL;
 }
 
+static int local_notified(uint32_t id)
+{
+    struct local_entry *entry = local_find(id);
+    return entry && entry->earned && entry->notice_frame == frames;
+}
+
 static void local_unlock(struct local_entry *entry)
 {
-    int port = entry->id >= SS_PORT_ID, size;
+    int size;
     FILE *file;
     if (entry->earned)
         return;
@@ -273,11 +258,9 @@ static void local_unlock(struct local_entry *entry)
         fclose(file);
     }
     fprintf(stderr, "achievements: %s record, \"%s\" (%u)\n", rebel_run ? "Rebel" : "local", entry->title, (unsigned)entry->id);
-    if (!port && !rebel_run && account_loaded())
-        return;                 /* the account evaluates the same achievement and gives its own notice */
-    size = port ? icon_of_port(&ss_port_list[entry->id - SS_PORT_ID]) : icon_of_badge(entry->badge);
-    ss_plat_notice(rebel_run ? say("REBEL ACHIEVEMENT", "LOGRO REBELDE") : port ? say("PORT ACHIEVEMENT", "LOGRO DEL PORT")
-                                                                          : say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"),
+    entry->notice_frame = frames;
+    size = icon_of_badge(entry->badge);
+    ss_plat_notice(rebel_run ? say("REBEL ACHIEVEMENT", "LOGRO REBELDE") : say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"),
                    entry->title, rebel_run, icon_pixels, size);
 }
 
@@ -309,7 +292,7 @@ static void local_start(void)
     rc_api_server_response_t answer;
     rc_api_fetch_game_sets_response_t sets;
     uint32_t earned[1024];
-    unsigned earned_count = 0, count = SS_PORT_COUNT, s, a, i;
+    unsigned earned_count = 0, count = 0, s, a, i;
     int parsed = 0;
     FILE *file;
 
@@ -320,9 +303,12 @@ static void local_start(void)
                 earned_count++;
         fclose(file);
     }
-    rc_hash_initialize_iterator(&iterator, NULL, rom_bytes, rom_size);
-    rc_hash_generate(hash, RC_CONSOLE_GAMEBOY_ADVANCE, &iterator);
-    rc_hash_destroy_iterator(&iterator);
+    if (!local_hash[0]) {
+        rc_hash_initialize_iterator(&iterator, NULL, rom_bytes, rom_size);
+        rc_hash_generate(local_hash, RC_CONSOLE_GAMEBOY_ADVANCE, &iterator);
+        rc_hash_destroy_iterator(&iterator);
+    }
+    memcpy(hash, local_hash, sizeof hash);
     snprintf(name, sizeof name, "ra_set_%s.json", hash);
     memset(&answer, 0, sizeof answer);
     if (hash[0] && (file = open_in_folder(name, L"rb")) != NULL) {
@@ -342,7 +328,7 @@ static void local_start(void)
         for (a = 0; a < sets.sets[s].num_achievements; a++) {
             const rc_api_achievement_definition_t *definition = &sets.sets[s].achievements[a];
             struct local_entry *entry = &local_list[local_total];
-            if (definition->category != RC_ACHIEVEMENT_CATEGORY_CORE || definition->id >= SS_PORT_ID || local_find(definition->id))
+            if (definition->category != RC_ACHIEVEMENT_CATEGORY_CORE || definition->id >= SS_ACH_WARNING_ID || local_find(definition->id))
                 continue;               /* only the published ones, as the account's evaluation */
             entry->id = definition->id;
             snprintf(entry->title, sizeof entry->title, "%s", definition->title ? definition->title : "");
@@ -356,72 +342,18 @@ static void local_start(void)
         rc_api_destroy_fetch_game_sets_response(&sets);
         free(body);
     }
-    set_total = local_total;
-    have_set = set_total > 0;
-    for (i = 0; local_list && i < SS_PORT_COUNT; i++) {
-        struct local_entry *entry = &local_list[local_total++];
-        entry->id = SS_PORT_ID + i;
-        snprintf(entry->title, sizeof entry->title, "%s", spanish ? ss_port_list[i].title_es : ss_port_list[i].title_en);
-    }
+    have_set = local_total > 0;
     for (i = 0; i < local_total; i++) {
         for (a = 0; a < earned_count; a++)
             local_list[i].earned |= earned[a] == local_list[i].id;
         if (local_list[i].earned) {
             local_earned++;
-            if (local_list[i].id < SS_PORT_ID)
+            if (local_list[i].id < SS_ACH_WARNING_ID)
                 rc_runtime_deactivate_achievement(&local_runtime, local_list[i].id);
         }
     }
     if (have_set)
         rc_runtime_validate_addresses(&local_runtime, local_event, local_valid_address);
-}
-
-/* The port's own list. The fields are the ones core/rebel.c names, from the decompilation: the local player's
- * record (0x03003CE0, 0x14C bytes each): +0x62 maximum health, +0xC4 health, +0x20 state (11 = defeated); the
- * character's shared block (*(u32 *)0x030034E0): +0x20 the level, counted from 0 (AddExperienceAndAdvanceOneLevel,
- * sub_0801E4CC), the bag of 25 records at +0x150 and the storage of 75 at +0x2E0, 16 bytes each, kind 10 = money
- * with its amount at +4 (SumBagCurrency sub_0805D3D4, SumStashCurrency sub_0805D404). */
-#define U16(address) (*(const uint16_t *)(uintptr_t)(address))
-#define U32(address) (*(const uint32_t *)(uintptr_t)(address))
-
-static void port_frame(int run_flags)
-{
-    uint32_t seat = (U32(0x030027D0) & 2) ? (U32(0x04000128) >> 4) & 3 : 0;
-    uint32_t player = 0x03003CE0u + seat * 0x14C, shared = U32(0x030034E0), level, gold = 0, i;
-    uint16_t most = U16(player + 0x62), health = U16(player + 0xC4);
-    int held = 0, met[SS_PORT_COUNT] = { 0 };
-
-    if (run_flags & SS_RUN_ONLINE) {
-        /* with somebody: two or more of the link's connected bits (the game's link state, bits 8 to 11) */
-        uint32_t state = *(const uint32_t *)(uintptr_t)0x03002730u, seats = (state >> 8) & 15;
-        if (seats & (seats - 1))
-            online_frames++;
-    }
-    if (!local_list || frames % 30 || !most || most > 0x7FFF || shared < SS_EWRAM || shared > SS_EWRAM + 0x40000 - 0xCA4)
-        return;                 /* twice a second is enough, and only with a character in play */
-    level = U32(shared + 0x20) + 1;
-    for (i = 0; i < 25 + 75; i++) {
-        uint32_t record = shared + (i < 25 ? 0x150 + i * 16 : 0x2E0 + (i - 25) * 16);
-        if (U16(record) == 10)
-            gold += U32(record + 4) > 100000 ? 100000 : U32(record + 4);
-        if (i < 25 && U16(record))
-            held++;
-    }
-    met[SS_PORT_FIRST_STEPS] = 1;
-    met[SS_PORT_LEVEL_5] = level >= 5 && level <= 200;
-    met[SS_PORT_LEVEL_10] = level >= 10 && level <= 200;
-    met[SS_PORT_LEVEL_25] = level >= 25 && level <= 200;
-    met[SS_PORT_LEVEL_50] = level >= 50 && level <= 200;
-    met[SS_PORT_GOLD_1K] = gold >= 1000;
-    met[SS_PORT_GOLD_10K] = gold >= 10000;
-    met[SS_PORT_GOLD_100K] = gold >= 100000;
-    met[SS_PORT_FULL_PACK] = held == 25;
-    met[SS_PORT_CLOSE_CALL] = most >= 20 && health > 0 && health <= most / 10 && U16(player + 0x20) != 11;
-    met[SS_PORT_STURDY] = most >= 200;
-    met[SS_PORT_ONLINE] = online_frames >= 5 * 60 * 60;        /* counted only with a companion, see below */
-    for (i = 0; i < SS_PORT_COUNT; i++)
-        if (met[i])
-            local_unlock(&local_list[set_total + i]);
 }
 
 /* ---- the two calls of the host ---- */
@@ -478,7 +410,7 @@ void ss_ach_frame(int run_flags)
         const char *png = getenv("SS_RA_TEST_ICON");
         ss_plat_notice((run_flags & SS_RUN_REBEL) ? say("REBEL ACHIEVEMENT", "LOGRO REBELDE") : say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"),
                        test_notice, run_flags & SS_RUN_REBEL, icon_pixels,
-                       !png ? 0 : !strcmp(png, "port") ? icon_of_port(&ss_port_list[SS_PORT_GOLD_10K]) : icon_from_png(png));
+                       png ? icon_from_png(png) : 0);
     }
     if ((run_flags & SS_RUN_REBEL) && !rebel_run) {     /* cannot happen: both read SS_CHEATS. The image has the last word */
         rebel_run = 1;
@@ -491,10 +423,24 @@ void ss_ach_frame(int run_flags)
     }
     if (active) {
         if (ra)
-            account_frame();
+            KhRaPump(ra, 1);
+        if (!have_set && frames % 60 == 0) {
+            char name[64];
+            FILE *file;
+            snprintf(name, sizeof name, "ra_set_%s.json", local_hash);
+            if ((file = open_in_folder(name, L"rb")) != NULL) {
+                fclose(file);
+                rc_runtime_destroy(&local_runtime);
+                free(local_list);
+                local_list = NULL;
+                local_total = local_earned = 0;
+                local_start();
+            }
+        }
         if (have_set)
             rc_runtime_do_frame(&local_runtime, local_event, local_peek, NULL, NULL);
-        port_frame(run_flags);
+        if (ra)
+            account_notices();
     }
     if (active || rebel_run)
         announce();

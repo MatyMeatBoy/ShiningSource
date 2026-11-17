@@ -60,6 +60,10 @@ def main():
         print(done.stderr[-3000:])
         sys.exit("launcher link failed")
     shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")
+    # Seed only absent files: preserve a newer catalog downloaded by the player.
+    for asset in (ROOT / "assets/achievements").iterdir():
+        if asset.suffix in (".json", ".png") and not (out / asset.name).exists():
+            shutil.copy2(asset, out / asset.name)
     print(exe.relative_to(ROOT))
     return 0
 

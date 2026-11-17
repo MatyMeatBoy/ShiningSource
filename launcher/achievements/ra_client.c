@@ -42,13 +42,17 @@ typedef struct KhRaJob {
     void* callback_data;
 } KhRaJob;
 
+typedef struct KhRaNotice { uint32_t id; char text[512]; } KhRaNotice;
+
 struct KhRa {
     rc_client_t* client;
     KhRaRead read;
     void* userdata;
     KhRaTransport transport;
     KhRaJob* jobs;
-    char directory[1024], hash[33], status[512], notice[512];
+    char directory[1024], hash[33], status[512];
+    KhRaNotice notices[64];
+    unsigned notice_head, notice_count;
     uint32_t notice_id;
     char username[128], token[128];
     int enabled, busy, error, remember, closing, invalidated;
@@ -585,10 +589,13 @@ static void PendingFlush(KhRa* ra) {
 static void Event(const rc_client_event_t* event, rc_client_t* client) {
     KhRa* ra = (KhRa*)rc_client_get_userdata(client);
     if (event->type == RC_CLIENT_EVENT_ACHIEVEMENT_TRIGGERED && event->achievement) {
-        ra->notice_id = event->achievement->id;
+        KhRaNotice* notice = &ra->notices[(ra->notice_head + ra->notice_count) % 64];
+        if (ra->notice_count == 64) { ra->notice_head = (ra->notice_head + 1) % 64; }
+        else ++ra->notice_count;
+        notice->id = event->achievement->id;
         if (!rc_client_get_spectator_mode_enabled(client) && rc_client_get_user_info(client))
             PendingAdd(ra, event->achievement->id); /* until the account shows it (a phone without signal) */
-        snprintf(ra->notice, sizeof(ra->notice), "%s\n%s", event->achievement->title,
+        snprintf(notice->text, sizeof(notice->text), "%s\n%s", event->achievement->title,
                  event->achievement->description ? event->achievement->description : "");
     } else if (event->type == RC_CLIENT_EVENT_SERVER_ERROR && event->server_error)
         SetStatus(ra, event->server_error->error_message, 1);
@@ -686,7 +693,7 @@ static void Loaded(int result, const char* error, rc_client_t* client, void* use
     KhRa* ra = (KhRa*)userdata;
     ra->busy = 0;
     if (result == RC_OK) { RestrictOfficial(ra); KeepBadges(ra); }
-    SetStatus(ra, result == RC_OK ? "Catalog loaded. Validation mode: online awards disabled." : error,
+    SetStatus(ra, result == RC_OK ? (rc_client_get_spectator_mode_enabled(client) ? "Catalog loaded. Account submissions disabled." : "Catalog loaded. Softcore submissions enabled.") : error,
               result != RC_OK);
     if (result == RC_OK && !ra->closing) {
         const rc_client_user_t* user = rc_client_get_user_info(client);
@@ -883,7 +890,7 @@ int KhRaAccountUnlocked(const KhRa* ra, uint32_t id) {
     for (i = 0; i < ra->account_unlock_count; ++i) if (ra->account_unlocks[i] == id) return 1;
     return 0;
 }
-int KhRaValidationMode(void) { return 1; }
+int KhRaValidationMode(void) { return getenv("SS_FRAMES") || getenv("SS_INPUT") || getenv("SS_INPUT_FILE"); }
 
 void KhRaStartOfficial(KhRa* ra, const uint32_t* ids, uint32_t count) {
     if (!ra) return;
@@ -897,7 +904,10 @@ void KhRaStartOfficial(KhRa* ra, const uint32_t* ids, uint32_t count) {
 uint32_t KhRaNoticeId(const KhRa* ra) { return ra ? ra->notice_id : 0; }
 const char* KhRaTakeNotice(KhRa* ra) {
     static char notice[512];
-    if (!ra || !ra->notice[0]) return NULL;
-    memcpy(notice, ra->notice, sizeof(notice)); ra->notice[0] = 0;
+    KhRaNotice* entry;
+    if (!ra || !ra->notice_count) return NULL;
+    entry = &ra->notices[ra->notice_head];
+    memcpy(notice, entry->text, sizeof(notice)); ra->notice_id = entry->id;
+    ra->notice_head = (ra->notice_head + 1) % 64; --ra->notice_count;
     return notice;
 }

@@ -46,6 +46,12 @@ armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`,
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
 
+**0.8.12 (Windows)** replaces the custom port achievements with the official
+52-achievement RetroAchievements catalog and badges, included for offline play.
+Local progress, the achievements tab and unlock popups use the same definitions.
+See [release notes and verification limits](docs/RELEASE_0.8.12.md).
+Android and Linux remain on 0.8.11; online rules remain 7.
+
 **0.8.11** fixes garbled item descriptions opened with Select and adds automatic
 Android crash reports with a persistent outbox and previous-session logs.
 See [release notes](docs/RELEASE_0.8.11.md) and
@@ -152,8 +158,9 @@ display stays at the left edge.*
   notice and the achievement's badge when one unlocks. Sending unlocks to your
   account is **off by default**: this port is not a client RetroAchievements
   has approved, and an unlock cannot be taken back.
-- Without an account: the port's own twelve achievements, and the downloaded
-  set, are kept in a local record.
+- Local achievements use the official RetroAchievements definitions and
+  badges. Windows includes the 52-achievement catalog for offline play;
+  signing in refreshes it. Unlocks are kept on this PC.
 - **Rebel mode**: cheats (full HP, full SP, no defeat, gold), with their own
   record and their own save file. Nothing of a Rebel run reaches
   RetroAchievements, and cheats stop while the link is running.
