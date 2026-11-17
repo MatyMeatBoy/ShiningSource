@@ -128,6 +128,13 @@ void ss_frame_set_smooth(int on);
 void ss_frame_set_view(int width);
 void ss_skip_set_enabled(int on);
 
+/* Experimental remote combat sounds: on by default, SS_REMOTE_SFX=0 disables.
+ * Local sound paths are always preserved; remote additions require online play. */
+int ss_remote_sfx_enabled(void);
+void ss_remote_sfx_set_enabled(int on);
+int ss_remote_sfx_allowed(int original_local);
+int ss_remote_sfx_bow_allowed(int original_local, int clock_running);
+
 /* The status display at a size of its own. In a field scene the game's status display (the bars at the top left,
  * the L and R menus under them and at the right) is the top SS_HUD_ROWS lines of the console's picture, parted
  * at column SS_HUD_SPLIT into a group for each side. ss_frame_set_hud(1) asks the core to leave it out of the

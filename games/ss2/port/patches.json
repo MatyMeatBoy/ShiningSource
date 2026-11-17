@@ -321,5 +321,73 @@
    "find": "void sub_0800BEC0(void)\n{",
    "replace": "int ss_net_msg_left(int who);\nvoid sub_0800BEC0(void)\n{"
   }
+ ],
+ "code_0800CF58.c": [
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);\nextern int ss_remote_sfx_bow_allowed(int, int);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): normal-attack sounds use the existing per-actor action/animation transition gate, so repeating a network record does not replay an attack. Preserve the class-specific song sequence.",
+   "find": "if ((d368_sub_0800CCCC() == 0) && (d368_sub_0800CD34() == 0) && (((struct PlayerD368 *)arg0)->f20 != 0xD)) {",
+   "replace": "if ((d368_sub_0800CCCC() == 0) && (d368_sub_0800CD34() == 0) && ss_remote_sfx_allowed((((struct PlayerD368 *)arg0)->f20 != 0xD))) {"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): charge-start sound, inside the original action/animation transition gate.",
+   "find": "if ((((struct PlayerD368 *)arg0)->f20 != 0xD) && (d368_sub_0800CCCC() == 0) && (d368_sub_0800CD34() == 0)) {\n                        d368_sub_0805865C(0x31);",
+   "replace": "if (ss_remote_sfx_allowed((((struct PlayerD368 *)arg0)->f20 != 0xD)) && (d368_sub_0800CCCC() == 0) && (d368_sub_0800CD34() == 0)) {\n                        d368_sub_0805865C(0x31);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): bow release follows the original animation-phase test. Remote release waits while the animation clock is frozen, preventing repeated sounds at phase zero; local timing is unchanged.",
+   "find": "} else if (((struct PlayerD368 *)arg0)->f20 == 0xD) {\n\n                } else if (((struct PlayerD368 *)arg0)->f10 != 4) {",
+   "replace": "} else if (!ss_remote_sfx_bow_allowed((((struct PlayerD368 *)arg0)->f20 != 0xD), !(0x200 & M2C_FIELD(d368_gUnk_03005CF4, u16 *, 4)))) {\n\n                } else if (((struct PlayerD368 *)arg0)->f10 != 4) {"
+  }
+ ],
+ "code_08073E2C.c": [
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): player projectile sound occurs once at coroutine start, before its flight loop. Retain map/world guards and positive-charge-level guard where present.",
+   "find": "if (p->state != 13 && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);",
+   "replace": "if (ss_remote_sfx_allowed(p->state != 13) && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): player projectile sound occurs once at coroutine start, before its flight loop. Retain map/world guards and positive-charge-level guard where present.",
+   "find": "if (p->state != 13 && !sub_0800CCCC() && !sub_0800CD34() && n > 0)\n        sub_0805865C(n + 0x100);",
+   "replace": "if (ss_remote_sfx_allowed(p->state != 13) && !sub_0800CCCC() && !sub_0800CD34() && n > 0)\n        sub_0805865C(n + 0x100);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): player projectile sound occurs once at coroutine start, before its flight loop. Retain map/world guards and positive-charge-level guard where present.",
+   "find": "if (p->state != 13 && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x1D);",
+   "replace": "if (ss_remote_sfx_allowed(p->state != 13) && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x1D);"
+  }
+ ],
+ "code_080153A4.c": [
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): remote-reachable charged-attack timer plays once before its loop. No local attack/collision ownership changes.",
+   "find": "if (p->state != 0xD && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x100);",
+   "replace": "if (ss_remote_sfx_allowed(p->state != 0xD) && sub_0800CCCC() == 0 && sub_0800CD34() == 0)\n        sub_0805865C(level + 0x100);"
+  }
+ ],
+ "code_0805A630.c": [
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern int ss_remote_sfx_allowed(int);"
+  },
+  {
+   "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): thrown-item trajectory sound at its one initial call, before flight/bounce simulation.",
+   "find": "if (player->state != 0xD && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);",
+   "replace": "if (ss_remote_sfx_allowed(player->state != 0xD) && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);"
+  }
  ]
 }

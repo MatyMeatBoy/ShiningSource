@@ -33,6 +33,9 @@ def main():
     p.add_argument('--runs', type=int, default=3)
     p.add_argument('--launcher', action='store_true', help='press PLAY on MainActivity; works with the final APK')
     p.add_argument('--root-storage', action='store_true', help='dedicated root emulator: restore app ownership after injecting scoped-storage test files')
+    p.add_argument('--test-keys', help='script the existing options menu by presented frame')
+    p.add_argument('--log-remote-sfx', action='store_true', help='record live remote-sound option callback changes')
+    p.add_argument('--screenshot-after', type=float, default=5, help='seconds after launcher start before capturing rendered output')
     p.add_argument('--move-image', action='store_true', help='force the linked image into another free range')
     p.add_argument('--memfd', action='store_true', help='force file-backed RX code mappings')
     p.add_argument('--no-audio-device', action='store_true', help='require gameplay with an unavailable SDL audio driver')
@@ -86,6 +89,10 @@ def main():
         settings += 'SS_EXEC_MEMFD=1\n'
     if args.no_audio_device:
         settings += 'SDL_AUDIO_DRIVER=shining-no-such-driver\n'
+    if args.test_keys:
+        settings += 'SS_TEST_KEYS=' + args.test_keys + '\n'
+    if args.log_remote_sfx:
+        settings += 'SS_REMOTE_SFX_LOG=1\n'
     # Keep canonical offline tests isolated even when the online checkbox is
     # outside the small emulator's visible scroll area.
     settings += 'SS_NET=\n'
@@ -171,7 +178,7 @@ def main():
                     time.sleep(1)
                     assert pid and game_pid() == pid, 'density change restarted the game process'
                     density_done = True
-                if args.window_frames and not screenshot_done and native_ready and time.monotonic() - start > 5:
+                if args.window_frames and not screenshot_done and native_ready and time.monotonic() - start > args.screenshot_after:
                     shot = subprocess.run([args.adb, '-s', args.serial, 'exec-out', 'screencap', '-p'], capture_output=True, timeout=60, check=True)
                     (args.out / ('screen-%d.png' % (run + 1))).write_bytes(shot.stdout)
                     screenshot_done = True

@@ -315,6 +315,14 @@ void ss_frame_set_smooth(int on) { if (guest_option) guest_option(SS_OPTION_SMOO
 void ss_frame_set_view(int width) { if (guest_option) guest_option(SS_OPTION_VIEW, width); }
 void ss_frame_set_hud(int on) { if (guest_option) guest_option(SS_OPTION_HUD, on); }
 void ss_skip_set_enabled(int on) { if (guest_option) guest_option(SS_OPTION_SKIP, on); }
+void ss_remote_sfx_set_enabled(int on)
+{
+    if (guest_option) {
+        int actual = guest_option(SS_OPTION_REMOTE_SFX, on);
+        if (getenv("SS_REMOTE_SFX_LOG"))
+            fprintf(stderr, "remote sounds: enabled=%d\n", actual);
+    }
+}
 int ss_net_active(void) { return guest_option ? guest_option(SS_OPTION_ONLINE, 0) : 0; }
 
 static uint64_t bridge[SS_B_COUNT];

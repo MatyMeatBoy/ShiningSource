@@ -152,6 +152,9 @@ static int guest_option(int which, int value)
     case SS_OPTION_SKIP: ss_skip_set_enabled(value); break;
     case SS_OPTION_ONLINE: return ss_net_active();
     case SS_OPTION_HUD: ss_frame_set_hud(value); break;
+    case SS_OPTION_REMOTE_SFX:
+        ss_remote_sfx_set_enabled(value);
+        return ss_remote_sfx_enabled(); /* cached after setter: no host services */
     }
     return 0;
 }

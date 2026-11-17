@@ -45,14 +45,15 @@ static int display_paced;
  * Each has an environment variable (the launcher and the tests set those) and a key in shiningsource.ini, the
  * launcher's settings file in the working folder ("key=value" lines). At start the variable decides when it is
  * set, else the file, else the default; the menu writes what it changes back to the file (see "options menu"). */
-enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_HUD, SET_COUNT };
+enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_HUD, SET_REMOTE_SFX, SET_COUNT };
 static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip", "qol_bars",
-                                                     "hud_scale" };
+                                                     "hud_scale", "remote_sfx" };
 static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_FULLSCREEN", "SS_VSYNC",
-                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS", "SS_HUD_SCALE" };
+                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS", "SS_HUD_SCALE", "SS_REMOTE_SFX" };
 static char setting_file[SET_COUNT][16];        /* what the file said at start ("" if nothing) */
 static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, option_fullscreen, vsync_refused;
 static int option_hud;                          /* SS_HUD_SCALE: the status display larger than the field, see "status display" */
+static int option_remote_sfx = 1;
 static int view_forced;                         /* SS_VIEW: the enhanced picture's width, 0 to follow the window */
 
 static void read_setting_file(void)
@@ -377,6 +378,9 @@ int ss_plat_video_init(const char *title)
         option_skip = !(text && text[0] == '0');
         if (!getenv("SS_SKIP") && text)
             ss_skip_set_enabled(option_skip);
+        text = setting_text(SET_REMOTE_SFX);
+        option_remote_sfx = !(text && text[0] == '0');
+        ss_remote_sfx_set_enabled(option_remote_sfx);
         if (classic < 0)
             read_mode();
         if (classic && !getenv("SS_MODE"))
@@ -865,8 +869,8 @@ static const uint8_t *glyph(char c)
 
 /* ---- text ----
  * The port's own lines (the options menu, "skip scene", the notices) are written with the game's typeface: the
- * letters the game itself draws its messages with, read from the user's ROM, which is mapped in this process at
- * the console's address. Nothing of it is in the program. Where they are, for the Shining Soul II cartridge this
+ * letters the game itself draws its messages with, read from the user's ROM file on rebased hosts, or its
+ * mapped cartridge on the classic host. Nothing of it is in the program. Where they are, for the Shining Soul II cartridge this
  * was made for (found through the decompilation's text routine, sub_0801A3D0, and its font resource): the
  * "SSDT" archive at 0x08518938, whose section 4 holds the fonts; the first is 256 cells of 128 bytes, each two
  * 8 x 8 tiles of four bits a pixel, one above the other (the second half of a cell is unused): 0 nothing,
@@ -878,22 +882,36 @@ static const uint8_t *glyph(char c)
 static uint8_t font_left[256], font_wide[256];
 static int block_text;                  /* 1: use the 5 x 7 dots even with the typeface (a very small window) */
 
+#if !defined(__ANDROID__) && !defined(SS_REBASED_HOST)
 static uint32_t rom_word(const uint8_t *at)
 {
     return at[0] | (uint32_t)at[1] << 8 | (uint32_t)at[2] << 16 | (uint32_t)at[3] << 24;
 }
+#else
+#include "font_rom.h"
+#endif
 
 static void font_find(void)
 {
     enum { ROM_BYTES = 0x1000000, ARCHIVE = 0x518938, CELL = 128, CELLS = 256 };
     static uint32_t pixels[CELLS * 8 * 16];
-    const uint8_t *rom = (const uint8_t *)(uintptr_t)SS_ROM, *cells;
-    uint32_t section, font;
+    const uint8_t *cells;
     int cell, x, y;
 
     font_state = -1;
     if (getenv("SS_FONT") && getenv("SS_FONT")[0] == '0')       /* SS_FONT=0: the 5 x 7 dots, whatever the ROM */
         return;
+#if defined(__ANDROID__) || defined(SS_REBASED_HOST)
+    {
+        static uint8_t font_bytes[CELL * CELLS];
+        if (!ss_font_rom_read(getenv("SHININGSOURCE_ROM"), font_bytes))
+            return;
+        cells = font_bytes;
+    }
+#else
+    {
+    const uint8_t *rom = (const uint8_t *)(uintptr_t)SS_ROM;
+    uint32_t section, font;
     if (memcmp(rom + 0xAC, "AU2P", 4) || memcmp(rom + ARCHIVE, "SSDT", 4))
         return;
     section = ARCHIVE + rom_word(rom + ARCHIVE + 8 + 4 * 4);
@@ -903,6 +921,8 @@ static void font_find(void)
     if (font < section || font > ROM_BYTES - CELL * CELLS)
         return;
     cells = rom + font;
+    }
+#endif
     for (x = 0; x < 64; x++)
         if (cells[0x50 * CELL + x])
             return;                     /* the space is not empty: not the font */
@@ -1347,7 +1367,7 @@ static uint16_t touch_buttons(int width)
  * reset (the textures are made again, as when the graphics device was reset). With it set, what the menu does is
  * written to stderr. */
 enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
-       ITEM_BARS, ITEM_HUD, ITEM_QUIT, ITEM_KINDS };
+       ITEM_BARS, ITEM_HUD, ITEM_REMOTE_SFX, ITEM_QUIT, ITEM_KINDS };
 enum { INFO_LINES = 8, INFO_BYTES = 96 };
 static int menu_row, menu_quit_armed, menu_online;
 static uint16_t menu_swallow;           /* buttons still held from the menu: not the game's until they are let go */
@@ -1386,6 +1406,7 @@ static int menu_items(int *items)
 #endif
     items[n++] = ITEM_VSYNC;
     items[n++] = ITEM_VOLUME;
+    items[n++] = ITEM_REMOTE_SFX;
     items[n++] = ITEM_SMOOTH;
     items[n++] = ITEM_SKIP;
     items[n++] = ITEM_BARS;             /* experimental: the triggers step the L and R bars backwards */
@@ -1401,6 +1422,7 @@ static const char *item_label(int item)
         { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
         { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
         { "Experimental: larger status", "Experimental: indicadores grandes" },
+        { "Experimental: remote sounds", "Experimental: sonidos remotos" },
         { "Quit game", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)
@@ -1430,6 +1452,7 @@ static const char *item_value(int item, char *buffer, size_t capacity)
     case ITEM_SKIP: return option_skip ? on : off;
     case ITEM_BARS: return ss_qol_bars() ? on : off;
     case ITEM_HUD: return option_hud ? on : off;
+    case ITEM_REMOTE_SFX: return option_remote_sfx ? on : off;
     }
     return NULL;
 }
@@ -1439,7 +1462,8 @@ static void setting_value(int which, char *out, size_t capacity)
 {
     int number = which == SET_BORDER ? border : which == SET_STYLE ? border_style : which == SET_SIDES ? sides_field
                  : which == SET_FULLSCREEN ? option_fullscreen : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
-                 : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : which == SET_HUD ? option_hud : option_skip;
+                 : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : which == SET_HUD ? option_hud
+                 : which == SET_REMOTE_SFX ? option_remote_sfx : option_skip;
     if (which == SET_MODE)
         SDL_snprintf(out, capacity, "%s", classic ? "classic" : "enhanced");
     else
@@ -1563,6 +1587,11 @@ static void item_change(int item, int step)
         if (audio)
             SDL_SetAudioStreamGain(audio, (float)option_volume / 100.0f);
         which = SET_VOLUME;
+        break;
+    case ITEM_REMOTE_SFX:
+        option_remote_sfx = !option_remote_sfx;
+        ss_remote_sfx_set_enabled(option_remote_sfx);
+        which = SET_REMOTE_SFX;
         break;
     case ITEM_SMOOTH:
         option_smooth = !option_smooth;
