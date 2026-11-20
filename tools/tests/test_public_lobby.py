@@ -48,14 +48,18 @@ class PublicLobbyTests(unittest.TestCase):
             host, *guests, observer = players
             scope, room, code = 110, 221, b"ABCD2345"
 
-            def query(scope=scope, cursor=0):
+            def page(scope=scope, cursor=0):
                 observer.send(packet(6, scope, 99, cursor))
                 reply = observer.recv(1200)
                 self.assertEqual(len(reply), 60)
                 self.assertEqual(reply[4], 7)
                 self.assertEqual(struct.unpack_from("<II", reply, 8), (scope, 99))
-                return [(reply[20 + i * 9:28 + i * 9], reply[28 + i * 9])
-                        for i in range(reply[7])]
+                self.assertLessEqual(reply[7], 4)
+                return ([(reply[20 + i * 9:28 + i * 9], reply[28 + i * 9])
+                         for i in range(reply[7])], struct.unpack_from("<I", reply, 16)[0])
+
+            def query(scope=scope):
+                return page(scope)[0]
 
             def hello(peer, token, flags, identity=room):
                 peer.send(packet(8, identity, token, scope=scope, flags=flags, code=code))
@@ -91,6 +95,15 @@ class PublicLobbyTests(unittest.TestCase):
             self.assertEqual(query(), [(code, 1)])
             observer.send(packet(4, other_room, 6))
             self.assertEqual(query(), [])
+
+            labels = [("HALLAB2" + str(i)).encode() for i in range(2, 8)]
+            for i, label in enumerate(labels):
+                observer.send(packet(8, 400 + i, 10 + i, scope=scope, flags=1, code=label))
+                self.assertEqual(observer.recv(1200)[5], 0)
+            first, next_cursor = page()
+            second, last_cursor = page(cursor=next_cursor)
+            self.assertEqual((len(first), len(second), last_cursor), (4, 2, 0))
+            self.assertCountEqual(first + second, [(label, 1) for label in labels])
 
 
 if __name__ == "__main__":

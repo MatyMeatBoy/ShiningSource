@@ -234,7 +234,7 @@ static void text(const struct canvas *screen, int center, int y, const char *lab
             for (int row = 0; row < 16; row++)
                 for (int col = 0; col < columns; col++) {
                     unsigned value = nibble(cell + row * 4, left + col);
-                    if (value)
+                    if (value && (unsigned)(x + col) < (unsigned)screen->width)
                         screen->pixels[(y + row) * screen->width + x + col] = value == 1 ? color : 0xff071016u;
                 }
         x += columns > 1 ? columns - 1 : columns;    /* neighbouring glyphs share the original dark outline */
@@ -257,12 +257,35 @@ static void background(const struct canvas *screen)
     box(screen, width - 4, 4, 1, 152, 0xff594632u);
 }
 
-static unsigned public_room_number(const char *id)
+static void public_room_label(const struct canvas *screen, const char *id, int players, char *out, size_t size)
 {
-    unsigned label = 0;
+    static const char *const places[][2] = {
+        {"Fort", "Fuerte"}, {"Gate", "Puerta"}, {"Hall", "Salón"}, {"Tower", "Torre"},
+        {"Camp", "Campamento"}, {"Keep", "Castillo"}, {"Shrine", "Santuario"}, {"Bridge", "Puente"}
+    };
+    static const char *const trees[][2] = {
+        {"Cedar", "Cedro"}, {"Pine", "Pino"}, {"Oak", "Roble"}, {"Elm", "Olmo"},
+        {"Ash", "Fresno"}, {"Yew", "Tejo"}, {"Alder", "Aliso"}, {"Maple", "Arce"},
+        {"Birch", "Abedul"}, {"Willow", "Sauce"}, {"Fir", "Abeto"}, {"Larch", "Alerce"},
+        {"Poplar", "Álamo"}, {"Cypress", "Ciprés"}, {"Hazel", "Avellano"}, {"Walnut", "Nogal"}
+    };
+    static const char *const colours[][2] = {
+        {"Silver", "Plateado"}, {"Golden", "Dorado"}, {"White", "Blanco"}, {"Copper", "Cobrizo"},
+        {"Red", "Rojo"}, {"Green", "Verde"}, {"Blue", "Azul"}, {"Grey", "Gris"},
+        {"Black", "Negro"}, {"Amber", "Ámbar"}, {"Violet", "Violeta"}, {"Ivory", "Marfil"},
+        {"Jade", "Jade"}, {"Bronze", "Bronce"}, {"Pearl", "Perla"}, {"Ochre", "Ocre"}
+    };
+    uint32_t label = 0;
     for (int n = 0; n < SS_ROOM_CODE_LENGTH; ++n)
         label = label * 37u + (unsigned char)id[n];
-    return label % 1000000u;
+    int lang = screen->spanish;
+    const char *place = places[(label >> 8) & 7][lang];
+    const char *tree = trees[(label >> 4) & 15][lang];
+    const char *colour = colours[label & 15][lang];
+    if (lang)
+        snprintf(out, size, "%s del %s %s    %d de 4", place, tree, colour, players);
+    else
+        snprintf(out, size, "%s %s %s    %d of 4", colour, tree, place, players);
 }
 
 static void draw_room_menu(const struct canvas *screen)
@@ -282,9 +305,8 @@ static void draw_room_menu(const struct canvas *screen)
         text(screen, middle, 34, wording(screen, "Create room", "Crear sala"), room_menu.position == 0 ? gold : white);
         for (int i = 0; i < room_menu.count; ++i) {
             const struct ss_lobby_room *entry = &room_menu.rooms[i];
-            char line[42];
-            snprintf(line, sizeof line, wording(screen, "Room %06u      %d/4", "Sala %06u      %d/4"),
-                     public_room_number(entry->id), (int)entry->players);
+            char line[52];
+            public_room_label(screen, entry->id, entry->players, line, sizeof line);
             int current = room_menu.position == i + 1;
             int y = 54 + i * 20;
             panel(screen, left + 9, y, wide - 18, 19, current ? gold : copper, current ? selected : normal);
@@ -297,7 +319,7 @@ static void draw_room_menu(const struct canvas *screen)
             text(screen, middle, 83, status, white);
         }
         text(screen, middle, 136, room_menu.next || room_menu.pages ?
-            wording(screen, "A Select   Left/Right Page   B Back", "A Elegir   Izq/Der Página   B Atrás") :
+            wording(screen, "A Select   Left Right Page   B Back", "A Elegir   Izq Der Página   B Atrás") :
             wording(screen, "A Select    B Back", "A Elegir    B Atrás"), white);
         return;
     }
@@ -417,11 +439,10 @@ int ss_link_screen_draw(uint32_t *pixels, int width)
 
     background(&screen);
 
-    char room[36];
+    char room[52];
     const char *public_id = ss_net_lobby_room_id();
     if (public_id)
-        snprintf(room, sizeof room, wording(&screen, "Room %06u    %d/4", "Sala %06u    %d/4"),
-                 public_room_number(public_id), occupied);
+        public_room_label(&screen, public_id, occupied, room, sizeof room);
     else
         snprintf(room, sizeof room, wording(&screen, "%d of 4 linked", "%d de 4 en línea"), occupied);
     text(&screen, width / 2, 11, "LOBBY", gold);
