@@ -27,7 +27,7 @@ int main(void) {
     *(uint16_t *)(uintptr_t)(SS_PALETTE + 2) = 0x7FFF;
     view.world = 1; view.width = 480; view.shift = 120;
     view.hud_left = 120; view.hud_right = 360;
-    line.edge_fade = 1; line.dispcnt = 0x1000;
+    prepare_edge_fade(); line.dispcnt = 0x1000;
     obj.colour[120] = 2; obj.prio[120] = 0;
     CHECK(compose(120, 80, &obj, &moved) == 0); /* player, priority zero */
     obj.colour[119] = 2;
@@ -70,10 +70,12 @@ int main(void) {
     line.bldcnt = (1 << 1) | (2 << 6); line.evy = 16;
     CHECK(compose(120, 80, &obj, &moved) == 0); /* game's white fade must not revive map edge */
     line.bldcnt = 0;
-    line.edge_fade = 0;
+    view.world = 0;
+    prepare_edge_fade();
     CHECK(compose(120, 80, &obj, &moved) == 0x7FFF); /* classic/non-world */
     /* Rasterization must tag the whole HUD sprite, never the upper half of a world sprite. */
-    line.edge_fade = 1; line.count = 0; hud_at_edges = 1;
+    view.world = 1;
+    prepare_edge_fade(); line.count = 0; hud_at_edges = 1;
     memset(tiles, 0x11, sizeof tiles); palette[1] = 0x7FFF;
     memset(&obj, 0, sizeof obj);
     sprite(52, entry, oam, tiles, palette, 0, &obj);
@@ -87,6 +89,30 @@ int main(void) {
     sprite(80, entry, oam, tiles, palette, 0, &obj);
     CHECK(obj.flags[120] & 8);
     CHECK(compose(120, 80, &obj, &moved) == 0x7FFF);
+
+    view.hud_left = 0; view.hud_right = view.width;
+    prepare_edge_fade();
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 0, &obj) == 0);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 479, &obj) == 0);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 2, &obj) == fade(0x7FFF, 9, 0));
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 8, &obj) == 0x7FFF);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 471, &obj) == 0x7FFF);
+    view.hud_left = 5;
+    prepare_edge_fade();
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 5, &obj) == 0);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 13, &obj) == 0x7FFF);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 479, &obj) == 0);
+
+    view.width = 248; view.shift = 4; view.hud_left = 0; view.hud_right = 248;
+    prepare_edge_fade();
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 0, &obj) == 0);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 4, &obj) == 0x7FFF);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 243, &obj) == 0x7FFF);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 247, &obj) == 0);
+    view.width = 240; view.shift = 0; view.hud_right = 240;
+    prepare_edge_fade();
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 0, &obj) == 0x7FFF);
+    CHECK(edge_colour(0x7FFF, LAYER_BACKDROP, 239, &obj) == 0x7FFF);
     return 0;
 }
 '''

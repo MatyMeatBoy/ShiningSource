@@ -25,6 +25,8 @@
   same integer scale. It extends supported title screens, Objects, Status and
   shop menus into the two outside regions. The SEGA logo keeps its original
   fade. Wide Pro can be disabled in Video.
+- The sides of the Enhanced field fade throughout camera movement, with the
+  HUD kept clear. Confirming a game mode no longer flashes the title prompt.
 - Achievement badges live in `achievements/badges/`. Existing loose badge
   files are migrated, and existing achievement records and credentials are
   preserved.
@@ -60,6 +62,23 @@
 - A temporary outage can reconnect an existing running client to its seat.
   Rejoining after a full process restart and joining an active town session
   are still pending. Existing sessions reject new admissions once play starts.
+
+## Verification
+
+A Windows x64 client and the Android x86_64 APK created and joined the same
+room by code and entered the first playable area together. Android received
+matching gameplay messages from the Windows host. Android was tested on an
+API 35 emulator with 16 KiB pages. The
+upgrade preserved the imported ROM, and the document picker recovered it
+from its previous source and rejected an invalid replacement.
+
+The original European cartridge and the port both spawn two blue Pastes and
+one Green Paste from the same hole in the second area of Goblin Fort. They
+remain in place and can attack a player within reach.
+
+The original card-drop roll matches the port. A controlled winning roll in a
+two-player session produced cards that appeared on both clients. Both players
+completed pickups using the original drop and pickup rules.
 
 ## Upgrading
 

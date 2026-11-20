@@ -841,15 +841,39 @@ static struct {
     int prio[4], enabled[4];
     int order[4], order_prio[4], count;     /* the enabled backgrounds from the back to the front, and their priorities */
     int moved[4];               /* this background is not where it was on this line in the last frame */
-    int edge_fade;
 } line;
+
+static uint8_t edge_darkness[MAXW];
+
+/* Anchor the fade to the visible map when it ends inside the viewport. Otherwise
+ * keep it at the viewport edge, within the extra columns on narrow displays. */
+static void prepare_edge_fade(void)
+{
+    int left = view.hud_left, right = view.hud_right;
+    int left_extension = (view.width - W) / 2, right_extension = view.width - W - left_extension;
+    memset(edge_darkness, 0, sizeof edge_darkness);
+    if (!view.world || view.width <= W || left < 0 || right > view.width || right - left < W)
+        return;
+    int left_fade = left > 0 || left_extension >= EDGE_FADE ? EDGE_FADE : left_extension;
+    int right_fade = right < view.width || right_extension >= EDGE_FADE ? EDGE_FADE : right_extension;
+    memset(edge_darkness, 16, (size_t)left);
+    memset(edge_darkness + right, 16, (size_t)(view.width - right));
+    for (int d = 0; d < left_fade; d++) {
+        int remaining = left_fade - d;
+        edge_darkness[left + d] = (uint8_t)(remaining * remaining * 16 / (left_fade * left_fade));
+    }
+    for (int d = 0; d < right_fade; d++) {
+        int remaining = right_fade - d;
+        edge_darkness[right - 1 - d] = (uint8_t)(remaining * remaining * 16 / (right_fade * right_fade));
+    }
+}
 
 /* Attenuate the field before blending it with UI, so a translucent menu retains its
  * own colours and shows the same faded field through it as through an empty pixel. */
 static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_line *obj)
 {
-    int from_left, from_right, by = EDGE_FADE, rest;
-    if (!line.edge_fade)
+    unsigned darkness = edge_darkness[X];
+    if (!darkness)
         return colour;
     if (layer == LAYER_OBJ) {
         if (obj->flags[X] & 8)
@@ -857,15 +881,7 @@ static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_
     } else if (layer < 4 && !view.bg[layer].map) {
         return colour;                 /* UI background */
     }
-    from_left = X - view.hud_left;
-    from_right = view.hud_right - 1 - X;
-    if (view.hud_left > 0 && from_left < by) by = from_left;
-    if (view.hud_right < view.width && from_right < by) by = from_right;
-    if (by >= EDGE_FADE)
-        return colour;
-    if (by < 0) by = 0;                /* world sprites cannot leak into the black */
-    rest = EDGE_FADE - by;
-    return fade(colour, rest * rest * 16 / (EDGE_FADE * EDGE_FADE), 0);
+    return fade(colour, darkness, 0);
 }
 
 /* One pixel of the picture with the sprites of `obj`: the layers in their order, the windows, the blending and
@@ -1048,7 +1064,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     take_view(requested);
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     find_alternating();
-    line.edge_fade = view.world && (view.hud_left > 0 || view.hud_right < view.width);
+    prepare_edge_fade();
     page_shown = view.world && view.width > W && (IO16(0) & 7) == 0 && page_open();
     hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_shown;
     hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(view.width > W ? page_shown : page_open());
