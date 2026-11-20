@@ -84,20 +84,23 @@ enum ss_net_room_status {
     SS_ROOM_CONNECTING,
     SS_ROOM_READY,
     SS_ROOM_UNAVAILABLE,
-    SS_ROOM_ACTIVE
+    SS_ROOM_ACTIVE,
+    SS_ROOM_UPDATE
 };
 enum { SS_ROOM_CODE_LENGTH = 8, SS_ROOM_CODE_CAPACITY = SS_ROOM_CODE_LENGTH + 1 };
 #define SS_ROOM_CODE_ALPHABET "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
-enum { SS_LOBBY_PAGE_SIZE = 4 };
+enum { SS_LOBBY_PAGE_SIZE = 4, SS_LOBBY_TITLE_MAX = 16 };
 struct ss_lobby_room {
     char id[SS_ROOM_CODE_CAPACITY];    /* internal identifier, never typed or displayed */
     uint8_t players;
+    char title[SS_LOBBY_TITLE_MAX + 1];
 };
 void ss_net_lobby_page(uint32_t cursor);
 int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *next);
 void ss_net_lobby_stop(void);
-int ss_net_lobby_enter(const char *id);
+int ss_net_lobby_enter(const char *id, const char *title);
 const char *ss_net_lobby_room_id(void);
+const char *ss_net_lobby_room_title(void);
 int ss_net_room_ui_enabled(void);
 void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]);
 int ss_net_room_begin(const char *code, int create);

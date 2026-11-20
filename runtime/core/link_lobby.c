@@ -16,10 +16,12 @@ struct canvas {
     int width, spanish;
 };
 
-enum room_page { ROOM_CLOSED, ROOM_LIST, ROOM_CONNECTING, ROOM_UNAVAILABLE, ROOM_IN_GAME };
+enum room_page { ROOM_CLOSED, ROOM_LIST, ROOM_NAME, ROOM_CONNECTING, ROOM_UNAVAILABLE, ROOM_IN_GAME, ROOM_UPDATE };
+static const char room_keys[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -";
 static struct {
     enum room_page page;
-    int position, pages, count;
+    int position, pages, count, key, title_length;
+    char title[SS_LOBBY_TITLE_MAX + 1];
     uint32_t cursors[128], next;
     struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE];
 } room_menu;
@@ -48,7 +50,7 @@ static void refresh_room_list(void)
 
 int ss_link_room_select(void)
 {
-    enum { A = 1, B = 2, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128 };
+    enum { A = 1, B = 2, START = 8, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128, L = 512 };
     room_menu.pages = 0;
     room_menu.cursors[0] = 0;
     browse_current_page();
@@ -65,8 +67,15 @@ int ss_link_room_select(void)
             }
             /* A must act on the row that was actually drawn this frame. */
             if (pressed & A && room_menu.count >= 0) {
-                const char *id = room_menu.position ? room_menu.rooms[room_menu.position - 1].id : NULL;
-                room_menu.page = ss_net_lobby_enter(id) ? ROOM_CONNECTING : ROOM_UNAVAILABLE;
+                if (room_menu.position) {
+                    const char *id = room_menu.rooms[room_menu.position - 1].id;
+                    room_menu.page = ss_net_lobby_enter(id, NULL) ? ROOM_CONNECTING : ROOM_UNAVAILABLE;
+                } else {
+                    room_menu.key = 0;
+                    room_menu.title_length = 0;
+                    room_menu.title[0] = '\0';
+                    room_menu.page = ROOM_NAME;
+                }
                 break;
             }
             refresh_room_list();
@@ -82,6 +91,31 @@ int ss_link_room_select(void)
                 browse_current_page();
             }
             break;
+        case ROOM_NAME: {
+            if (pressed & B) {
+                browse_current_page();
+                break;
+            }
+            const int columns = 8, rows = 5, total = sizeof room_keys - 1;
+            int column = room_menu.key % columns, row = room_menu.key / columns;
+            if (move & LEFT) column = (column + columns - 1) % columns;
+            if (move & RIGHT) column = (column + 1) % columns;
+            if (move & UP) row = (row + rows - 1) % rows;
+            if (move & DOWN) row = (row + 1) % rows;
+            room_menu.key = row * columns + column;
+            if (room_menu.key >= total)
+                room_menu.key = total - 1;
+            if ((pressed & L) && room_menu.title_length > 0)
+                room_menu.title[--room_menu.title_length] = '\0';
+            if ((pressed & A) && room_menu.title_length < SS_LOBBY_TITLE_MAX &&
+                (room_menu.title_length || room_keys[room_menu.key] != ' ')) {
+                room_menu.title[room_menu.title_length++] = room_keys[room_menu.key];
+                room_menu.title[room_menu.title_length] = '\0';
+            }
+            if (pressed & START)
+                room_menu.page = ss_net_lobby_enter(NULL, room_menu.title) ? ROOM_CONNECTING : ROOM_UNAVAILABLE;
+            break;
+        }
         case ROOM_CONNECTING:
             if (!(pressed & B)) {
                 int status = ss_net_room_status();
@@ -93,6 +127,8 @@ int ss_link_room_select(void)
                     room_menu.page = ROOM_UNAVAILABLE;
                 else if (status == SS_ROOM_ACTIVE)
                     room_menu.page = ROOM_IN_GAME;
+                else if (status == SS_ROOM_UPDATE)
+                    room_menu.page = ROOM_UPDATE;
                 break;
             }
             ss_net_room_cancel();
@@ -100,6 +136,7 @@ int ss_link_room_select(void)
             break;
         case ROOM_UNAVAILABLE:
         case ROOM_IN_GAME:
+        case ROOM_UPDATE:
             if (pressed & B) {
                 ss_net_room_cancel();
                 browse_current_page();
@@ -201,7 +238,7 @@ static unsigned nibble(const uint8_t *data, int x)
     return (data[x / 2] >> ((x & 1) * 4)) & 15;
 }
 
-static int glyph_edges(const uint8_t *cell, int *left)
+static int glyph_edges(const uint8_t *cell, int *left, int *top, int *bottom)
 {
     int first = 8, last = -1;
     *left = 0;
@@ -212,29 +249,46 @@ static int glyph_edges(const uint8_t *cell, int *left)
             if (nibble(cell + y * 4, x)) {
                 if (x < first) first = x;
                 if (x > last) last = x;
+                if (y < *top) *top = y;
+                if (y > *bottom) *bottom = y;
             }
     *left = first;
     return last >= first ? last - first + 1 : 0;
 }
 
-static void text(const struct canvas *screen, int center, int y, const char *label, uint32_t color)
+static void text(const struct canvas *screen, int center, int middle, const char *label, uint32_t color)
 {
-    int width = 1;
+    int width = 0, right = 0, top = 16, bottom = -1;
     for (const char *ch = label; *ch;) {
         int left;
-        int columns = glyph_edges(glyph(screen, next_letter(&ch)), &left);
+        unsigned letter = next_letter(&ch);
+        const uint8_t *cell = glyph(screen, letter);
+        int columns = glyph_edges(cell, &left, &top, &bottom);
+        if (letter == '-') {
+            columns = 5;
+            if (top > 8) top = 8;
+            if (bottom < 9) bottom = 9;
+        }
+        if ((cell && columns) || letter == '-')
+            right = width + columns;
         width += columns > 1 ? columns - 1 : columns;
     }
-    int x = center - width / 2;
+    int x = center - right / 2, y = middle - (top + bottom) / 2;
     while (*label) {
         int left;
-        const uint8_t *cell = glyph(screen, next_letter(&label));
-        int columns = glyph_edges(cell, &left);
+        unsigned letter = next_letter(&label);
+        const uint8_t *cell = glyph(screen, letter);
+        int columns = glyph_edges(cell, &left, &top, &bottom);
+        if (letter == '-') {
+            box(screen, x, y + 8, 5, 2, color);
+            columns = 5;
+        }
         if (cell)
             for (int row = 0; row < 16; row++)
                 for (int col = 0; col < columns; col++) {
                     unsigned value = nibble(cell + row * 4, left + col);
-                    if (value && (unsigned)(x + col) < (unsigned)screen->width)
+                    if (value && (unsigned)(x + col) < (unsigned)screen->width &&
+                        (unsigned)(y + row) < SS_SCREEN_H)
                         screen->pixels[(y + row) * screen->width + x + col] = value == 1 ? color : 0xff071016u;
                 }
         x += columns > 1 ? columns - 1 : columns;    /* neighbouring glyphs share the original dark outline */
@@ -257,8 +311,13 @@ static void background(const struct canvas *screen)
     box(screen, width - 4, 4, 1, 152, 0xff594632u);
 }
 
-static void public_room_label(const struct canvas *screen, const char *id, int players, char *out, size_t size)
+static void public_room_label(const struct canvas *screen, const char *id, const char *title,
+                              int players, char *out, size_t size)
 {
+    if (title && title[0]) {
+        snprintf(out, size, wording(screen, "%s    %d of 4", "%s    %d de 4"), title, players);
+        return;
+    }
     static const char *const places[][2] = {
         {"Fort", "Fuerte"}, {"Gate", "Puerta"}, {"Hall", "Salón"}, {"Tower", "Torre"},
         {"Camp", "Campamento"}, {"Keep", "Castillo"}, {"Shrine", "Santuario"}, {"Bridge", "Puente"}
@@ -297,28 +356,49 @@ static void draw_room_menu(const struct canvas *screen)
 
     background(screen);
     panel(screen, left, 9, wide, 22, copper, 0xff203940u);
-    text(screen, middle, 12, "LOBBY", gold);
+    text(screen, middle, 20, room_menu.page == ROOM_NAME ?
+         wording(screen, "Room name", "Nombre de sala") : "LOBBY", gold);
+    if (room_menu.page == ROOM_NAME) {
+        panel(screen, left + 9, 34, wide - 18, 18, copper, 0xff182f36u);
+        text(screen, middle, 42, room_menu.title_length ? room_menu.title : "ShiningSource-01",
+             room_menu.title_length ? white : gold);
+        for (int i = 0; i < (int)sizeof room_keys - 1; ++i) {
+            int x = middle - 92 + i % 8 * 23, y = 56 + i / 8 * 15;
+            int current = room_menu.key == i;
+            panel(screen, x, y, 22, 14, current ? gold : copper, current ? 0xff35534eu : 0xff213a40u);
+            char letter[2] = { room_keys[i], '\0' };
+            text(screen, x + 11, y + 6, room_keys[i] == ' ' ? wording(screen, "Sp", "Esp") : letter,
+                 current ? gold : white);
+        }
+        text(screen, middle, 137, wording(screen, "A Letter    L Erase", "A Letra    L Borrar"), white);
+        text(screen, middle, 150, wording(screen, "Start Create    B Back", "Start Crear    B Atrás"), white);
+        return;
+    }
     if (room_menu.page == ROOM_LIST) {
         uint32_t selected = 0xff35534eu, normal = 0xff213a40u;
-        panel(screen, left + 9, 33, wide - 18, 20,
-              room_menu.position == 0 ? gold : copper, room_menu.position == 0 ? selected : normal);
-        text(screen, middle, 34, wording(screen, "Create room", "Crear sala"), room_menu.position == 0 ? gold : white);
+        if (room_menu.count >= 0) {
+            panel(screen, left + 9, 33, wide - 18, 20,
+                  room_menu.position == 0 ? gold : copper, room_menu.position == 0 ? selected : normal);
+            text(screen, middle, 43, wording(screen, "Create room", "Crear sala"), room_menu.position == 0 ? gold : white);
+        }
         for (int i = 0; i < room_menu.count; ++i) {
             const struct ss_lobby_room *entry = &room_menu.rooms[i];
             char line[52];
-            public_room_label(screen, entry->id, entry->players, line, sizeof line);
+            public_room_label(screen, entry->id, entry->title, entry->players, line, sizeof line);
             int current = room_menu.position == i + 1;
             int y = 54 + i * 20;
             panel(screen, left + 9, y, wide - 18, 19, current ? gold : copper, current ? selected : normal);
-            text(screen, middle, y, line, current ? gold : white);
+            text(screen, middle, y + 9, line, current ? gold : white);
         }
         if (room_menu.count <= 0) {
             const char *status = room_menu.count == 0 ? wording(screen, "No open rooms", "No hay salas abiertas") :
                 room_menu.count == -1 ? wording(screen, "Looking for rooms", "Buscando salas") :
+                room_menu.count == -3 ? wording(screen, "Update from the launcher", "Actualiza desde el launcher") :
                     wording(screen, "Lobby server unavailable", "Servidor del lobby no disponible");
             text(screen, middle, 83, status, white);
         }
-        text(screen, middle, 136, room_menu.next || room_menu.pages ?
+        text(screen, middle, 144, room_menu.count < 0 && !room_menu.pages ?
+            wording(screen, "B Back", "B Atrás") : room_menu.next || room_menu.pages ?
             wording(screen, "A Select   Left Right Page   B Back", "A Elegir   Izq Der Página   B Atrás") :
             wording(screen, "A Select    B Back", "A Elegir    B Atrás"), white);
         return;
@@ -327,9 +407,10 @@ static void draw_room_menu(const struct canvas *screen)
     panel(screen, left, 47, wide, 68, copper, 0xff203c44u);
     const char *status = room_menu.page == ROOM_CONNECTING ? wording(screen, "Connecting to relay", "Conectando al servidor") :
         room_menu.page == ROOM_IN_GAME ? wording(screen, "Room already playing", "Sala ya en juego") :
+        room_menu.page == ROOM_UPDATE ? wording(screen, "Update from the launcher", "Actualiza desde el launcher") :
         wording(screen, "Room unavailable", "Sala no disponible");
-    text(screen, middle, 72, status, room_menu.page == ROOM_CONNECTING ? white : 0xfff0ac86u);
-    text(screen, middle, 131, wording(screen, "B Back", "B Atrás"), white);
+    text(screen, middle, 81, status, room_menu.page == ROOM_CONNECTING ? white : 0xfff0ac86u);
+    text(screen, middle, 139, wording(screen, "B Back", "B Atrás"), white);
 }
 
 /* Animation 8 is the front-facing pose used by the original save-slot screen. Like sub_08007CF0,
@@ -442,11 +523,11 @@ int ss_link_screen_draw(uint32_t *pixels, int width)
     char room[52];
     const char *public_id = ss_net_lobby_room_id();
     if (public_id)
-        public_room_label(&screen, public_id, occupied, room, sizeof room);
+        public_room_label(&screen, public_id, ss_net_lobby_room_title(), occupied, room, sizeof room);
     else
         snprintf(room, sizeof room, wording(&screen, "%d of 4 linked", "%d de 4 en línea"), occupied);
-    text(&screen, width / 2, 11, "LOBBY", gold);
-    text(&screen, width / 2, 26, room, white);
+    text(&screen, width / 2, 19, "LOBBY", gold);
+    text(&screen, width / 2, 35, room, white);
 
     for (int i = 0; i < 4; i++) {
         const struct ss_net_roster_entry *seat = &seats[i];
@@ -468,8 +549,8 @@ int ss_link_screen_draw(uint32_t *pixels, int width)
         snprintf(player, sizeof player, wording(&screen, "Player %d", card < 65 ? "J %d" : "Jugador %d"), i + 1);
         const char *name = seat->local ? wording(&screen, "You", "Tú") :
                            i == 0 ? wording(&screen, "Host", "Creador") : player;
-        text(&screen, center, 94, name, seat->local ? gold : white);
-        text(&screen, center, 108, phase[stage][screen.spanish], phase_color[stage]);
+        text(&screen, center, 102, name, seat->local ? gold : white);
+        text(&screen, center, 116, phase[stage][screen.spanish], phase_color[stage]);
     }
 
     const char *action = wording(&screen, "Waiting for host    B Back", "Esperando al anfitrión    B Atrás");
@@ -477,6 +558,6 @@ int ss_link_screen_draw(uint32_t *pixels, int width)
         action = ss_net_roster_can_start() ? wording(&screen, "A Start    B Back", "A Jugar    B Atrás") :
                  wording(&screen, "Waiting for players    B Back", "Esperando jugadores    B Atrás");
     panel(&screen, left, 132, content, 16, copper, 0xff182f36u);
-    text(&screen, width / 2, 132, action, white);
+    text(&screen, width / 2, 140, action, white);
     return 1;
 }

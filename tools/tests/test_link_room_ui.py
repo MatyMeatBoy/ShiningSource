@@ -15,12 +15,14 @@ HARNESS = r"""
 #include "shiningsource/runtime.h"
 #include "shiningsource/language.h"
 
-enum { A = 1, B = 2, RIGHT = 16, LEFT = 32, DOWN = 128 };
+enum { A = 1, B = 2, START = 8, RIGHT = 16, LEFT = 32, DOWN = 128 };
 static const unsigned *input;
 static size_t input_count, frame;
 static int begins, cancels, polls, pages, stops, width, expected_create, terminal_status;
 static uint32_t cursor;
 static uint32_t picture[SS_MAX_VIEW_W * SS_SCREEN_H];
+static const char *expected_title;
+static int directory_count = 1;
 
 void sub_080003F0(void)
 {
@@ -40,19 +42,23 @@ void ss_net_lobby_page(uint32_t wanted)
 int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *next)
 {
     strcpy(rooms[0].id, cursor ? "ABCDEFGH" : "23456789");
+    strcpy(rooms[0].title, "ShiningSource-01");
     rooms[0].players = 2;
     *next = cursor ? 0 : 7;
-    return 1;
+    return directory_count;
 }
 
 void ss_net_lobby_stop(void) { stops++; }
 const char *ss_net_lobby_room_id(void) { return NULL; }
+const char *ss_net_lobby_room_title(void) { return NULL; }
 
-int ss_net_lobby_enter(const char *id)
+int ss_net_lobby_enter(const char *id, const char *title)
 {
     assert((id == NULL) == expected_create);
     if (id)
         assert(strcmp(id, cursor ? "ABCDEFGH" : "23456789") == 0);
+    else
+        assert(title && !strcmp(title, expected_title));
     begins++;
     return 1;
 }
@@ -97,18 +103,30 @@ int main(void)
     archive[8 + 4 * 4 + 1] = 1; /* Font section at archive + 0x100. */
     archive[0x104] = 8;         /* Font bitmap at section + 8. */
 
-    const unsigned create[] = { 0, A, 0, 0 };
+    const unsigned create[] = { 0, A, START, 0, 0 };
+    const unsigned create_named[] = { 0, A, A, RIGHT, A, START, 0, 0 };
     const unsigned join[] = { DOWN, A, 0, 0 };
     const unsigned paged[] = { RIGHT, DOWN, A, 0, 0 };
     const unsigned missing[] = { DOWN, A, 0, 0, B, B };
 
     for (width = 240; width <= 427; width += 187) {
+        expected_title = "";
         check(create, sizeof create / sizeof *create, 1, 1, SS_ROOM_READY, 0, 1);
+        expected_title = "AB";
+        check(create_named, sizeof create_named / sizeof *create_named, 1, 1, SS_ROOM_READY, 0, 1);
         check(join, sizeof join / sizeof *join, 0, 1, SS_ROOM_READY, 0, 1);
         check(paged, sizeof paged / sizeof *paged, 0, 1, SS_ROOM_READY, 0, 2);
         *(uint32_t *)(uintptr_t)0x03003470 = SS_LANG_ES;
         check(missing, sizeof missing / sizeof *missing, 0, 0, SS_ROOM_UNAVAILABLE, 1, 2);
         check(missing, sizeof missing / sizeof *missing, 0, 0, SS_ROOM_ACTIVE, 1, 2);
+        check(missing, sizeof missing / sizeof *missing, 0, 0, SS_ROOM_UPDATE, 1, 2);
+        const unsigned update[] = { 0, A, B };
+        directory_count = -3;
+        input = update;
+        input_count = sizeof update / sizeof *update;
+        frame = begins = stops = 0;
+        assert(ss_link_room_select() == 0 && begins == 0 && stops == 1);
+        directory_count = 1;
         *(uint32_t *)(uintptr_t)0x03003470 = SS_LANG_EN;
     }
 }

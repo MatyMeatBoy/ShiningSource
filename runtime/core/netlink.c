@@ -50,8 +50,9 @@
 #define IO16(o) (*(volatile uint16_t *)(uintptr_t)(SS_IO + (o)))
 
 enum { BLOCK = 24, SEATS = 4, RING = 256, MAX_BLOCKS = 40, HEADER = 60, FIRST_LABEL = 1000 };
-enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO };
+enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO, T_UPDATE_REQUIRED };
 enum { PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
+enum { LIST_NAMED = 124, CLIENT_BUILD = 903 };
 /* The relay forwards nothing longer than this, so no packet may be. */
 enum { PACKET_MAX = 1200 };
 /* The message channel (see "messages" below): the longest message, an entry of a stream (the sender's seat and
@@ -112,11 +113,27 @@ static int room_create, room_cancel_pending;
 static int public_room;
 static uint32_t room_opened_at, room_code_serial;
 static char pending_room_code[SS_ROOM_CODE_CAPACITY];
+static char requested_room_title[SS_LOBBY_TITLE_MAX + 1], confirmed_room_title[SS_LOBBY_TITLE_MAX + 1];
 static struct {
-    int browsing, opened, count;
+    int browsing, opened, count, named, sent;
     uint32_t cursor, next, scope, nonce, sent_at, heard_at;
     struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE];
 } directory;
+
+static void read_room_title(char *title, const uint8_t *incoming)
+{
+    int length = 0;
+    while (length < SS_LOBBY_TITLE_MAX && incoming[length]) {
+        unsigned c = incoming[length];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == ' ' || c == '-')) {
+            length = 0;
+            break;
+        }
+        title[length++] = (char)c;
+    }
+    title[length] = '\0';
+}
 static struct ss_net_roster_entry own_roster = { SS_ROSTER_EMPTY, -1, -1, 1 };
 static int roster_host_start;
 enum { ROSTER_SILENT_MS = 2000, ROSTER_CLASS_MAX = 8, ROSTER_PALETTE_MAX = 30 };
@@ -419,12 +436,18 @@ static void send_hello(void)
 {
     uint8_t packet[HEADER + 32];
     header(packet, public_room ? T_PUBLIC_HELLO : T_HELLO, 0, 0);
+    const char *couch_seat = !public_room && seat < 0 ? getenv("SS_COUCH_SEAT") : NULL;
+    if (couch_seat && couch_seat[0] >= '0' && couch_seat[0] <= '3' && !couch_seat[1])
+        packet[5] = (uint8_t)(couch_seat[0] - '0');
     if (public_room) {
         packet[7] = room_create ? PUBLIC_CREATE | ((lobby_done || in_play) ? PUBLIC_STARTED : 0) : PUBLIC_JOIN;
         wr32(packet + 28, room_namespace(2166136261u, direct));
+        wr32(packet + 32, CLIENT_BUILD);
     }
     memset(packet + HEADER, 0, 32);
     memcpy(packet + HEADER, room_name, strlen(room_name));
+    if (public_room && room_create)
+        memcpy(packet + HEADER + SS_ROOM_CODE_LENGTH, requested_room_title, SS_LOBBY_TITLE_MAX);
     ss_plat_net_send(packet, sizeof packet);
     last_hello = ss_plat_ticks_ms();
 }
@@ -1687,7 +1710,15 @@ static void receive(void)
         if (rd32(packet) != MAGIC || rd32(packet + 8) != room)
             continue;
         relay_heard = ss_plat_ticks_ms();       /* whatever it is, the connection is there (connection_check) */
+        if (type == T_UPDATE_REQUIRED && public_room && room_status == SS_ROOM_CONNECTING &&
+            rd32(packet + 12) == token && rd32(packet + 28) > CLIENT_BUILD) {
+            close_room();
+            room_status = SS_ROOM_UPDATE;
+            return;
+        }
         if (type == T_WELCOME) {
+            if (public_room)
+                read_room_title(confirmed_room_title, packet + 28);
             if (room_status == SS_ROOM_CONNECTING && from < SEATS) {
                 seat = from;
                 if ((room_create && from != 0) || (!room_create && (from == 0 || !(count & 1)))) {
@@ -1918,7 +1949,8 @@ void ss_net_lobby_page(uint32_t cursor)
 {
     directory.browsing = 1;
     directory.cursor = cursor;
-    directory.next = directory.sent_at = 0;
+    directory.next = 0;
+    directory.named = directory.sent = 0;
     directory.heard_at = ss_plat_ticks_ms();
     directory.nonce++;
     directory.count = -1;
@@ -1938,7 +1970,7 @@ int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *
     return directory.count;
 }
 
-int ss_net_lobby_enter(const char *id)
+int ss_net_lobby_enter(const char *id, const char *title)
 {
     char generated[SS_ROOM_CODE_CAPACITY];
     int create = id == NULL;
@@ -1950,6 +1982,10 @@ int ss_net_lobby_enter(const char *id)
         return 0;
     ss_net_lobby_stop();
     public_room = 1;
+    memset(requested_room_title, 0, sizeof requested_room_title);
+    if (create && title)
+        snprintf(requested_room_title, sizeof requested_room_title, "%s", title);
+    confirmed_room_title[0] = '\0';
     return 1;
 }
 
@@ -1958,9 +1994,14 @@ const char *ss_net_lobby_room_id(void)
     return public_room && room_status == SS_ROOM_READY ? pending_room_code : NULL;
 }
 
+const char *ss_net_lobby_room_title(void)
+{
+    return ss_net_lobby_room_id() && confirmed_room_title[0] ? confirmed_room_title : NULL;
+}
+
 static void poll_directory(void)
 {
-    uint8_t packet[HEADER];
+    uint8_t packet[LIST_NAMED];
     uint32_t now = ss_plat_ticks_ms();
 
     if (!directory.browsing || room_cancel_pending)
@@ -1975,23 +2016,40 @@ static void poll_directory(void)
         directory.scope = room_namespace(2166136261u, !manual_delay || strtoul(manual_delay, NULL, 10) == 0);
         directory.opened = 1;
     }
-    if (!directory.sent_at || now - directory.sent_at >= 750) {
+    if (!directory.sent || now - directory.sent_at >= 750) {
         memset(packet, 0, sizeof packet);
         wr32(packet, MAGIC);
         packet[4] = T_LIST;
         wr32(packet + 8, directory.scope);
         wr32(packet + 12, directory.nonce);
         wr32(packet + 16, directory.cursor);
-        ss_plat_net_send(packet, HEADER);
-        directory.sent_at = now | 1;
+        wr32(packet + 20, CLIENT_BUILD);
+        ss_plat_net_send(packet, LIST_NAMED);
+        if (directory.sent && !directory.named)
+            ss_plat_net_send(packet, HEADER);
+        directory.sent = 1;
+        directory.sent_at = now;
     }
-    for (int budget = 8; budget > 0 && ss_plat_net_recv(packet, sizeof packet) == HEADER; --budget) {
+    for (int budget = 8; budget > 0; --budget) {
+        int received = ss_plat_net_recv(packet, sizeof packet);
+        if (received <= 0)
+            break;
+        int named = received == LIST_NAMED;
+        if (!named && (received != HEADER || directory.named))
+            continue;
         if (rd32(packet) != MAGIC || packet[4] != T_LIST_REPLY || packet[7] > SS_LOBBY_PAGE_SIZE ||
             rd32(packet + 8) != directory.scope || rd32(packet + 12) != directory.nonce)
             continue;
+        directory.named = named;
+        directory.heard_at = now;
+        if (named && rd32(packet + LIST_NAMED - 4) > CLIENT_BUILD) {
+            directory.next = 0;
+            directory.count = -3;
+            continue;
+        }
         int count = 0;
         for (int i = 0; i < packet[7]; ++i) {
-            const uint8_t *row = packet + 20 + i * SS_ROOM_CODE_CAPACITY;
+            const uint8_t *row = packet + 20 + i * (SS_ROOM_CODE_CAPACITY + (named ? SS_LOBBY_TITLE_MAX : 0));
             if (row[SS_ROOM_CODE_LENGTH] < 1 || row[SS_ROOM_CODE_LENGTH] >= SEATS)
                 continue;
             int n = 0;
@@ -2006,11 +2064,13 @@ static void poll_directory(void)
                 continue;
             memcpy(directory.rooms[count].id, row, SS_ROOM_CODE_LENGTH);
             directory.rooms[count].id[SS_ROOM_CODE_LENGTH] = '\0';
+            directory.rooms[count].title[0] = '\0';
+            if (named)
+                read_room_title(directory.rooms[count].title, row + SS_ROOM_CODE_CAPACITY);
             directory.rooms[count++].players = row[SS_ROOM_CODE_LENGTH];
         }
         directory.next = rd32(packet + 16);
         directory.count = count;
-        directory.heard_at = now;
     }
     if (now - directory.heard_at >= 4500) {
         directory.count = -2;

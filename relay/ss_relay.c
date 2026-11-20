@@ -41,8 +41,9 @@ typedef socklen_t socklen_t_;
 #endif
 
 enum { SEATS = 4, ROOMS = 512, HEADER = 60, MAX_PACKET = 1200, SILENCE = 30 };
-enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO };
-enum { LIST_ROWS = 4, ROOM_NAME_BYTES = 8, PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
+enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO, T_UPDATE_REQUIRED };
+enum { LIST_ROWS = 4, ROOM_NAME_BYTES = 8, TITLE_BYTES = 16, LIST_NAMED = 124,
+       PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
 #define MAGIC 0x314E5353u
 
 struct seat {
@@ -56,6 +57,7 @@ struct room {
     int players;
     uint32_t public_scope;
     uint8_t name[ROOM_NAME_BYTES];
+    char title[TITLE_BYTES + 1];
     int listed, started;
     struct seat seat[SEATS];
 };
@@ -173,11 +175,51 @@ static int valid_public_name(const uint8_t *name)
     return 1;
 }
 
-static void list_public_rooms(uint8_t *packet)
+static uint32_t minimum_build;
+
+static void set_public_title(struct room *room, const uint8_t *name)
+{
+    int length = 0;
+    for (int i = 0; i < TITLE_BYTES && name[i]; ++i) {
+        unsigned c = name[i];
+        if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') || c == '-' || (c == ' ' && length))
+            room->title[length++] = (char)c;
+    }
+    while (length && room->title[length - 1] == ' ')
+        --length;
+    room->title[length] = '\0';
+    if (length)
+        return;
+
+    for (unsigned number = 1; number <= ROOMS; ++number) {
+        snprintf(room->title, sizeof room->title,
+                 number < 100 ? "ShiningSource-%02u" : "ShiningSrc-%03u", number);
+        int collision = 0;
+        for (unsigned i = 0; i < ROOMS; ++i)
+            if (&rooms[i] != room && rooms[i].players && rooms[i].listed &&
+                rooms[i].public_scope == room->public_scope && !strcmp(rooms[i].title, room->title)) {
+                collision = 1;
+                break;
+            }
+        if (!collision)
+            return;
+    }
+}
+
+static void list_public_rooms(uint8_t *packet, int size)
 {
     uint32_t scope = rd32(packet + 8), index = rd32(packet + 16);
+    int named = size == LIST_NAMED;
+    unsigned row_size = ROOM_NAME_BYTES + 1 + (named ? TITLE_BYTES : 0);
     unsigned count = 0;
-    memset(packet + 20, 0, HEADER - 20);
+    uint32_t build = rd32(packet + 20);
+    memset(packet + 20, 0, (size_t)size - 20);
+    if (named) {
+        wr32(packet + LIST_NAMED - 4, minimum_build);
+        if (build < minimum_build)
+            index = ROOMS;
+    }
     for (; index < ROOMS; ++index) {
         const struct room *room = &rooms[index];
         if (!room->listed || room->public_scope != scope || room->started ||
@@ -185,9 +227,11 @@ static void list_public_rooms(uint8_t *packet)
             continue;
         if (count == LIST_ROWS)
             break;
-        uint8_t *row = packet + 20 + count++ * (ROOM_NAME_BYTES + 1);
+        uint8_t *row = packet + 20 + count++ * row_size;
         memcpy(row, room->name, ROOM_NAME_BYTES);
         row[ROOM_NAME_BYTES] = (uint8_t)room->players;
+        if (named)
+            memcpy(row + ROOM_NAME_BYTES + 1, room->title, TITLE_BYTES);
     }
     packet[4] = T_LIST_REPLY;
     packet[7] = (uint8_t)count;
@@ -240,6 +284,9 @@ static time_t last_packet;
 
 int main(int argc, char **argv)
 {
+    const char *required = getenv("SS_RELAY_MIN_BUILD");
+    if (required)
+        minimum_build = (uint32_t)strtoul(required, NULL, 10);
     int port = argc > 1 ? atoi(argv[1]) : 47900;
     struct sockaddr_in local;
     socket_t sock;
@@ -280,13 +327,23 @@ int main(int argc, char **argv)
     sock = socket(AF_INET, SOCK_DGRAM, 0);
     memset(&local, 0, sizeof local);
     local.sin_family = AF_INET;
-    local.sin_addr.s_addr = htonl(INADDR_ANY);
+    const char *loopback = getenv("SS_RELAY_LOOPBACK");
+    local.sin_addr.s_addr = htonl(loopback && !strcmp(loopback, "1") ? INADDR_LOOPBACK : INADDR_ANY);
     local.sin_port = htons((unsigned short)port);
     if (bind(sock, (struct sockaddr *)&local, sizeof local)) {
         fprintf(stderr, "cannot bind UDP port %d\n", port);
         return 1;
     }
+    if (!port) {
+        socklen_t_ size = sizeof local;
+        if (getsockname(sock, (struct sockaddr *)&local, &size) != 0) {
+            fprintf(stderr, "cannot read the assigned UDP port\n");
+            return 1;
+        }
+        port = ntohs(local.sin_port);
+    }
     fprintf(stderr, "ss_relay on UDP port %d\n", port);
+    fflush(stderr);
     for (;;) {
         uint8_t packet[MAX_PACKET + 1];
         struct sockaddr_in from;
@@ -327,9 +384,9 @@ int main(int argc, char **argv)
             sendto(sock, (const char *)packet, HEADER, 0, (struct sockaddr *)&from, sizeof from);
             continue;
         }
-        if (packet[4] == T_LIST && size == HEADER) {
-            list_public_rooms(packet);
-            sendto(sock, (const char *)packet, HEADER, 0, (const struct sockaddr *)&from, sizeof from);
+        if (packet[4] == T_LIST && (size == HEADER || size == LIST_NAMED)) {
+            list_public_rooms(packet, size);
+            sendto(sock, (const char *)packet, size, 0, (const struct sockaddr *)&from, sizeof from);
             continue;
         }
         int public_hello = packet[4] == T_PUBLIC_HELLO;
@@ -337,6 +394,12 @@ int main(int argc, char **argv)
         if (public_hello && (size != HEADER + 32 || !valid_public_name(packet + HEADER) ||
             (!create && packet[7] != PUBLIC_JOIN)))
             continue;
+        if (public_hello && rd32(packet + 32) < minimum_build) {
+            packet[4] = T_UPDATE_REQUIRED;
+            wr32(packet + 28, minimum_build);
+            sendto(sock, (const char *)packet, HEADER, 0, (const struct sockaddr *)&from, sizeof from);
+            continue;
+        }
         room = find_room(rd32(packet + 8), packet[4] == T_HELLO || create);
         if (!room)
             continue;
@@ -351,6 +414,7 @@ int main(int argc, char **argv)
                 room->listed = 1;
                 room->public_scope = scope;
                 memcpy(room->name, packet + HEADER, ROOM_NAME_BYTES);
+                set_public_title(room, packet + HEADER + ROOM_NAME_BYTES);
             }
             if (!room->listed || room->public_scope != scope ||
                 memcmp(room->name, packet + HEADER, ROOM_NAME_BYTES))
@@ -391,6 +455,8 @@ int main(int argc, char **argv)
             packet[4] = T_WELCOME;
             packet[5] = (uint8_t)seat;
             packet[7] = 0;
+            if (public_hello)
+                memcpy(packet + 28, room->title, TITLE_BYTES);
             for (j = 0; j < SEATS; j++)
                 if (room->seat[j].used)
                     packet[7] |= (uint8_t)(1 << j);

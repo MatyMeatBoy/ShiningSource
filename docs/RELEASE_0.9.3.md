@@ -2,7 +2,10 @@
 
 - **Public lobby.** Choose Multiplayer at the title to create a room or select
   one that is already open. The list refreshes automatically and shows available
-  seats. Once the host starts, new players can join another open room.
+  seats. Use the game-style keyboard to enter a title, or accept the next
+  available numbered ShiningSource title by pressing Start. A server that
+  requires a newer version displays an update message. Once the host starts,
+  new players can join another open room.
 - **Direct connections.** The Windows launcher checks custom addresses and
   ports before launching. Hostnames such as `localhost` resolve through the
   relay's IPv4 path.

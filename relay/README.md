@@ -13,6 +13,9 @@ data; a room exists while somebody is in it.
 - Public lobbies appear automatically for clients in the same game and rules
   group. A room stops appearing when it is full, its host leaves, or play starts.
   The relay keeps the older explicit-room protocol available for older clients.
+- Custom titles are shown next to occupancy. The relay allocates the first
+  available numbered ShiningSource title when the creator leaves the name
+  blank. The internal identifier distinguishes rooms with matching titles.
 
 ## Build
 
@@ -35,6 +38,13 @@ journalctl -u ss_relay -f       # one line per player that joins or leaves
 The unit runs it as an unprivileged dynamic user and restarts it if it stops.
 Public listings and reserved seats are held in memory. Plan relay updates for
 when players can safely leave their rooms.
+
+Set `SS_RELAY_MIN_BUILD` only after a compatible client is published. The
+value is the online build number, for example `903` for 0.9.3. A version-aware
+client below the minimum sees an update prompt in the lobby. The original
+explicit-room protocol remains available. A local installation can bind the
+relay to the local machine with `SS_RELAY_LOOPBACK=1`. Passing port `0`
+chooses a free port and prints its number.
 
 ## Run as a container
 
@@ -73,7 +83,7 @@ Every packet starts with the same 60-byte header (little-endian):
 | Offset | Field |
 | --- | --- |
 | 0 | `SSN1` |
-| 4 | type: 1 hello, 2 welcome, 3 data, 4 end, 5 ping, 6 list, 7 list reply, 8 public hello |
+| 4 | type: 1 hello, 2 welcome, 3 data, 4 end, 5 ping, 6 list, 7 list reply, 8 public hello, 9 update required |
 | 5 | seat (set by the relay on forwarded packets) |
 | 6 | delay in frames (host's choice) |
 | 7 | number of 24-byte blocks that follow (welcome: seats in use, as bits) |
@@ -82,12 +92,16 @@ Every packet starts with the same 60-byte header (little-endian):
 | 16 | stream number; 20: first label of the stream; 24: label of the first block |
 | 28 | next label expected from each seat (4 x u32); 44: the stream that refers to |
 
-List requests and replies are 60 bytes. The list uses offset 8 for the
+Legacy list requests and replies are 60 bytes. The list uses offset 8 for the
 compatibility group, 12 for a nonce and 16 for the page cursor. A reply places
 its row count at offset 7 and up to four nine-byte rows at offset 20. A row
 contains an eight-character internal room identifier and one occupancy byte.
-Public hello messages carry the group at offset 28 and set byte 7 to 1 for
-create or 2 for join. The host sets bit 7 once the session has started.
+The 124-byte request adds the client build at offset 20. Its reply adds
+16 bytes per row for the title and writes the minimum build at offset 120.
+Public hello messages carry the group and client build at offsets 28 and
+32, the identifier at 60 and the optional title at 68. Byte 7 is 1 for create
+or 2 for join. The host sets bit 7 once the session has started. The reply
+places either the title or the required build at offset 28, according to type.
 
 The relay reads the type, seat, room and token; everything else is between the
 players (`runtime/core/netlink.c`). A ping is echoed to its sender and needs no

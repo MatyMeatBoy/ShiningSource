@@ -24,12 +24,14 @@ class PublicLobbyTests(unittest.TestCase):
             libraries = ["-lws2_32"] if os.name == "nt" else []
             subprocess.run([build.clang(), "-O2", str(build.ROOT / "relay/ss_relay.c"),
                             "-o", str(exe), *libraries], check=True)
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
-                reserve.bind(("127.0.0.1", 0))
-                port = reserve.getsockname()[1]
-            with subprocess.Popen([str(exe), str(port)], stderr=subprocess.PIPE) as relay:
+            with subprocess.Popen([str(exe), "0"], stderr=subprocess.PIPE,
+                                  env={**os.environ, "SS_RELAY_MIN_BUILD": "904",
+                                       "SS_RELAY_LOOPBACK": "1"}) as relay:
                 try:
-                    self.assertIn(b"on UDP port", relay.stderr.readline())
+                    headline = relay.stderr.readline().split()
+                    self.assertEqual(headline[:-1], [b"ss_relay", b"on", b"UDP", b"port"])
+                    port = int(headline[-1])
+                    self.assertGreater(port, 0)
                     self.exercise_rooms(port)
                 finally:
                     relay.terminate()
@@ -62,7 +64,9 @@ class PublicLobbyTests(unittest.TestCase):
                 return page(scope)[0]
 
             def hello(peer, token, flags, identity=room):
-                peer.send(packet(8, identity, token, scope=scope, flags=flags, code=code))
+                request = packet(8, identity, token, scope=scope, flags=flags, code=code)
+                struct.pack_into("<I", request, 32, 904)
+                peer.send(request)
                 return peer.recv(1200)
 
             self.assertEqual(query(), [])
@@ -98,12 +102,49 @@ class PublicLobbyTests(unittest.TestCase):
 
             labels = [("HALLAB2" + str(i)).encode() for i in range(2, 8)]
             for i, label in enumerate(labels):
-                observer.send(packet(8, 400 + i, 10 + i, scope=scope, flags=1, code=label))
+                request = packet(8, 400 + i, 10 + i, scope=scope, flags=1, code=label)
+                struct.pack_into("<I", request, 32, 904)
+                observer.send(request)
                 self.assertEqual(observer.recv(1200)[5], 0)
             first, next_cursor = page()
             second, last_cursor = page(cursor=next_cursor)
             self.assertEqual((len(first), len(second), last_cursor), (4, 2, 0))
             self.assertCountEqual(first + second, [(label, 1) for label in labels])
+
+            def named_create(identity, token, label, title=b""):
+                hello = packet(8, identity, token, scope=scope + 1, flags=1, code=label)
+                struct.pack_into("<I", hello, 32, 904)
+                hello[68:68 + len(title)] = title
+                host.send(hello)
+                while True:
+                    reply = host.recv(1200)
+                    if reply[4] == 2 and struct.unpack_from("<II", reply, 8) == (identity, token):
+                        return reply[28:44].rstrip(b"\0")
+
+            first = named_create(501, 50, b"ABCD2355")
+            second = named_create(502, 51, b"ABCD2356")
+            self.assertEqual((first, second), (b"ShiningSource-01", b"ShiningSource-02"))
+            self.assertEqual(named_create(503, 52, b"ABCD2357", b"Friends"), b"Friends")
+            self.assertEqual(named_create(504, 53, b"ABCD2358", b"Friends"), b"Friends")
+
+            def named_list(version):
+                request = packet(6, scope + 1, 99) + bytes(64)
+                struct.pack_into("<I", request, 20, version)
+                observer.send(request)
+                reply = observer.recv(1200)
+                self.assertEqual(len(reply), len(request))
+                self.assertEqual(struct.unpack_from("<I", reply, 120)[0], 904)
+                return [reply[29 + i * 25:45 + i * 25].rstrip(b"\0") for i in range(reply[7])]
+
+            self.assertEqual(named_list(903), [])
+            self.assertCountEqual(named_list(904), [first, second, b"Friends", b"Friends"])
+            old = packet(8, 505, 54, scope=scope + 1, flags=1, code=b"ABCD2359")
+            struct.pack_into("<I", old, 32, 903)
+            browser = guests[3]
+            browser.send(old)
+            reply = browser.recv(1200)
+            self.assertEqual(reply[4], 9)
+            self.assertEqual(struct.unpack_from("<I", reply, 28)[0], 904)
 
 
 if __name__ == "__main__":
