@@ -54,6 +54,11 @@ With a release that includes `recomplauncher.json`, you can also install
 through RecompLauncher on Windows or Linux. Choose your European `.gba` in
 Easy Setup. Display and audio settings are available on the game's page.
 
+**0.9 (Windows, Android and Linux)** releases cancelled Archer arrows and
+preserves enemy deaths received during initialization in online co-op. Windows
+and Linux add RecompLauncher setup and settings. Online rules remain 7.
+See the [release notes](docs/RELEASE_0.9.md).
+
 **0.8.14 (Windows, Android and Linux)** expands **Restored Multiplayer Audio**
 (**Audio Multijugador Restaurado**): companion enemy hits, critical markers,
 breakable-object impacts, ability cues and hurt/falling voices share the existing

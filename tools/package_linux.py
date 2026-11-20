@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main():
     version = sys.argv[1]
-    if not re.fullmatch(r'\d+\.\d+\.\d+', version):
+    if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?', version):
         raise SystemExit('Expected a release version')
     out = ROOT/'build/releases'/version
     out.mkdir(parents=True, exist_ok=True)

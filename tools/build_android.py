@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--game", default="ss2", choices=sorted(build.GAMES))
     parser.add_argument("--abi", nargs="+", default=["armeabi-v7a", "arm64-v8a", "x86_64"], choices=sorted(IMAGES))
     parser.add_argument("--test", action="store_true", help="test build: the game activity can be started with adb")
+    parser.add_argument("--online", action="store_true", help="allow Gradle to download missing build dependencies")
     parser.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 4) // 2))
     args = parser.parse_args()
 
@@ -112,7 +113,7 @@ android {
  namespace 'com.shiningsource.android'
  compileSdk 35
  ndkVersion '%s'
- defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 24; versionName '0.8.14' }
+ defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 25; versionName '0.9' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { debug { debuggable true }; release { minifyEnabled false } }
  lint { abortOnError false }
@@ -120,7 +121,8 @@ android {
  androidResources { noCompress 'macho', 'elf' }
 }
 """ % ndk_version)
-    run([stage / "gradlew.bat", "--no-daemon", "--offline", "assembleDebug"], cwd=stage)
+    gradle_mode = [] if args.online else ["--offline"]
+    run([stage / "gradlew.bat", "--no-daemon", *gradle_mode, "assembleDebug"], cwd=stage)
     apk = stage / "app/build/outputs/apk/debug/app-debug.apk"
     with zipfile.ZipFile(apk) as z:
         names = z.namelist()

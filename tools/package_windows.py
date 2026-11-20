@@ -1,5 +1,5 @@
 """Package a Windows release from current build artifacts with an explicit allowlist.
-Usage: python tools/package_windows.py 0.8.14
+Usage: python tools/package_windows.py 0.9
 """
 import hashlib,json,re,sys,zipfile
 from pathlib import Path
@@ -8,7 +8,7 @@ import link
 ROOT=Path(__file__).resolve().parents[1]
 def main():
     version=sys.argv[1]
-    if not re.fullmatch(r'\d+\.\d+\.\d+',version): raise SystemExit('Expected a release version')
+    if not re.fullmatch(r'\d+\.\d+(?:\.\d+)?',version): raise SystemExit('Expected a release version')
     out=ROOT/'build/releases'/version;out.mkdir(parents=True,exist_ok=True)
     game=ROOT/'build/win64/ss2'
     sdk=next(Path(h) for h in link.SDL_HINTS if h and (Path(h)/'x86_64-w64-mingw32/lib').is_dir())
