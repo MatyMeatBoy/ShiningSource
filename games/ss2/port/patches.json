@@ -351,12 +351,27 @@
   {
    "why": "Restored Multiplayer Audio: declaration for accepted remote presentation events.",
    "find": "#include \"global.h\"",
-   "replace": "#include \"global.h\"\nextern void ss_remote_sfx_event(int);"
+   "replace": "#include \"global.h\"\nextern void ss_remote_sfx_event(int);\nextern int ss_remote_sfx_allowed(int);\nextern void ss_remote_sfx_boss_receive(u32, u32);\nextern int ss_net_active(void);"
   },
   {
    "why": "A pickup request may reach the host after another player has reserved or removed the item. The cartridge failure reply reads from BIOS address 0xC through the null record pointer. Return the requested item ID in the failure reply instead, avoiding a native access violation.",
    "find": "                        *(u32 *)(e + 8) = pid << 16;\n                        *(u32 *)(e + 12) = *(u16 *)(record + 12);",
    "replace": "                        *(u32 *)(e + 8) = pid << 16;\n                        *(u32 *)(e + 12) = (u16)d[0];"
+  },
+  {
+   "why": "Restored Multiplayer Audio: the existing 0x9B field-item removal carries pickup success in bit 16. Old receivers only read the low 16-bit item ID. A failed inventory insert also removes the item before redropping it and must stay silent.",
+   "find": "                            *(u32 *)(e + 8) = *(u16 *)(record + 12);\n                            e[1] = 1;\n                            gRxQueueCount++;\n                        }\n                        x_sub_0805865C(0x26);",
+   "replace": "                            *(u32 *)(e + 8) = *(u16 *)(record + 12);\n                            if (ss_net_active())\n                                *(u32 *)(e + 8) |= 0x10000u;\n                            e[1] = 1;\n                            gRxQueueCount++;\n                        }\n                        x_sub_0805865C(0x26);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: observers play the original pickup sound once on a marked removal of their field record. The picker already played it on successful inventory insertion. Legacy removals and repeated or unknown item IDs remain silent.",
+   "find": "        case 0x1A:\n            x_sub_0805D4C4((u16)d[0]);\n            break;",
+   "replace": "        case 0x1A: {\n            u16 id = (u16)d[0];\n            u32 removed = x_sub_0805D4C4(id);\n            if (removed && id != 0 && peer != myId && (d[0] >> 16) == 1 &&\n                ss_remote_sfx_allowed(0))\n                x_sub_0805865C(0x26);\n            break;\n        }"
+  },
+  {
+   "why": "Restored Multiplayer Audio: dispatch a single ordered boss-contact cue for the other players. Guest and host both play their own hit at the native contact point.",
+   "find": "        case 0x2E:\n            x_sub_08056E24();\n            break;\n        default:",
+   "replace": "        case 0x2E:\n            x_sub_08056E24();\n            break;\n        case 0xB1 - 0x81:\n            if (peer != myId && chunks == 1)\n                ss_remote_sfx_boss_receive(d[0], d[1]);\n            break;\n        default:"
   },
   {
    "why": "Restored Multiplayer Audio: one generic impact for a positive accepted peer hit on an active matching enemy. The high damage bit is not a critical cue. Own echoes and unknown IDs stay silent.",
@@ -766,6 +781,16 @@
  ],
  "code_08097E28.c": [
   {
+   "why": "Restored Multiplayer Audio: declare the confirmed boss-contact presenter.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern void ss_remote_sfx_boss_contact(int);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: the stationary radius impact in sub_0809C8F4 only applies to the local actor. Preserve its cue and send a presentation event to the other players once the hit is applied.",
+   "find": "            sub_0805865C(0xE2);",
+   "replace": "            ss_remote_sfx_boss_contact(0xE2);"
+  },
+  {
    "why": "Port ABI: AU2P 0809CCAA–0809CCB2 passes the actor's stat block at +0x204 to the player-count scaler in r0.",
    "find": "extern void s19F60(void) asm(\"sub_08019F60\");",
    "replace": "extern void s19F60(s16 *) asm(\"sub_08019F60\");"
@@ -774,6 +799,18 @@
    "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
    "find": "    s19F60();",
    "replace": "    s19F60((s16 *)sub);"
+  }
+ ],
+ "code_080A9680.c": [
+  {
+   "why": "Restored Multiplayer Audio: declare the confirmed boss-contact presenter.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\nextern void ss_remote_sfx_boss_contact(int);"
+  },
+  {
+   "why": "Restored Multiplayer Audio: sub_080AC5B4 plays this impact only when the local player takes the confirmed hit. Preserve that cue and add audio presentation for the other players.",
+   "find": "        sub_0805865C(0xBB);",
+   "replace": "        ss_remote_sfx_boss_contact(0xBB);"
   }
  ]
 }

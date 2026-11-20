@@ -36,7 +36,7 @@ def main():
     (out / "lib").mkdir(parents=True, exist_ok=True)
     host = out / ("%s_linux64" % args.game)
     done = subprocess.run([build.clang(), "--target=x86_64-linux-gnu", "--sysroot=" + str(base / "sysroot"), "-fuse-ld=lld",
-                           "-DSS_REBASED_HOST=1", "-DSS_HOST_VERSION=\"0.9.2\"",
+                           "-DSS_REBASED_HOST=1", "-DSS_HOST_VERSION=\"0.9.3\"",
                            "-O2", "-g", "-Wall", "-I", str(ROOT / "runtime/include"), "-I", str(base / "sdl/include"),
                            str(ROOT / "runtime/host64/host_linux.c"), str(ROOT / "runtime/win32/plat_sdl.c"), str(ROOT / "runtime/plat/net_udp.c"), "-o", str(host),
                            "-L", str(base / "sdl/lib"), "-lSDL3", "-lm", "-Wl,-rpath,$ORIGIN/lib"], capture_output=True, text=True)

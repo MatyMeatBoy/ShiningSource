@@ -246,7 +246,11 @@ int main(void) {
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory)/'audio.c'
             exe = Path(directory)/'audio.exe'
-            source.write_text(harness)
+            source.write_text(harness + r'''
+uint8_t *gUnk_03005CF4;
+int32_t gUnk_030027D0;
+int ss_net_msg_send(const void *data, int size) { return 0; }
+''')
             subprocess.run([build.clang(), '-std=c11', '-Wno-pointer-to-int-cast', '-Wno-int-to-pointer-cast', '-I', str(ROOT/'runtime/include'), str(source),
                             str(ROOT/'runtime/core/remote_sfx.c'), '-o', str(exe)], check=True)
             subprocess.run([str(exe)], check=True)

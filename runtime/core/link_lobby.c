@@ -16,80 +16,76 @@ struct canvas {
     int width, spanish;
 };
 
-enum room_page { ROOM_CLOSED, ROOM_CHOICE, ROOM_CREATE, ROOM_JOIN, ROOM_CONNECTING, ROOM_UNAVAILABLE, ROOM_IN_GAME };
-static const char room_alphabet[] = SS_ROOM_CODE_ALPHABET;
+enum room_page { ROOM_CLOSED, ROOM_LIST, ROOM_CONNECTING, ROOM_UNAVAILABLE, ROOM_IN_GAME };
 static struct {
     enum room_page page;
-    int create, selection, key, length;
-    char code[SS_ROOM_CODE_CAPACITY], confirmed_code[SS_ROOM_CODE_CAPACITY];
+    int position, pages, count;
+    uint32_t cursors[128], next;
+    struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE];
 } room_menu;
 
 void sub_080003F0(void);        /* yield to the game scheduler for one frame */
 
+static void browse_current_page(void)
+{
+    room_menu.page = ROOM_LIST;
+    room_menu.position = 0;
+    room_menu.count = -1;
+    ss_net_lobby_page(room_menu.cursors[room_menu.pages]);
+}
+
+static void refresh_room_list(void)
+{
+    char selected[SS_ROOM_CODE_CAPACITY] = {0};
+    if (room_menu.position > 0 && room_menu.position <= room_menu.count)
+        memcpy(selected, room_menu.rooms[room_menu.position - 1].id, sizeof selected);
+    room_menu.count = ss_net_lobby_list(room_menu.rooms, &room_menu.next);
+    room_menu.position = 0;
+    for (int i = 0; selected[0] && i < room_menu.count; ++i)
+        if (!memcmp(selected, room_menu.rooms[i].id, sizeof selected))
+            room_menu.position = i + 1;
+}
+
 int ss_link_room_select(void)
 {
-    enum { A = 1, B = 2, START = 8, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128, L = 512 };
-    room_menu.page = ROOM_CHOICE;
-    room_menu.selection = 0;
-    room_menu.confirmed_code[0] = '\0';
+    enum { A = 1, B = 2, RIGHT = 16, LEFT = 32, UP = 64, DOWN = 128 };
+    room_menu.pages = 0;
+    room_menu.cursors[0] = 0;
+    browse_current_page();
     for (;;) {
         sub_080003F0();
         uint16_t pressed = *(const uint16_t *)(uintptr_t)0x03001324;
         uint16_t move = *(const uint16_t *)(uintptr_t)0x03001308;
         switch (room_menu.page) {
-        case ROOM_CHOICE:
+        case ROOM_LIST:
             if (pressed & B) {
-                ss_net_room_cancel();
+                ss_net_lobby_stop();
                 room_menu.page = ROOM_CLOSED;
                 return 0;
             }
-            if (move & UP)
-                room_menu.selection = 0;
-            if (move & DOWN)
-                room_menu.selection = 1;
-            if (pressed & A) {
-                room_menu.create = !room_menu.selection;
-                room_menu.length = room_menu.create ? SS_ROOM_CODE_LENGTH : 0;
-                room_menu.key = 0;
-                if (room_menu.create)
-                    ss_net_room_generate(room_menu.code);
-                else
-                    room_menu.code[0] = '\0';
-                room_menu.page = room_menu.create ? ROOM_CREATE : ROOM_JOIN;
-            }
-            break;
-        case ROOM_CREATE:
-        case ROOM_JOIN:
-            if (pressed & B) {
-                room_menu.page = ROOM_CHOICE;
+            /* A must act on the row that was actually drawn this frame. */
+            if (pressed & A && room_menu.count >= 0) {
+                const char *id = room_menu.position ? room_menu.rooms[room_menu.position - 1].id : NULL;
+                room_menu.page = ss_net_lobby_enter(id) ? ROOM_CONNECTING : ROOM_UNAVAILABLE;
                 break;
             }
-            if (room_menu.page == ROOM_JOIN) {
-                int column = room_menu.key % 8, row = room_menu.key / 8;
-                if (move & LEFT) column = (column + 7) % 8;
-                if (move & RIGHT) column = (column + 1) % 8;
-                if (move & UP) row = (row + 3) % 4;
-                if (move & DOWN) row = (row + 1) % 4;
-                room_menu.key = row * 8 + column;
-                if ((pressed & L) && room_menu.length > 0)
-                    room_menu.code[--room_menu.length] = '\0';
-                if ((pressed & A) && room_menu.length < SS_ROOM_CODE_LENGTH) {
-                    room_menu.code[room_menu.length++] = room_alphabet[room_menu.key];
-                    room_menu.code[room_menu.length] = '\0';
-                }
-            }
-            if (room_menu.length == SS_ROOM_CODE_LENGTH && (pressed & (room_menu.create ? A : START))) {
-                room_menu.page = ss_net_room_begin(room_menu.code, room_menu.create) ? ROOM_CONNECTING : ROOM_UNAVAILABLE;
+            refresh_room_list();
+            if ((move & UP) && room_menu.position > 0)
+                room_menu.position--;
+            if ((move & DOWN) && room_menu.position < room_menu.count)
+                room_menu.position++;
+            if ((pressed & LEFT) && room_menu.pages > 0) {
+                room_menu.pages--;
+                browse_current_page();
+            } else if ((pressed & RIGHT) && room_menu.next && room_menu.pages < 127) {
+                room_menu.cursors[++room_menu.pages] = room_menu.next;
+                browse_current_page();
             }
             break;
         case ROOM_CONNECTING:
-            if (pressed & B) {
-                ss_net_room_cancel();
-                room_menu.page = room_menu.create ? ROOM_CREATE : ROOM_JOIN;
-            } else {
+            if (!(pressed & B)) {
                 int status = ss_net_room_status();
                 if (status == SS_ROOM_READY) {
-                    memcpy(room_menu.confirmed_code, room_menu.code, sizeof room_menu.code);
                     room_menu.page = ROOM_CLOSED;
                     return 1;
                 }
@@ -97,13 +93,16 @@ int ss_link_room_select(void)
                     room_menu.page = ROOM_UNAVAILABLE;
                 else if (status == SS_ROOM_ACTIVE)
                     room_menu.page = ROOM_IN_GAME;
+                break;
             }
+            ss_net_room_cancel();
+            browse_current_page();
             break;
         case ROOM_UNAVAILABLE:
         case ROOM_IN_GAME:
             if (pressed & B) {
                 ss_net_room_cancel();
-                room_menu.page = room_menu.create ? ROOM_CREATE : ROOM_JOIN;
+                browse_current_page();
             }
             break;
         default:
@@ -258,6 +257,14 @@ static void background(const struct canvas *screen)
     box(screen, width - 4, 4, 1, 152, 0xff594632u);
 }
 
+static unsigned public_room_number(const char *id)
+{
+    unsigned label = 0;
+    for (int n = 0; n < SS_ROOM_CODE_LENGTH; ++n)
+        label = label * 37u + (unsigned char)id[n];
+    return label % 1000000u;
+}
+
 static void draw_room_menu(const struct canvas *screen)
 {
     int middle = screen->width / 2;
@@ -267,58 +274,40 @@ static void draw_room_menu(const struct canvas *screen)
 
     background(screen);
     panel(screen, left, 9, wide, 22, copper, 0xff203940u);
-    if (room_menu.page == ROOM_CHOICE) {
-        text(screen, middle, 12, wording(screen, "ONLINE MULTIPLAYER", "MULTIJUGADOR EN LÍNEA"), gold);
-        for (int i = 0; i < 2; i++) {
-            int selected = i == room_menu.selection;
-            int y = 52 + 32 * i;
-            panel(screen, left + 20, y, wide - 40, 25, selected ? gold : copper,
-                  selected ? 0xff35534eu : 0xff213a40u);
-            const char *choice = i == 0 ? wording(screen, "Create room", "Crear sala") :
-                                         wording(screen, "Join room", "Unirse a sala");
-            text(screen, middle, y + 4, choice, selected ? gold : white);
+    text(screen, middle, 12, "LOBBY", gold);
+    if (room_menu.page == ROOM_LIST) {
+        uint32_t selected = 0xff35534eu, normal = 0xff213a40u;
+        panel(screen, left + 9, 33, wide - 18, 20,
+              room_menu.position == 0 ? gold : copper, room_menu.position == 0 ? selected : normal);
+        text(screen, middle, 34, wording(screen, "Create room", "Crear sala"), room_menu.position == 0 ? gold : white);
+        for (int i = 0; i < room_menu.count; ++i) {
+            const struct ss_lobby_room *entry = &room_menu.rooms[i];
+            char line[42];
+            snprintf(line, sizeof line, wording(screen, "Room %06u      %d/4", "Sala %06u      %d/4"),
+                     public_room_number(entry->id), (int)entry->players);
+            int current = room_menu.position == i + 1;
+            int y = 54 + i * 20;
+            panel(screen, left + 9, y, wide - 18, 19, current ? gold : copper, current ? selected : normal);
+            text(screen, middle, y, line, current ? gold : white);
         }
-        text(screen, middle, 131, wording(screen, "A Select    B Back", "A Elegir    B Atrás"), white);
-        return;
-    }
-
-    const char *title = room_menu.create ? wording(screen, "CREATE ROOM", "CREAR SALA") :
-                                          wording(screen, "JOIN ROOM", "UNIRSE A SALA");
-    text(screen, middle, 12, title, gold);
-    if (room_menu.page == ROOM_JOIN) {
-        for (int i = 0; i < SS_ROOM_CODE_LENGTH; i++) {
-            int x = middle - 79 + i * 20;
-            char symbol[2] = {i < room_menu.length ? room_menu.code[i] : ' ', '\0'};
-            panel(screen, x, 35, 18, 20, i == room_menu.length ? gold : copper, 0xff192d34u);
-            text(screen, x + 9, 37, symbol, gold);
+        if (room_menu.count <= 0) {
+            const char *status = room_menu.count == 0 ? wording(screen, "No open rooms", "No hay salas abiertas") :
+                room_menu.count == -1 ? wording(screen, "Looking for rooms", "Buscando salas") :
+                    wording(screen, "Lobby server unavailable", "Servidor del lobby no disponible");
+            text(screen, middle, 83, status, white);
         }
-        for (int i = 0; i < (int)sizeof room_alphabet - 1; i++) {
-            int x = middle - 87 + i % 8 * 22;
-            int y = 61 + i / 8 * 18;
-            char symbol[2] = {room_alphabet[i], '\0'};
-            int selected = i == room_menu.key;
-            box(screen, x, y, 20, 16, selected ? 0xfff5cc7du : 0xff34565au);
-            box(screen, x + 1, y + 1, 18, 14, selected ? 0xff496951u : 0xff1e3b43u);
-            text(screen, x + 10, y, symbol, selected ? gold : white);
-        }
-        text(screen, middle, 135, room_menu.length == SS_ROOM_CODE_LENGTH ?
-             wording(screen, "Start Join    L Erase    B Back", "Start Unirse    L Borrar    B Atrás") :
-             wording(screen, "A Add    L Erase    B Back", "A Añadir    L Borrar    B Atrás"), white);
+        text(screen, middle, 136, room_menu.next || room_menu.pages ?
+            wording(screen, "A Select   Left/Right Page   B Back", "A Elegir   Izq/Der Página   B Atrás") :
+            wording(screen, "A Select    B Back", "A Elegir    B Atrás"), white);
         return;
     }
 
     panel(screen, left, 47, wide, 68, copper, 0xff203c44u);
-    text(screen, middle, 54, room_menu.code, gold);
-    if (room_menu.page == ROOM_CONNECTING)
-        text(screen, middle, 79, wording(screen, "Connecting to relay", "Conectando al servidor"), white);
-    else if (room_menu.page == ROOM_UNAVAILABLE)
-        text(screen, middle, 79, wording(screen, "Room unavailable", "Sala no disponible"), 0xfff0ac86u);
-    else if (room_menu.page == ROOM_IN_GAME)
-        text(screen, middle, 79, wording(screen, "Room already playing", "Sala ya en juego"), 0xfff0ac86u);
-    else
-        text(screen, middle, 79, wording(screen, "Share this room code", "Comparte este código"), white);
-    text(screen, middle, 131, room_menu.page == ROOM_CREATE ? wording(screen, "A Create    B Back", "A Crear    B Atrás") :
-         wording(screen, "B Back", "B Atrás"), white);
+    const char *status = room_menu.page == ROOM_CONNECTING ? wording(screen, "Connecting to relay", "Conectando al servidor") :
+        room_menu.page == ROOM_IN_GAME ? wording(screen, "Room already playing", "Sala ya en juego") :
+        wording(screen, "Room unavailable", "Sala no disponible");
+    text(screen, middle, 72, status, room_menu.page == ROOM_CONNECTING ? white : 0xfff0ac86u);
+    text(screen, middle, 131, wording(screen, "B Back", "B Atrás"), white);
 }
 
 /* Animation 8 is the front-facing pose used by the original save-slot screen. Like sub_08007CF0,
@@ -429,13 +418,13 @@ int ss_link_screen_draw(uint32_t *pixels, int width)
     background(&screen);
 
     char room[36];
-    if (room_menu.confirmed_code[0])
-        snprintf(room, sizeof room, wording(&screen, "%s    %d of 4 linked", "%s    %d de 4 en línea"),
-                 room_menu.confirmed_code, occupied);
+    const char *public_id = ss_net_lobby_room_id();
+    if (public_id)
+        snprintf(room, sizeof room, wording(&screen, "Room %06u    %d/4", "Sala %06u    %d/4"),
+                 public_room_number(public_id), occupied);
     else
         snprintf(room, sizeof room, wording(&screen, "%d of 4 linked", "%d de 4 en línea"), occupied);
-    panel(&screen, left, 10, content, 33, copper, 0xff203940u);
-    text(&screen, width / 2, 11, "GAME LINK", gold);
+    text(&screen, width / 2, 11, "LOBBY", gold);
     text(&screen, width / 2, 26, room, white);
 
     for (int i = 0; i < 4; i++) {

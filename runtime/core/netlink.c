@@ -39,6 +39,7 @@
  * the session needs it, they meet in a room of their own).
  */
 #include "shiningsource/runtime.h"
+#include "shiningsource/net_endpoint.h"
 #include "skip_vote.h"
 
 #include <stdarg.h>
@@ -49,7 +50,8 @@
 #define IO16(o) (*(volatile uint16_t *)(uintptr_t)(SS_IO + (o)))
 
 enum { BLOCK = 24, SEATS = 4, RING = 256, MAX_BLOCKS = 40, HEADER = 60, FIRST_LABEL = 1000 };
-enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END };
+enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO };
+enum { PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
 /* The relay forwards nothing longer than this, so no packet may be. */
 enum { PACKET_MAX = 1200 };
 /* The message channel (see "messages" below): the longest message, an entry of a stream (the sender's seat and
@@ -107,8 +109,14 @@ static void start_session(void);
 static void close_room(void);
 static enum ss_net_room_status room_status;
 static int room_create, room_cancel_pending;
+static int public_room;
 static uint32_t room_opened_at, room_code_serial;
 static char pending_room_code[SS_ROOM_CODE_CAPACITY];
+static struct {
+    int browsing, opened, count;
+    uint32_t cursor, next, scope, nonce, sent_at, heard_at;
+    struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE];
+} directory;
 static struct ss_net_roster_entry own_roster = { SS_ROSTER_EMPTY, -1, -1, 1 };
 static int roster_host_start;
 enum { ROSTER_SILENT_MS = 2000, ROSTER_CLASS_MAX = 8, ROSTER_PALETTE_MAX = 30 };
@@ -290,6 +298,7 @@ int ss_net_room_begin(const char *code, int create)
     if (code[i])
         return 0;
     pending_room_code[i] = 0;
+    public_room = 0;
     room_create = create != 0;
     room_status = SS_ROOM_CONNECTING;
     return 1;
@@ -305,20 +314,42 @@ void ss_net_room_cancel(void)
     room_cancel_pending = 1;
 }
 
+static int open_endpoint(void)
+{
+    const char *text = net_endpoint();
+    char host[SS_NET_HOST_CAPACITY];
+    int port;
+
+    if (!ss_net_parse_endpoint(text, host, sizeof host, &port)) {
+        net_say("net: invalid IPv4 relay address\n");
+        return 0;
+    }
+    if (ss_plat_net_open(host, port)) {
+        net_say("net: cannot reach %s:%d, playing offline\n", host, port);
+        return 0;
+    }
+    return 1;
+}
+
+static uint32_t room_namespace(uint32_t hash, int transport)
+{
+    static const uint32_t rules = 7;       /* canonical scene callback IDs */
+    uint32_t fingerprint = ss_rom_fingerprint();
+    uint8_t identity[4] = {
+        (uint8_t)fingerprint, (uint8_t)(fingerprint >> 8),
+        (uint8_t)(fingerprint >> 16), (uint8_t)(fingerprint >> 24)
+    };
+    hash = fnv(hash, identity, sizeof identity);
+    hash = fnv(hash, &rules, sizeof rules);
+    return fnv(hash, &transport, sizeof transport);
+}
+
 static int configure(void)
 {
     const char *text = net_endpoint();
-    char host[128];
-    int port = 47900, i;
-
     configured = 0;
     if (!text || !*text)
         return 0;
-    for (i = 0; text[i] && text[i] != ':' && i < (int)sizeof host - 1; i++)
-        host[i] = text[i];
-    host[i] = 0;
-    if (text[i] == ':')
-        port = (int)strtoul(text + i + 1, NULL, 10);
     if (room_status == SS_ROOM_CONNECTING)
         snprintf(room_name, sizeof room_name, "%s", pending_room_code);
     else if (getenv("SS_NET_ROOM"))
@@ -345,16 +376,7 @@ static int configure(void)
         /* Players only meet if they run the same game and the same rules: the room is the name together with
          * the cartridge's contents and the version of this protocol. Another version of the port or another
          * ROM lands in another room instead of producing a session that drifts apart. */
-        static const uint32_t rules = 7;        /* canonical scene callback IDs; never mix native-pointer peers */
-        uint32_t fingerprint = ss_rom_fingerprint();
-        uint8_t identity[4] = {
-            (uint8_t)fingerprint, (uint8_t)(fingerprint >> 8),
-            (uint8_t)(fingerprint >> 16), (uint8_t)(fingerprint >> 24)
-        };
-        /* Rules 6 changes room identity: every peer needs an updated client. */
-        room = fnv(room, identity, sizeof identity);
-        room = fnv(room, &rules, sizeof rules);
-        room = fnv(room, &direct, sizeof direct);      /* the two transports do not mix */
+        room = room_namespace(room, direct);
         /* SS_NET_JOIN=1: a player can be let into a game in progress ("joining a game in progress", below). The
          * players of such a session all have to know how, so they meet in a room of their own; without the
          * setting the room is the one it always was and nothing below is ever reached. Only with the direct
@@ -366,11 +388,9 @@ static int configure(void)
     }
     token = getenv("SS_NET_TOKEN") ? (uint32_t)strtoul(getenv("SS_NET_TOKEN"), NULL, 10)
                                    : fnv(ss_plat_ticks_ms() * 2654435761u, &text, sizeof text) | 1;
-    if (ss_plat_net_open(host, port)) {
-        net_say("net: cannot reach %s:%d, playing offline\n", host, port);
+    if (!open_endpoint())
         return 0;
-    }
-    net_say("net: relay %s:%d, room '%s', delay %d\n", host, port, room_name, delay);
+    net_say("net: relay %s, room '%s', delay %d\n", text, room_name, delay);
     configured = 1;
     return 1;
 }
@@ -398,7 +418,11 @@ static void header(uint8_t *packet, int type, int count, uint32_t first_label)
 static void send_hello(void)
 {
     uint8_t packet[HEADER + 32];
-    header(packet, T_HELLO, 0, 0);
+    header(packet, public_room ? T_PUBLIC_HELLO : T_HELLO, 0, 0);
+    if (public_room) {
+        packet[7] = room_create ? PUBLIC_CREATE | ((lobby_done || in_play) ? PUBLIC_STARTED : 0) : PUBLIC_JOIN;
+        wr32(packet + 28, room_namespace(2166136261u, direct));
+    }
     memset(packet + HEADER, 0, 32);
     memcpy(packet + HEADER, room_name, strlen(room_name));
     ss_plat_net_send(packet, sizeof packet);
@@ -1890,6 +1914,110 @@ static void close_room(void)
     memset(streams, 0, sizeof streams);
 }
 
+void ss_net_lobby_page(uint32_t cursor)
+{
+    directory.browsing = 1;
+    directory.cursor = cursor;
+    directory.next = directory.sent_at = 0;
+    directory.heard_at = ss_plat_ticks_ms();
+    directory.nonce++;
+    directory.count = -1;
+}
+
+void ss_net_lobby_stop(void)
+{
+    if (directory.opened)
+        ss_plat_net_open(NULL, 0);
+    directory.opened = directory.browsing = 0;
+}
+
+int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *next)
+{
+    *next = directory.next;
+    memcpy(rooms, directory.rooms, sizeof directory.rooms);
+    return directory.count;
+}
+
+int ss_net_lobby_enter(const char *id)
+{
+    char generated[SS_ROOM_CODE_CAPACITY];
+    int create = id == NULL;
+    if (create) {
+        ss_net_room_generate(generated);
+        id = generated;
+    }
+    if (!ss_net_room_begin(id, create))
+        return 0;
+    ss_net_lobby_stop();
+    public_room = 1;
+    return 1;
+}
+
+const char *ss_net_lobby_room_id(void)
+{
+    return public_room && room_status == SS_ROOM_READY ? pending_room_code : NULL;
+}
+
+static void poll_directory(void)
+{
+    uint8_t packet[HEADER];
+    uint32_t now = ss_plat_ticks_ms();
+
+    if (!directory.browsing || room_cancel_pending)
+        return;
+    if (!directory.opened) {
+        if (!open_endpoint()) {
+            directory.count = -2;
+            directory.browsing = 0;
+            return;
+        }
+        const char *manual_delay = getenv("SS_NET_DELAY");
+        directory.scope = room_namespace(2166136261u, !manual_delay || strtoul(manual_delay, NULL, 10) == 0);
+        directory.opened = 1;
+    }
+    if (!directory.sent_at || now - directory.sent_at >= 750) {
+        memset(packet, 0, sizeof packet);
+        wr32(packet, MAGIC);
+        packet[4] = T_LIST;
+        wr32(packet + 8, directory.scope);
+        wr32(packet + 12, directory.nonce);
+        wr32(packet + 16, directory.cursor);
+        ss_plat_net_send(packet, HEADER);
+        directory.sent_at = now | 1;
+    }
+    for (int budget = 8; budget > 0 && ss_plat_net_recv(packet, sizeof packet) == HEADER; --budget) {
+        if (rd32(packet) != MAGIC || packet[4] != T_LIST_REPLY || packet[7] > SS_LOBBY_PAGE_SIZE ||
+            rd32(packet + 8) != directory.scope || rd32(packet + 12) != directory.nonce)
+            continue;
+        int count = 0;
+        for (int i = 0; i < packet[7]; ++i) {
+            const uint8_t *row = packet + 20 + i * SS_ROOM_CODE_CAPACITY;
+            if (row[SS_ROOM_CODE_LENGTH] < 1 || row[SS_ROOM_CODE_LENGTH] >= SEATS)
+                continue;
+            int n = 0;
+            for (; n < SS_ROOM_CODE_LENGTH; ++n) {
+                const char *allowed = SS_ROOM_CODE_ALPHABET;
+                while (*allowed && *allowed != row[n])
+                    ++allowed;
+                if (!*allowed)
+                    break;
+            }
+            if (n != SS_ROOM_CODE_LENGTH)
+                continue;
+            memcpy(directory.rooms[count].id, row, SS_ROOM_CODE_LENGTH);
+            directory.rooms[count].id[SS_ROOM_CODE_LENGTH] = '\0';
+            directory.rooms[count++].players = row[SS_ROOM_CODE_LENGTH];
+        }
+        directory.next = rd32(packet + 16);
+        directory.count = count;
+        directory.heard_at = now;
+    }
+    if (now - directory.heard_at >= 4500) {
+        directory.count = -2;
+        directory.next = 0;
+    }
+}
+
 static void poll_room(void)
 {
     uint32_t now;
@@ -2130,6 +2258,7 @@ void ss_net_leave(void)
 void ss_net_flush(void)
 {
     poll_room();
+    poll_directory();
     if (leaving_since && ss_plat_ticks_ms() - leaving_since > 2000) {
         net_say("net: the game's link task ended; leaving the session\n");
         leaving_since = 0;

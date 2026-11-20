@@ -43,6 +43,19 @@ def charged_sound_guard():
     return source[start:end]
 
 
+def pickup_cases():
+    source = prepared_source('code_080659B0.c')
+    start = source.index('        case 0x19:')
+    end = source.index('        case 0x1B:', start)
+    return source[start:end]
+
+
+def boss_contact_case():
+    source = prepared_source('code_080659B0.c')
+    match = source.index('        case 0xB1 - 0x81:')
+    return source[match:source.index('        default:', match)]
+
+
 def extra_sound_guards():
     """Extract the actual five one-shot sound guards from remote task bodies."""
     requests = [
@@ -118,6 +131,17 @@ static void charged_start(int local) {
 int sub_0800CCCC(void) { return world; }
 int sub_0800CD34(void) { return map; }
 void sub_0805865C(int song) { d368_sub_0805865C(song); }
+static u32 scene_record[0x44 / 4];
+u8 *gUnk_03005CF4 = (u8 *)scene_record;
+int32_t gUnk_030027D0;
+static u8 sent_audio[10];
+static int sent_audio_count;
+int ss_net_msg_send(const void *data, int size) {
+    if (size != sizeof sent_audio) return 0;
+    memcpy(sent_audio, data, size);
+    sent_audio_count++;
+    return 1;
+}
 static void extra_task_start(int kind, int local, int n) {
     struct { int state; } actor = { local ? 0 : 13 };
     void *unused = 0;
@@ -285,6 +309,127 @@ static int extra_tasks(void) {
     CHECK(played == 5);
     return 0;
 }
+static _Alignas(4) u8 pickup_record[32];
+static _Alignas(4) u8 pickup_queue[0x88 * 2];
+static u8 *gRxQueue = pickup_queue;
+static unsigned gRxQueueCount, redrops;
+static struct { u32 f30; } gRxPlayers[4];
+static int inventory_accepts;
+static u8 *x_sub_0805D498(u16 id) {
+    return id == *(u16 *)(pickup_record + 12) && *(u16 *)(pickup_record + 10) == 2
+        ? pickup_record : NULL;
+}
+static u8 *x_sub_0805D460(u16 id) {
+    return id == *(u16 *)(pickup_record + 12) && *(u16 *)(pickup_record + 10) == 1
+        ? pickup_record : NULL;
+}
+static int x_sub_0805AB20(u8 *record) { return inventory_accepts; }
+static void x_sub_0805865C(int song) { sub_0805865C(song); }
+static void x_sub_08066490(u32 x, u32 y, u8 *item) { redrops++; }
+static int x_sub_0805D4C4(u16 id) {
+    if (id != *(u16 *)(pickup_record + 12)) return 0;
+    *(u16 *)(pickup_record + 10) = 0;
+    *(u16 *)(pickup_record + 12) = 0;
+    return 1;
+}
+static void pickup_message(unsigned myId, unsigned peer, unsigned tag, u32 header, u32 item_id) {
+    u32 d[] = {header, item_id};
+    switch (tag) {
+@PICKUP@
+    }
+}
+static void field_item(unsigned id, unsigned state) {
+    *(u16 *)(pickup_record + 10) = state;
+    *(u16 *)(pickup_record + 12) = id;
+}
+static int pickup(void) {
+    unsigned picker, observer, result, setting;
+    u32 removal;
+    online = 1;
+    for (picker = 0; picker < 2; picker++) {
+        observer = 1 - picker;
+        for (result = 0; result <= 1; result++) {
+            for (setting = 0; setting <= 1; setting++) {
+                gRxQueueCount = played = redrops = 0;
+                inventory_accepts = result;
+                ss_remote_sfx_set_enabled(setting);
+                field_item(42, picker == 0 ? 2 : 1);
+                pickup_message(picker, 0, 0x19, (picker << 16) | 1, 42);
+                CHECK(gRxQueueCount == 1 && gRxQueue[0] == 0x9B);
+                CHECK(played == result && (!result || songs[0] == 0x26));
+                CHECK(redrops == 1 - result);
+                removal = *(u32 *)(gRxQueue + 8);
+                CHECK((u16)removal == 42);
+                pickup_message(picker, picker, 0x1A, removal, 0);
+                CHECK(played == result && *(u16 *)(pickup_record + 12) == 0);
+                field_item(42, observer == 0 ? 2 : 1);
+                pickup_message(observer, picker, 0x1A, removal, 0);
+                CHECK(played == result + (result && setting));
+                CHECK(!(result && setting) || songs[1] == 0x26);
+                CHECK(*(u16 *)(pickup_record + 12) == 0);
+                pickup_message(observer, picker, 0x1A, removal, 0);
+                CHECK(played == result + (result && setting));
+            }
+        }
+    }
+    played = gRxQueueCount = 0;
+    field_item(42, 1);
+    pickup_message(1, 0, 0x19, (1 << 16), 42);
+    CHECK(!played && !gRxQueueCount); /* The host refused the request. */
+    pickup_message(1, 0, 0x1A, 42, 0);
+    CHECK(!played && *(u16 *)(pickup_record + 12) == 0); /* Legacy removal. */
+    world = 1; /* Field items are also collected in town (map set zero). */
+    field_item(42, 1);
+    pickup_message(1, 0, 0x1A, 0x10000u | 42, 0);
+    CHECK(played == 1 && songs[0] == 0x26);
+    world = played = 0;
+    online = 0;
+    field_item(42, 2);
+    inventory_accepts = 1;
+    pickup_message(0, 0, 0x19, 1, 42);
+    CHECK(played == 1 && songs[0] == 0x26); /* Keep local sound and payload. */
+    CHECK(*(u32 *)(gRxQueue + 8) == 42);
+    return 0;
+}
+static void boss_packet(unsigned myId, unsigned peer, unsigned chunks, u32 cue, u32 area) {
+    u32 d[] = {cue, area};
+    switch (sent_audio[0] - 0x81) {
+@BOSS_CONTACT@
+    }
+}
+static int boss_contact(void) {
+    u32 payload[2];
+    scene_record[0] = 9;
+    scene_record[0x40 / 4] = 5;
+    gUnk_030027D0 = 2;
+    online = 1;
+    played = sent_audio_count = 0;
+    ss_remote_sfx_set_enabled(0);
+    ss_remote_sfx_boss_contact(0xE2);
+    CHECK(played == 1 && songs[0] == 0xE2 && sent_audio_count == 1);
+    CHECK(sent_audio[0] == 0xB1 && sent_audio[1] == 1);
+    memcpy(payload, sent_audio + 2, sizeof payload);
+    CHECK(payload[0] == (9u << 16 | 0xE2) && payload[1] == 5);
+
+    boss_packet(0, 1, 1, payload[0], payload[1]); /* Observer opted out. */
+    CHECK(played == 1);
+    ss_remote_sfx_set_enabled(1);
+    boss_packet(0, 0, 1, payload[0], payload[1]); /* Sender echo. */
+    boss_packet(0, 1, 0, payload[0], payload[1]); /* Malformed. */
+    boss_packet(0, 1, 1, 9u << 16 | 0x24, 5);   /* Unrelated song. */
+    boss_packet(0, 1, 1, 8u << 16 | 0xE2, 5);   /* Different map. */
+    boss_packet(0, 1, 1, payload[0], 4);        /* Different area. */
+    CHECK(played == 1);
+    boss_packet(0, 1, 1, payload[0], payload[1]);
+    CHECK(played == 2 && songs[1] == 0xE2);
+    boss_packet(1, 0, 1, 9u << 16 | 0xBB, 5);
+    CHECK(played == 3 && songs[2] == 0xBB);
+
+    gUnk_030027D0 = 0; /* Solo play even if the launcher has an online endpoint. */
+    ss_remote_sfx_boss_contact(0xBB);
+    CHECK(played == 4 && songs[3] == 0xBB && sent_audio_count == 1);
+    return 0;
+}
 int main(int argc, char **argv) {
     if (argc < 2) return 2;
     if (!strcmp(argv[1], "policy")) return policy(atoi(argv[2]));
@@ -292,6 +437,8 @@ int main(int argc, char **argv) {
     if (!strcmp(argv[1], "bow")) return bow();
     if (!strcmp(argv[1], "extra")) return extra_tasks();
     if (!strcmp(argv[1], "charged")) return charged();
+    if (!strcmp(argv[1], "pickup")) return pickup();
+    if (!strcmp(argv[1], "boss")) return boss_contact();
     return 3;
 }
 '''
@@ -305,7 +452,8 @@ class RemoteSfx(unittest.TestCase):
         normal, bow = presentation_branches()
         source = out / 'remote_sfx.c'
         fixture = HARNESS.replace('@NORMAL@', normal).replace('@BOW@', bow)
-        fixture = fixture.replace('@CHARGED@', charged_sound_guard())
+        fixture = fixture.replace('@CHARGED@', charged_sound_guard()).replace('@PICKUP@', pickup_cases())
+        fixture = fixture.replace('@BOSS_CONTACT@', boss_contact_case())
         for index, guard in enumerate(extra_sound_guards()):
             fixture = fixture.replace('@EXTRA%d@' % index, guard)
         source.write_text(fixture)
@@ -344,6 +492,12 @@ class RemoteSfx(unittest.TestCase):
     def test_remote_bow_freeze_does_not_repeat_and_local_behavior_is_preserved(self):
         self.run_case('bow')
 
+    def test_pickup_is_heard_once_on_each_peer_only_after_success(self):
+        self.run_case('pickup')
+
+    def test_boss_contacts_use_the_current_scene_and_skip_the_sender_echo(self):
+        self.run_case('boss')
+
 
 class RemoteSfxCallbackBoundary(unittest.TestCase):
     def test_option_setter_never_calls_host_services(self):
@@ -355,6 +509,9 @@ class RemoteSfxCallbackBoundary(unittest.TestCase):
 #include <stdio.h>
 #include "shiningsource/runtime.h"
 static int callback_active, host_calls;
+uint8_t *gUnk_03005CF4;
+int32_t gUnk_030027D0;
+int ss_net_msg_send(const void *data, int size) { return 0; }
 char *guarded_getenv(const char *name) {
     if (callback_active) host_calls++;
     return "1"; /* Enable the logging branch if it accidentally returns. */

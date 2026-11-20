@@ -79,7 +79,7 @@ public class MainActivity extends Activity {
     private TextView romStatus, romNote, romHelp, playHint, gameNote, gameLanguage;
     private Button choose, play;
     private LauncherTheme theme;
-    private CheckBox customServer, directRoom;
+    private CheckBox customServer, directRoom, landscape;
     private EditText room, server, border;
     private RadioButton classic, enhanced;
 
@@ -176,6 +176,13 @@ public class MainActivity extends Activity {
         modes.setOnCheckedChangeListener((group, id) -> show());
         video.addView(modes);
         border = field(text("Classic border thickness (0–64)", "Grosor del borde clásico (0–64)"), saved.getString("border", "16"), true, video);
+        landscape = new CheckBox(this);
+        landscape.setText(text("Play in landscape", "Jugar en horizontal"));
+        theme.choice(landscape);
+        landscape.setChecked(saved.getBoolean("game_landscape", true));
+        video.addView(landscape);
+        video.addView(label(text("Turn off to follow your device's rotation setting.",
+                                 "Desactívalo para respetar el ajuste de rotación del dispositivo.")));
 
         network.addView(label(text("ShiningSource Server is the default. Create or join from Multiplayer in the game.",
                                    "Servidor ShiningSource es el predeterminado. Crea o únete a una sala desde Multijugador en el juego.")));
@@ -777,6 +784,7 @@ public class MainActivity extends Activity {
             edit.putString("mode", classic.isChecked() ? "classic" : "enhanced");
         edit.putString("border", border.getText().toString()).putBoolean("custom_server", customServer.isChecked())
             .putBoolean("direct_room", directRoom.isChecked())
+            .putBoolean("game_landscape", landscape.isChecked())
             .putString("room", room.getText().toString())
             .putString("server", server.getText().toString()).apply();
     }
@@ -820,7 +828,8 @@ public class MainActivity extends Activity {
         set(gameNote, "");
         Log.i(TAG, "starting the game with " + new File(folder, "rom.gba"));
         try {
-            startActivity(new Intent(this, GameActivity.class));
+            startActivity(new Intent(this, GameActivity.class)
+                    .putExtra(GameActivity.EXTRA_LANDSCAPE, landscape.isChecked()));
         } catch (RuntimeException failure) {
             DiagnosticReport.stage(getFilesDir(), "startup_error", failure.toString());
             showGameLog();

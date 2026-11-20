@@ -41,7 +41,8 @@ typedef socklen_t socklen_t_;
 #endif
 
 enum { SEATS = 4, ROOMS = 512, HEADER = 60, MAX_PACKET = 1200, SILENCE = 30 };
-enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING };
+enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO };
+enum { LIST_ROWS = 4, ROOM_NAME_BYTES = 8, PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
 #define MAGIC 0x314E5353u
 
 struct seat {
@@ -53,6 +54,9 @@ struct seat {
 struct room {
     uint32_t id;
     int players;
+    uint32_t public_scope;
+    uint8_t name[ROOM_NAME_BYTES];
+    int listed, started;
     struct seat seat[SEATS];
 };
 
@@ -158,6 +162,37 @@ static void release_held(socket_t sock)
 }
 
 static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+static void wr32(uint8_t *p, uint32_t value) { memcpy(p, &value, 4); }
+
+static int valid_public_name(const uint8_t *name)
+{
+    const char alphabet[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+    for (int i = 0; i < ROOM_NAME_BYTES; ++i)
+        if (!name[i] || !strchr(alphabet, name[i]))
+            return 0;
+    return 1;
+}
+
+static void list_public_rooms(uint8_t *packet)
+{
+    uint32_t scope = rd32(packet + 8), index = rd32(packet + 16);
+    unsigned count = 0;
+    memset(packet + 20, 0, HEADER - 20);
+    for (; index < ROOMS; ++index) {
+        const struct room *room = &rooms[index];
+        if (!room->listed || room->public_scope != scope || room->started ||
+            !room->seat[0].used || room->players >= SEATS)
+            continue;
+        if (count == LIST_ROWS)
+            break;
+        uint8_t *row = packet + 20 + count++ * (ROOM_NAME_BYTES + 1);
+        memcpy(row, room->name, ROOM_NAME_BYTES);
+        row[ROOM_NAME_BYTES] = (uint8_t)room->players;
+    }
+    packet[4] = T_LIST_REPLY;
+    packet[7] = (uint8_t)count;
+    wr32(packet + 16, index < ROOMS ? index : 0);
+}
 
 static void note(const char *what, const struct room *room, int seat)
 {
@@ -292,16 +327,48 @@ int main(int argc, char **argv)
             sendto(sock, (const char *)packet, HEADER, 0, (struct sockaddr *)&from, sizeof from);
             continue;
         }
-        room = find_room(rd32(packet + 8), packet[4] == T_HELLO);
+        if (packet[4] == T_LIST && size == HEADER) {
+            list_public_rooms(packet);
+            sendto(sock, (const char *)packet, HEADER, 0, (const struct sockaddr *)&from, sizeof from);
+            continue;
+        }
+        int public_hello = packet[4] == T_PUBLIC_HELLO;
+        int create = public_hello && (packet[7] & ~PUBLIC_STARTED) == PUBLIC_CREATE;
+        if (public_hello && (size != HEADER + 32 || !valid_public_name(packet + HEADER) ||
+            (!create && packet[7] != PUBLIC_JOIN)))
+            continue;
+        room = find_room(rd32(packet + 8), packet[4] == T_HELLO || create);
         if (!room)
             continue;
         seat = -1;
         for (j = 0; j < SEATS; j++)
             if (room->seat[j].used && room->seat[j].token == rd32(packet + 12))
                 seat = j;
-        if (packet[4] == T_HELLO) {
+        int reclaim = -1;
+        if (public_hello) {
+            uint32_t scope = rd32(packet + 28);
+            if (create && !room->players) {
+                room->listed = 1;
+                room->public_scope = scope;
+                memcpy(room->name, packet + HEADER, ROOM_NAME_BYTES);
+            }
+            if (!room->listed || room->public_scope != scope ||
+                memcmp(room->name, packet + HEADER, ROOM_NAME_BYTES))
+                continue;
+            if (seat < 0 && packet[5] < SEATS && !room->seat[packet[5]].used &&
+                rd32(packet + 12) && rd32(packet + 12) == room->seat[packet[5]].token)
+                reclaim = packet[5];
+            if (create ? room->players && seat != 0 && reclaim != 0 :
+                         seat < 0 && (!room->seat[0].used || (room->started && reclaim < 0)))
+                continue;
+            if (create && (packet[7] & PUBLIC_STARTED))
+                room->started = 1;
+        }
+        if ((packet[4] == T_HELLO && !room->listed) || public_hello) {
             if (seat < 0) {
-                if (packet[5] < SEATS && !room->seat[packet[5]].used)
+                if (public_hello)
+                    seat = create ? 0 : reclaim;
+                else if (packet[5] < SEATS && !room->seat[packet[5]].used)
                     seat = packet[5];               /* the seat it had before the relay or the player restarted */
                 for (j = 0; seat < 0 && j < SEATS; j++)
                     if (!room->seat[j].used)
@@ -333,12 +400,20 @@ int main(int argc, char **argv)
         if (seat < 0 || !same_address(&room->seat[seat].address, &from) || (packet[4] != T_DATA && packet[4] != T_END))
             continue;
         room->seat[seat].heard = now;
+        if (room->listed && seat == 0 && packet[4] == T_DATA && packet[7] > 0 &&
+            size >= HEADER + 24 * packet[7]) {
+            const uint8_t *latest = packet + HEADER + 24 * (packet[7] - 1);
+            if (latest[8] == 'G' && latest[9] == 'O')
+                room->started = 1;
+        }
         packet[5] = (uint8_t)seat;
         for (j = 0; j < SEATS; j++)
             if (j != seat && room->seat[j].used) {
                 forward(sock, packet, size, &room->seat[j].address);
             }
-        if (packet[4] == T_END)
+        if (packet[4] == T_END) {
+            room->seat[seat].token = 0;
             release(room, seat, "left");
+        }
     }
 }

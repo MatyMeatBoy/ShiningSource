@@ -152,9 +152,9 @@ display stays at the left edge.*
 ![Video settings](docs/img/launcher-video.png)
 
 ### Online, 2 to 4 players
-- Open **Multiplayer** from the title to create a room or join with the host's
-  code. ShiningSource Server uses the public relay by default. The launcher’s
-  Online tab also supports a direct connection to a custom relay address.
+- Open **Multiplayer** from the title to browse the lobby, create a room, or
+  select an open room. ShiningSource Server lists rooms from the public relay
+  by default. The launcher’s Online tab can instead select a custom relay.
 - Built around what the game's link code really does (see
   [GBANoCable, chapter 8](https://github.com/MatyMeatBoy/GBANoCable/blob/main/docs/08-decomp-to-native-port.md)):
   each player's state is handed over the moment it arrives, nobody waits for a
@@ -166,7 +166,8 @@ display stays at the left edge.*
   the enemies and the items.)
 - **A connection that drops comes back.** A player whose connection is gone
   for a while (up to two minutes; the host, up to one) is taken in again and
-  receives everything it missed, in order.
+  receives everything it missed, in order, as long as the game is still
+  running. Relaunching after a crash starts a fresh game process.
 - Crossplay between Windows, Linux and Android.
 
 ![Online settings](docs/img/launcher-online.png)

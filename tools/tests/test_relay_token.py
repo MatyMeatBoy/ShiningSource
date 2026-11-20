@@ -24,8 +24,8 @@ HARNESS = """
 #endif
 void ss_plat_pump(void) {}
 int main(int argc, char **argv) {
-    if (argc == 2) {
-        assert(ss_plat_net_open("127.0.0.1", atoi(argv[1])) == 0);
+    if (argc == 3) {
+        assert(ss_plat_net_open(argv[1], atoi(argv[2])) == 0);
         ss_plat_net_farewell("bye", 3);
         ss_plat_net_send_farewell();
         _exit(0);
@@ -66,8 +66,11 @@ class RelayTokenTests(unittest.TestCase):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as receiver:
             receiver.bind(("127.0.0.1", 0))
             receiver.settimeout(2)
-            subprocess.run([str(self.binary), str(receiver.getsockname()[1])], check=True, timeout=5)
-            self.assertEqual([receiver.recv(16), receiver.recv(16)], [b"bye", b"bye"])
+            for host in ("127.0.0.1", "localhost"):
+                with self.subTest(host=host):
+                    subprocess.run([str(self.binary), host, str(receiver.getsockname()[1])],
+                                   check=True, timeout=5)
+                    self.assertEqual([receiver.recv(16), receiver.recv(16)], [b"bye", b"bye"])
 
 
 if __name__ == "__main__":

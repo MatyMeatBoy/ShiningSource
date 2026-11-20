@@ -110,6 +110,16 @@ unsigned __umodsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a % b; }
 
 int ss_net_active(void) { return 0; }
 int ss_net_room_ui_enabled(void) { return 0; }
+void ss_net_lobby_page(uint32_t cursor) { (void)cursor; }
+int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *next)
+{
+    (void)rooms;
+    *next = 0;
+    return -2;
+}
+void ss_net_lobby_stop(void) {}
+int ss_net_lobby_enter(const char *id) { (void)id; return 0; }
+const char *ss_net_lobby_room_id(void) { return NULL; }
 void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]) { code[0] = 0; }
 int ss_net_room_begin(const char *code, int create) { (void)code; (void)create; return 0; }
 int ss_net_room_status(void) { return SS_ROOM_IDLE; }

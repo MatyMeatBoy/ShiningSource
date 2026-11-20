@@ -30,7 +30,7 @@
         <activity android:name="com.shiningsource.android.GameActivity"
             android:process=":game"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
+            android:screenOrientation="fullUser"
             android:launchMode="singleInstance"
             android:alwaysRetainTaskState="true"
             android:preferMinimalPostProcessing="true"

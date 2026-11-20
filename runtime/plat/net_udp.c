@@ -116,7 +116,8 @@ int ss_plat_net_open(const char *host, int port)
     }
 #endif
     memset(&hints, 0, sizeof hints);
-    hints.ai_family = AF_UNSPEC;
+    /* The relay listens on IPv4. UDP connect alone cannot verify an IPv6 answer. */
+    hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     snprintf(service, sizeof service, "%d", port);
     if (getaddrinfo(host, service, &hints, &found) || !found)

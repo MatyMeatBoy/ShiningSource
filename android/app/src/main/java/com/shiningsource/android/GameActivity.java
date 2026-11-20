@@ -1,5 +1,9 @@
 package com.shiningsource.android;
 
+import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.os.Bundle;
+
 import org.libsdl.app.SDLActivity;
 
 /**
@@ -12,6 +16,39 @@ import org.libsdl.app.SDLActivity;
  * the game's process and returns to the first screen; Home leaves it as always.
  */
 public class GameActivity extends SDLActivity {
+    static final String EXTRA_LANDSCAPE = "com.shiningsource.android.GAME_LANDSCAPE";
+
+    private volatile boolean landscape = true;
+
+    @Override
+    protected void onCreate(Bundle state) {
+        landscape = getIntent().getBooleanExtra(EXTRA_LANDSCAPE, true);
+        applyOrientation();
+        super.onCreate(state);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        landscape = intent.getBooleanExtra(EXTRA_LANDSCAPE, true);
+        applyOrientation();
+    }
+
+    @Override
+    public void setOrientationBis(int width, int height, boolean resizable, String hint) {
+        // SDL requests orientation again when it creates or resizes the game window.
+        if (width > 1 && height > 1)
+            applyOrientation();
+    }
+
+    private void applyOrientation() {
+        int policy = landscape ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                               : ActivityInfo.SCREEN_ORIENTATION_FULL_USER;
+        if (getRequestedOrientation() != policy)
+            setRequestedOrientation(policy);
+    }
+
     @Override
     public void loadLibraries() {
         DiagnosticReport.stage(getFilesDir(), "loading_libraries", "pid=" + android.os.Process.myPid());

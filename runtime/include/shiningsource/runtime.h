@@ -88,6 +88,16 @@ enum ss_net_room_status {
 };
 enum { SS_ROOM_CODE_LENGTH = 8, SS_ROOM_CODE_CAPACITY = SS_ROOM_CODE_LENGTH + 1 };
 #define SS_ROOM_CODE_ALPHABET "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+enum { SS_LOBBY_PAGE_SIZE = 4 };
+struct ss_lobby_room {
+    char id[SS_ROOM_CODE_CAPACITY];    /* internal identifier, never typed or displayed */
+    uint8_t players;
+};
+void ss_net_lobby_page(uint32_t cursor);
+int ss_net_lobby_list(struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE], uint32_t *next);
+void ss_net_lobby_stop(void);
+int ss_net_lobby_enter(const char *id);
+const char *ss_net_lobby_room_id(void);
 int ss_net_room_ui_enabled(void);
 void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]);
 int ss_net_room_begin(const char *code, int create);
@@ -155,6 +165,8 @@ void ss_remote_sfx_set_enabled(int on);
 int ss_remote_sfx_allowed(int original_local);
 int ss_remote_sfx_bow_allowed(int original_local, int clock_running);
 void ss_remote_sfx_event(int song);
+void ss_remote_sfx_boss_contact(int song);
+void ss_remote_sfx_boss_receive(uint32_t cue, uint32_t area);
 
 /* The status display at a size of its own. In a field scene the game's status display (the bars at the top left,
  * the L and R menus under them and at the right) is the top SS_HUD_ROWS lines of the console's picture, parted

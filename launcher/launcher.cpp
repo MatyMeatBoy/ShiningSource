@@ -38,6 +38,7 @@
 #include "rc_api_runtime.h"
 #include "../runtime/achievements/record.h"
 #include "../runtime/include/shiningsource/ini.h"
+#include "../runtime/include/shiningsource/net_endpoint.h"
 #include "../runtime/include/shiningsource/runtime.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
@@ -300,15 +301,13 @@ static int ping_ms = -2;        /* -2 not measured, -1 no answer */
  * Three ways to meet. The official server is the default and needs nothing. "Host on this PC" starts the relay
  * that comes with the port (ss_relay.exe, the same program the official server runs) and shows the addresses the
  * others type; "Connect by IP" is the other side of that. The setting is `connection` (official, host, ip). */
-static std::string with_port(std::string address)
+static std::string normalized_endpoint(const std::string &address)
 {
-    while (!address.empty() && (address.back() == ' ' || address.back() == '\r' || address.back() == '\n'))
-        address.pop_back();
-    while (!address.empty() && address.front() == ' ')
-        address.erase(address.begin());
-    if (!address.empty() && address.find(':') == std::string::npos)
-        address += ":47900";
-    return address;
+    char host[SS_NET_HOST_CAPACITY];
+    int port;
+    if (!ss_net_parse_endpoint(address.c_str(), host, sizeof host, &port))
+        return "";
+    return std::string(host) + ":" + std::to_string(port);
 }
 
 /* The address the game is given. */
@@ -318,7 +317,7 @@ static std::string server_address()
     if (how == "host")
         return "127.0.0.1:47900";
     if (how == "ip")
-        return with_port(setting("server_ip"));
+        return normalized_endpoint(setting("server_ip"));
     return DEFAULT_SERVER;
 }
 
@@ -384,14 +383,16 @@ static bool start_relay()
 static void measure_ping(const std::string &server)
 {
     WSADATA data;
-    std::string host = server.substr(0, server.find(':'));
-    std::string port = server.find(':') == std::string::npos ? "47900" : server.substr(server.find(':') + 1);
+    char host[SS_NET_HOST_CAPACITY];
+    int port;
     addrinfo hints = {}, *found = nullptr;
     ping_ms = -1;
+    if (!ss_net_parse_endpoint(server.c_str(), host, sizeof host, &port))
+        return;
     WSAStartup(MAKEWORD(2, 2), &data);
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
-    if (getaddrinfo(host.c_str(), port.c_str(), &hints, &found) || !found)
+    if (getaddrinfo(host, std::to_string(port).c_str(), &hints, &found) || !found)
         return;
     SOCKET sock = socket(found->ai_family, found->ai_socktype, found->ai_protocol);
     DWORD wait = 400;
@@ -961,6 +962,12 @@ static bool launched;            /* the game was started: the launcher's work is
 
 static int play(const Game &game, const std::string &rom, const wchar_t *explicit_rom = nullptr)
 {
+    const std::string endpoint = server_address();
+    if (endpoint.empty()) {
+        launch_error = text("Enter a valid host name or IPv4 address in Online settings.",
+                            "Escribe un nombre de host o una direcci\xC3\xB3n IPv4 v\xC3\xA1lida en los ajustes en l\xC3\xADnea.");
+        return 1;
+    }
     if (!explicit_rom)
         save_settings();        /* always, whether or not the player pressed "Save settings" */
     std::string host = folder + game.host;
@@ -982,13 +989,12 @@ static int play(const Game &game, const std::string &rom, const wchar_t *explici
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
     qol_environment();          /* the experimental quality-of-life options (qol.h) */
-    const std::string endpoint = server_address();
     const std::string room = setting("direct_room", "0") == "1" ? setting("room") : "";
     if (setting("connection", "official") == "host")
         start_relay();          /* hosting: the server must be there before the game looks for it */
-    SetEnvironmentVariableA("SS_NET", endpoint.empty() ? nullptr : endpoint.c_str());
-    SetEnvironmentVariableA("SS_NET_DEFERRED", endpoint.empty() ? "0" : room.empty() ? "1" : nullptr);
-    SetEnvironmentVariableA("SS_NET_ROOM", endpoint.empty() || room.empty() ? nullptr : room.c_str());
+    SetEnvironmentVariableA("SS_NET", endpoint.c_str());
+    SetEnvironmentVariableA("SS_NET_DEFERRED", room.empty() ? "1" : nullptr);
+    SetEnvironmentVariableA("SS_NET_ROOM", room.empty() ? nullptr : room.c_str());
     SetEnvironmentVariableA("SS_NET_DELAY", nullptr);       /* the direct transport has no delay to set */
     /* achievements: where the remembered sign-in, the game's list and the records are (never a password), and
      * the cheats of a Rebel run */
@@ -1378,21 +1384,30 @@ static void interface_frame(SDL_Window *window, bool &running)
                     settings["server_ip"] = address;
                     save_settings();
                     ping_ms = -2;
+                    notice.clear();
                 }
                 ImGui::SameLine();
                 if (soul_ui::button(text("Paste", "Pegar"))) {
                     char *clip = SDL_GetClipboardText();
                     if (clip && *clip) {
-                        settings["server_ip"] = with_port(clip);
-                        save_settings();
-                        ping_ms = -2;
+                        const std::string pasted = normalized_endpoint(clip);
+                        if (pasted.empty()) {
+                            notice = text("The clipboard has no valid host address.",
+                                          "El portapapeles no contiene una direcci\xC3\xB3n v\xC3\xA1lida.");
+                        } else {
+                            settings["server_ip"] = pasted;
+                            save_settings();
+                            ping_ms = -2;
+                            notice.clear();
+                        }
                     }
                     SDL_free(clip);
                 }
                 ImGui::TextWrapped("%s", text("The address the host copied from their launcher, for example 192.168.1.20:47900.",
                                               "La direcci\xC3\xB3n que el anfitri\xC3\xB3n copi\xC3\xB3 de su launcher, por ejemplo 192.168.1.20:47900."));
                 if (server_address().empty())
-                    ImGui::TextColored(red, "%s", text("Enter a relay address to play online.", "Escribe la direcci\xC3\xB3n del servidor para jugar en l\xC3\xADnea."));
+                    ImGui::TextColored(red, "%s", text("Enter a host name or IPv4 address with an optional port (1-65535).",
+                                                       "Escribe un nombre de host o una direcci\xC3\xB3n IPv4 con puerto opcional (1-65535)."));
             }
             if (!notice.empty())
                 ImGui::TextColored(dim, "%s", notice.c_str());
@@ -1416,7 +1431,7 @@ static void interface_frame(SDL_Window *window, bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.9.2", "Versi\xC3\xB3n 0.9.2"));
+        ImGui::TextColored(gold, "%s", text("Version 0.9.3", "Versi\xC3\xB3n 0.9.3"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
         if (soul_ui::button(text("Exit launcher", "Cerrar launcher"))) running = false;
     }

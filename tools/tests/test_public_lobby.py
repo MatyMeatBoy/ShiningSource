@@ -1,0 +1,97 @@
+"""Exercise discovery and admission against the actual UDP relay."""
+import os
+import socket
+import struct
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from test_remote_sfx import build
+
+
+def packet(kind, identity=0, token=1, cursor=0, scope=0, flags=0, code=b""):
+    header = bytearray(60)
+    struct.pack_into("<4sBBBB6I", header, 0, b"SSN1", kind, 255, 2, flags,
+                     identity, token, cursor, 0, 0, scope)
+    return header + (code.ljust(32, b"\0") if code else b"")
+
+
+class PublicLobbyTests(unittest.TestCase):
+    def test_rooms_appear_fill_and_close_without_affecting_legacy_rooms(self):
+        with tempfile.TemporaryDirectory() as folder:
+            exe = Path(folder) / ("relay.exe" if os.name == "nt" else "relay")
+            libraries = ["-lws2_32"] if os.name == "nt" else []
+            subprocess.run([build.clang(), "-O2", str(build.ROOT / "relay/ss_relay.c"),
+                            "-o", str(exe), *libraries], check=True)
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as reserve:
+                reserve.bind(("127.0.0.1", 0))
+                port = reserve.getsockname()[1]
+            with subprocess.Popen([str(exe), str(port)], stderr=subprocess.PIPE) as relay:
+                try:
+                    self.assertIn(b"on UDP port", relay.stderr.readline())
+                    self.exercise_rooms(port)
+                finally:
+                    relay.terminate()
+
+    def exercise_rooms(self, port):
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            players = []
+            for _ in range(6):
+                peer = stack.enter_context(socket.socket(socket.AF_INET, socket.SOCK_DGRAM))
+                peer.bind(("127.0.0.1", 0))
+                peer.connect(("127.0.0.1", port))
+                peer.settimeout(0.3)
+                players.append(peer)
+            host, *guests, observer = players
+            scope, room, code = 110, 221, b"ABCD2345"
+
+            def query(scope=scope, cursor=0):
+                observer.send(packet(6, scope, 99, cursor))
+                reply = observer.recv(1200)
+                self.assertEqual(len(reply), 60)
+                self.assertEqual(reply[4], 7)
+                self.assertEqual(struct.unpack_from("<II", reply, 8), (scope, 99))
+                return [(reply[20 + i * 9:28 + i * 9], reply[28 + i * 9])
+                        for i in range(reply[7])]
+
+            def hello(peer, token, flags, identity=room):
+                peer.send(packet(8, identity, token, scope=scope, flags=flags, code=code))
+                return peer.recv(1200)
+
+            self.assertEqual(query(), [])
+            self.assertEqual(hello(host, 1, 1)[5], 0)
+            self.assertEqual(query(), [(code, 1)])
+            self.assertEqual(query(111), [])
+            with self.assertRaises(socket.timeout):
+                hello(guests[0], 2, 1)  # Create cannot hijack a listed room.
+            for count, guest in enumerate(guests[:3], 1):
+                self.assertEqual(hello(guest, count + 1, 2)[5], count)
+            self.assertEqual(query(), [])
+            with self.assertRaises(socket.timeout):
+                hello(guests[3], 5, 2)
+            guests[2].send(packet(4, room, 4))
+            self.assertEqual(query(), [(code, 3)])
+            self.assertEqual(hello(guests[2], 4, 2)[5], 3)
+            self.assertEqual(query(), [])
+            guests[2].send(packet(4, room, 4))
+            self.assertEqual(query(), [(code, 3)])
+            game = packet(3, room, 1, flags=1) + bytes(8) + b"GO" + bytes(14)
+            host.send(game)
+            self.assertEqual(query(), [])
+            with self.assertRaises(socket.timeout):
+                hello(guests[3], 5, 2)
+            guests[3].send(packet(1, 333, 5, code=b"PRIVATE"))
+            self.assertEqual(guests[3].recv(1200)[5], 0)
+            self.assertEqual(query(), [])
+            other_room = room + 1
+            self.assertEqual(hello(observer, 6, 1, other_room)[5], 0)
+            self.assertEqual(query(), [(code, 1)])
+            observer.send(packet(4, other_room, 6))
+            self.assertEqual(query(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()
