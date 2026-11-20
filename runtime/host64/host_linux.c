@@ -12,6 +12,9 @@
 #define _GNU_SOURCE
 #include "../guest/bridge.h"
 #include "shiningsource/runtime.h"
+#ifndef __ANDROID__
+#include <SDL3/SDL_stdinc.h>
+#endif
 #ifdef __x86_64__
 #include "stray64.h"
 #else
@@ -259,6 +262,10 @@ static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
     return (int)length;
 }
 
+#ifndef __ANDROID__
+static char **restart_args;
+#endif
+
 static void b_exit(int code)
 {
     int reported_code = code;
@@ -270,6 +277,14 @@ static void b_exit(int code)
     fprintf(stderr, "host64: exit code %d\n", reported_code);
     if (ss_tolerated)
         fprintf(stderr, "%lu stray accesses were tolerated\n", ss_tolerated);
+#ifndef __ANDROID__
+    if (code == SS_EXIT_RESTART && restart_args) {
+        fflush(NULL);
+        execv("/proc/self/exe", restart_args);
+        perror("Could not restart ShiningSource");
+        reported_code = 1;
+    }
+#endif
 #ifdef __ANDROID__
     /* On Android this is the game's thread, and SDL's other threads are still running: exit() tears down what
      * they hold (a destroyed mutex is then locked and the process aborts on its way out). Everything of ours is
@@ -282,7 +297,7 @@ static void b_exit(int code)
     fflush(NULL);
     _exit(reported_code);
 #endif
-    exit(code);
+    exit(reported_code);
 }
 static uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
 static int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
@@ -845,6 +860,30 @@ static void read_settings(const char *path)
 }
 #endif
 
+#ifndef __ANDROID__
+/* The unmodified AU2P cartridge documented in the README. */
+static int verified_rom(const char *path)
+{
+    enum { ROM_SIZE = 16777216 };
+    unsigned char buffer[65536];
+    uint32_t crc = 0;
+    size_t total = 0;
+    FILE *file = fopen(path, "rb");
+    if (!file)
+        return 0;
+    while (total < ROM_SIZE) {
+        size_t length = fread(buffer, 1, sizeof buffer, file);
+        if (!length)
+            break;
+        total += length;
+        crc = SDL_crc32(crc, buffer, length);
+    }
+    int valid = total == ROM_SIZE && fgetc(file) == EOF && !ferror(file) && crc == 0x55e503c1;
+    fclose(file);
+    return valid;
+}
+#endif
+
 int main(int argc, char **argv)
 {
 #ifndef SS_REBASED_HOST
@@ -902,12 +941,36 @@ int main(int argc, char **argv)
     rom = rom_path;
     snprintf(image_path, sizeof image_path, "%s", IMAGE_NAME);
 #else
-    rom = argc >= 2 ? argv[1] : getenv("SHININGSOURCE_ROM");
+    int prepare = argc > 1 && !strcmp(argv[1], "--prepare");
+    int explicit_rom = prepare || (argc > 1 && !strcmp(argv[1], "--game"));
+    if (explicit_rom) {
+        int flag = prepare ? 2 : 1;
+        if (argc != flag + 2 || strcmp(argv[flag], "--game")) {
+            fprintf(stderr, "Usage: %s [--prepare] --game ROM.gba\n", argv[0]);
+            return 20;
+        }
+        rom = argv[flag + 1];
+        if (prepare) {
+            puts("progress 0.1 Checking the European ROM");
+            fflush(stdout);
+        }
+        if (!verified_rom(rom)) {
+            fprintf(stderr, "Choose an unmodified Shining Soul II European ROM (AU2P, .gba).\n");
+            return 20;
+        }
+        if (prepare) {
+            puts("progress 1.0 European ROM verified");
+            return 0;
+        }
+        restart_args = argv;
+    } else {
+        rom = argc >= 2 ? argv[1] : getenv("SHININGSOURCE_ROM");
+    }
     if (!rom) {
         fprintf(stderr, "usage: %s ROM.gba [game image]   (or set SHININGSOURCE_ROM)\n", argv[0]);
         return 2;
     }
-    if (argc >= 3) {
+    if (!explicit_rom && argc >= 3) {
         snprintf(image_path, sizeof image_path, "%s", argv[2]);
     } else {
         char *slash;

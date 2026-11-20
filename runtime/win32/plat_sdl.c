@@ -2,6 +2,7 @@
  * frame pacing. Used natively by the dev32 build and by the 64-bit hosts (Windows, Linux, Android); the game side
  * only sees the ss_plat_* calls. */
 #include "shiningsource/runtime.h"
+#include "shiningsource/ini.h"
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -72,10 +73,10 @@ static void read_setting_file(void)
             *--end = 0;
         if (!equals)
             continue;
-        *equals = 0;
+        const char *key_end = ss_ini_key_end(line, equals);
         for (i = 0; i < SET_COUNT; i++)
-            if (!strcmp(line, setting_keys[i]))
-                SDL_snprintf(setting_file[i], sizeof setting_file[i], "%s", equals + 1);
+            if (strlen(setting_keys[i]) == (size_t)(key_end - line) && !memcmp(line, setting_keys[i], (size_t)(key_end - line)))
+                SDL_snprintf(setting_file[i], sizeof setting_file[i], "%s", ss_ini_value(equals));
     }
     if (file)
         fclose(file);
@@ -355,8 +356,11 @@ int ss_plat_video_init(const char *title)
 #ifdef __ANDROID__
     SDL_SetWindowFullscreen(window, true);
 #else
-    /* the variable's presence is the launcher's "yes"; the file says 1 or 0 */
-    option_fullscreen = getenv("SS_FULLSCREEN") || (setting_text(SET_FULLSCREEN) && atoi(setting_text(SET_FULLSCREEN)));
+    /* The variable's presence is the launcher's "yes"; the file says 1 or 0. */
+    const char *fullscreen = setting_text(SET_FULLSCREEN);
+    const char *launcher_mode = getenv("RECOMPLAUNCHER_MODE");
+    option_fullscreen = getenv("SS_FULLSCREEN") || (fullscreen ? atoi(fullscreen) != 0 :
+                        launcher_mode && !strcmp(launcher_mode, "bigpicture"));
     if (option_fullscreen)
         SDL_SetWindowFullscreen(window, true);
 #endif
@@ -1509,9 +1513,10 @@ static void save_settings(void)
     }
     for (line = old; line && *line; ) {
         const char *end = strchr(line, '\n'), *next = end ? end + 1 : line + strlen(line), *equals = memchr(line, '=', (size_t)(next - line));
+        const char *key_end = equals ? ss_ini_key_end(line, equals) : line;
         int which = -1;
         for (i = 0; equals && i < SET_COUNT; i++)
-            if (strlen(setting_keys[i]) == (size_t)(equals - line) && !memcmp(line, setting_keys[i], (size_t)(equals - line)))
+            if (strlen(setting_keys[i]) == (size_t)(key_end - line) && !memcmp(line, setting_keys[i], (size_t)(key_end - line)))
                 which = i;
         if (which >= 0 && (settings_changed >> which & 1)) {
             if (!(written >> which & 1)) {          /* a second line of the same key is dropped */

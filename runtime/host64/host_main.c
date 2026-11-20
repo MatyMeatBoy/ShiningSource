@@ -24,6 +24,7 @@
 #define PTR(a) ((void *)(uintptr_t)(uint32_t)(a))
 
 static uint32_t image_low, image_high;
+static wchar_t launcher_rom[32768];
 
 /* ---- low memory ---- */
 
@@ -148,7 +149,7 @@ static SYSV int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 
 static SYSV void b_exit(int code)
 {
-    if (code == SS_EXIT_RESTART) {      /* the game reset itself: the same program again, same settings */
+    if (code == SS_EXIT_RESTART && !launcher_rom[0]) {      /* standalone reset: start the same program again */
         STARTUPINFOA start = { sizeof start };
         PROCESS_INFORMATION made;
         if (CreateProcessA(NULL, GetCommandLineA(), NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &start, &made)) {
@@ -411,9 +412,8 @@ static LONG CALLBACK on_fault(EXCEPTION_POINTERS *info)
 
 /* ---- loading ---- */
 
-static int load_file(const char *path, uint32_t address, uint32_t capacity)
+static int load_file(FILE *file, uint32_t address, uint32_t capacity)
 {
-    FILE *file = fopen(path, "rb");
     size_t got;
     if (!file)
         return -1;
@@ -523,6 +523,8 @@ __asm__(
 static int fail(int code, const char *text)
 {
     fprintf(stderr, "%s\n", text);
+    if (launcher_rom[0])
+        return 20 + code;
     MessageBoxA(NULL, text, "ShiningSource", MB_ICONERROR);
     return code;
 }
@@ -535,14 +537,20 @@ int main(int argc, char **argv)
         { SS_ROM, 0x1000000, "ROM" },
     };
     char image_path[MAX_PATH], rom_buffer[MAX_PATH], message[400];
-    const char *rom = argc >= 2 ? argv[1] : find_rom(rom_buffer, sizeof rom_buffer);
+    DWORD launcher_rom_len = GetEnvironmentVariableW(L"SS_LAUNCHER_ROM", launcher_rom, 32768);
+    const char *rom = NULL;
     uint32_t entry, stack;
     char *slash;
     unsigned i;
     int rom_size;
 
-    if (!rom)
+    if (launcher_rom_len >= 32768)
         return 2;
+    if (!launcher_rom_len) {
+        rom = argc >= 2 ? argv[1] : find_rom(rom_buffer, sizeof rom_buffer);
+        if (!rom)
+            return 2;
+    }
     AddVectoredExceptionHandler(1, on_fault);
     for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
         if (!low_alloc(regions[i].base, regions[i].size, PAGE_READWRITE)) {
@@ -553,7 +561,7 @@ int main(int argc, char **argv)
     }
     if ((uintptr_t)ss_arena > ARENA_FROM || (uintptr_t)ss_arena + sizeof ss_arena < ARENA_TO)
         return fail(3, "The host was not linked so that its arena covers the game's address space.");
-    rom_size = load_file(rom, SS_ROM, 0x1000000);
+    rom_size = load_file(launcher_rom_len ? _wfopen(launcher_rom, L"rb") : fopen(rom, "rb"), SS_ROM, 0x1000000);
     if (rom_size < 0x100000)
         return fail(2, "The ROM file could not be read.");
     GetModuleFileNameA(NULL, image_path, sizeof image_path);

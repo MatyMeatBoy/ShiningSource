@@ -37,6 +37,8 @@
 #include "achievements/ra_client.h"
 #include "rc_api_runtime.h"
 #include "../runtime/achievements/record.h"
+#include "../runtime/include/shiningsource/ini.h"
+#include "../runtime/include/shiningsource/runtime.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
 
@@ -58,18 +60,25 @@ static const char *text(const char *english, const char *spanish) { return langu
 
 /* ---- SHA-1 of a file ---- */
 
-static std::string sha1_of(const std::string &path)
+static std::string sha1_of(FILE *file, size_t expected_size = 0)
 {
-    FILE *file = fopen(path.c_str(), "rb");
     if (!file)
         return "";
     uint32_t h[5] = { 0x67452301u, 0xEFCDAB89u, 0x98BADCFEu, 0x10325476u, 0xC3D2E1F0u };
     std::vector<uint8_t> data;
     uint8_t buffer[65536];
     size_t got;
-    while ((got = fread(buffer, 1, sizeof buffer, file)) > 0)
+    while ((got = fread(buffer, 1, sizeof buffer, file)) > 0) {
+        if (expected_size && data.size() + got > expected_size) {
+            fclose(file);
+            return "";
+        }
         data.insert(data.end(), buffer, buffer + got);
+    }
+    bool read_ok = !ferror(file);
     fclose(file);
+    if (!read_ok || (expected_size && data.size() != expected_size))
+        return "";
     uint64_t bits = (uint64_t)data.size() * 8;
     data.push_back(0x80);
     while (data.size() % 64 != 56)
@@ -100,6 +109,11 @@ static std::string sha1_of(const std::string &path)
     return out;
 }
 
+static std::string sha1_of(const std::string &path)
+{
+    return sha1_of(fopen(path.c_str(), "rb"));
+}
+
 /* ---- settings ---- */
 
 static std::string folder;                  /* where the launcher is */
@@ -121,11 +135,11 @@ static void load_settings()
         char *equals = strchr(line, '=');
         if (!equals)
             continue;
-        *equals = 0;
-        std::string value = equals + 1;
+        std::string key(line, (size_t)(ss_ini_key_end(line, equals) - line));
+        std::string value = ss_ini_value(equals);
         while (!value.empty() && (value.back() == '\n' || value.back() == '\r'))
             value.pop_back();
-        settings[line] = value;
+        settings[key] = value;
     }
     fclose(file);
 }
@@ -910,11 +924,12 @@ static std::string launch_error;
 static bool launched;            /* the game was started: the launcher's work is done and it closes */
 static Uint64 saved_at;          /* when "Save settings" was last pressed, for its short answer */
 
-static void play(const Game &game)
+static int play(const Game &game, const std::string &rom, const wchar_t *explicit_rom = nullptr)
 {
-    save_settings();            /* always, whether or not the player pressed "Save settings" */
-    std::string host = folder + game.host, rom = setting((std::string("rom_") + game.id).c_str());
-    std::string command = "\"" + host + "\" \"" + rom + "\"";
+    if (!explicit_rom)
+        save_settings();        /* always, whether or not the player pressed "Save settings" */
+    std::string host = folder + game.host;
+    const std::string command = "\"" + host + "\"" + (explicit_rom ? "" : " \"" + rom + "\"");
     STARTUPINFOA startup = {};
     PROCESS_INFORMATION process = {};
     std::string view = setting("view", "auto");
@@ -946,14 +961,32 @@ static void play(const Game &game)
     SetEnvironmentVariableA("SS_RA_SUBMIT", setting("ra_submit", "0") == "1" ? "1" : nullptr);
     startup.cb = sizeof startup;
     launch_error.clear();
-    /* no console window beside the game: its messages go to the files it writes */
-    if (!CreateProcessA(host.c_str(), &command[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, folder.c_str(), &startup, &process)) {
-        launch_error = text("The game program could not be started: ", "No se pudo iniciar el programa del juego: ") + host;
-        return;
+    /* Keep the picker path in UTF-16 across the process boundary. */
+    if (explicit_rom && !SetEnvironmentVariableW(L"SS_LAUNCHER_ROM", explicit_rom)) {
+        launch_error = "The game path could not be passed to the game program.";
+        return 1;
     }
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
+    /* no console window beside the game: its messages go to the files it writes */
+    DWORD exit_code = 0;
+    do {
+        std::string args = command;       /* CreateProcess may modify the buffer. */
+        if (!CreateProcessA(host.c_str(), &args[0], nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, folder.c_str(), &startup, &process)) {
+            launch_error = text("The game program could not be started: ", "No se pudo iniciar el programa del juego: ") + host;
+            return 1;
+        }
+        CloseHandle(process.hThread);
+        if (explicit_rom && (WaitForSingleObject(process.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+                             !GetExitCodeProcess(process.hProcess, &exit_code)))
+            exit_code = 1;
+        CloseHandle(process.hProcess);
+    } while (explicit_rom && exit_code == SS_EXIT_RESTART);
     launched = true;
+    return (int)exit_code;
+}
+
+static void play(const Game &game)
+{
+    play(game, setting((std::string("rom_") + game.id).c_str()));
 }
 
 /* ---- interface ---- */
@@ -1402,7 +1435,7 @@ static void interface_frame(bool &running)
     (void)running;
 }
 
-int main(int, char **)
+int wmain(int argc, wchar_t **argv)
 {
     char path[MAX_PATH];
     GetModuleFileNameA(nullptr, path, sizeof path);
@@ -1410,6 +1443,32 @@ int main(int, char **)
     folder.erase(folder.find_last_of("\\/") + 1);
     load_settings();
     language = setting("language", "en") == "es";
+    const bool prepare = argc > 1 && !wcscmp(argv[1], L"--prepare");
+    if (prepare || (argc > 1 && !wcscmp(argv[1], L"--game"))) {
+        int flag = prepare ? 2 : 1;
+        if (argc != flag + 2 || wcscmp(argv[flag], L"--game")) {
+            fprintf(stderr, "Usage: ShiningSource.exe [--prepare] --game ROM.gba\n");
+            return 20;
+        }
+        if (prepare) {
+            puts("progress 0.1 Checking the European ROM");
+            fflush(stdout);
+        }
+        wchar_t rom_path[32768];
+        DWORD length = GetFullPathNameW(argv[flag + 1], 32768, rom_path, nullptr);
+        if (!length || length >= 32768 || sha1_of(_wfopen(rom_path, L"rb"), 16777216) != games[0].sha1) {
+            fprintf(stderr, "Choose an unmodified Shining Soul II European ROM (AU2P, .gba).\n");
+            return 20;
+        }
+        if (prepare) {
+            puts("progress 1.0 European ROM verified");
+            return 0;
+        }
+        int result = play(games[0], "", rom_path);
+        if (!launch_error.empty())
+            fprintf(stderr, "%s\n", launch_error.c_str());
+        return result;
+    }
     find_rom_beside(games[0]);
     check_rom(games[0]);
 
