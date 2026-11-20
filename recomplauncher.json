@@ -1,0 +1,104 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "ShiningSource",
+  "repo": "MatyMeatBoy/ShiningSource",
+  "inputs": [
+    {
+      "id": "rom",
+      "label": "Your unmodified Shining Soul II Europe ROM (.gba, AU2P)",
+      "formats": [{ "type": "file", "extensions": ["gba"] }]
+    }
+  ],
+  "start": {
+    "program": ["ShiningSource.exe", "ss2_linux64"],
+    "args": ["--game", "{input:rom}"]
+  },
+  "prepare": {
+    "program": ["ShiningSource.exe", "ss2_linux64"],
+    "args": ["--prepare", "--game", "{input:rom}"],
+    "label": "Verify your Shining Soul II ROM",
+    "timeout": 30
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "ini",
+      "file": [{ "path": "{install}/shiningsource.ini" }]
+    }
+  ],
+  "settings": [
+    {
+      "id": "mode",
+      "label": "Picture",
+      "help": "Classic keeps the original 240 × 160 view. Enhanced can show more of the map on wide screens.",
+      "choices": [
+        { "label": "Enhanced", "set": { "mode": "enhanced" } },
+        { "label": "Classic", "set": { "mode": "classic" } }
+      ],
+      "defaults": { "mode": "enhanced" }
+    },
+    {
+      "id": "fullscreen",
+      "label": "Window mode",
+      "choices": [
+        { "label": "Windowed", "set": { "fullscreen": "0" } },
+        { "label": "Full screen", "set": { "fullscreen": "1" } }
+      ],
+      "defaults": { "fullscreen": "0" }
+    },
+    {
+      "id": "vsync",
+      "label": "Display sync",
+      "help": "VSync prevents tearing. VRR uses a display that supports variable refresh.",
+      "choices": [
+        { "label": "VSync", "set": { "vsync": "1" } },
+        { "label": "VRR", "set": { "vsync": "2" } },
+        { "label": "Off", "set": { "vsync": "0" } }
+      ],
+      "defaults": { "vsync": "1" }
+    },
+    {
+      "id": "volume",
+      "label": "Volume",
+      "slider": { "key": "volume", "min": 0, "max": 100, "step": 10, "format": "%d" },
+      "defaults": { "volume": "100" }
+    },
+    {
+      "id": "smooth",
+      "label": "Smooth flickering sprites",
+      "help": "Shows effects such as shadows and ghosts with transparency instead of alternate-frame flicker.",
+      "choices": [
+        { "label": "On", "set": { "smooth": "1" } },
+        { "label": "Off", "set": { "smooth": "0" } }
+      ],
+      "defaults": { "smooth": "1" }
+    },
+    {
+      "id": "remote_sfx",
+      "label": "Restored Multiplayer Audio",
+      "help": "Plays sounds from companions' abilities, attacks and hits in online co-op.",
+      "choices": [
+        { "label": "On", "set": { "remote_sfx": "1" } },
+        { "label": "Off", "set": { "remote_sfx": "0" } }
+      ],
+      "defaults": { "remote_sfx": "1" }
+    }
+  ],
+  "saves": [
+    "{install}/shiningsource.sav",
+    "{install}/shiningsource_rebel.sav",
+    "{install}/local_record.txt",
+    "{install}/rebel_record.txt"
+  ],
+  "folders": {
+    "logs": [{ "path": "{install}" }]
+  },
+  "exit_codes": {
+    "20": "Choose an unmodified Shining Soul II European ROM (AU2P, .gba) in Easy Setup.",
+    "22": "The ROM could not be opened. Check that it is still accessible in Easy Setup.",
+    "23": "The address range required by the Windows game process could not be initialized.",
+    "24": "The Windows game image (ss2_game.elf) could not be loaded. Reinstall the complete release."
+  },
+  "looks": { "lines": 160 }
+}

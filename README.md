@@ -3,6 +3,10 @@
 </p>
 
 <p align="center">
+  <a href="https://recomplauncher.com/game/shiningsource"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+</p>
+
+<p align="center">
   <img alt="Platforms: Windows, Linux, Android" src="https://img.shields.io/badge/platforms-Windows%20%2F%20Linux%20%2F%20Android-194b40">
   <img alt="Graphics: SDL3" src="https://img.shields.io/badge/graphics-SDL3-476c65">
   <img alt="Online: 2–4 players" src="https://img.shields.io/badge/online-2%E2%80%934%20players-d6a647">
@@ -45,6 +49,10 @@ These are illustrated feature summaries; see the sections below for current plat
 armeabi-v7a, arm64-v8a and x86_64, Android 5 or later) and Linux x64 (`.tar.gz`, started
 from a terminal: see `LINUX.txt` inside). The launcher asks for your ROM the
 first time and checks it.
+
+With a release that includes `recomplauncher.json`, you can also install
+through RecompLauncher on Windows or Linux. Choose your European `.gba` in
+Easy Setup. Display and audio settings are available on the game's page.
 
 **0.8.14 (Windows, Android and Linux)** expands **Restored Multiplayer Audio**
 (**Audio Multijugador Restaurado**): companion enemy hits, critical markers,

@@ -20,6 +20,7 @@ def main():
     files = {name: game/name for name in ('ss2_linux64', 'ss2_game.elf', 'lib/libSDL3.so.0')}
     files.update({'LICENSE.txt': ROOT/'LICENSE',
                   'README.md': ROOT/'README.md',
+                  'recomplauncher.json': ROOT/'recomplauncher.json',
                   'SDL3-LICENSE.txt': ROOT/'third_party/SDL3-LICENSE.txt',
                   f'docs/RELEASE_{version}.md': ROOT/f'docs/RELEASE_{version}.md',
                   'docs/MULTIPLAYER_AUDIO_AUDIT.md': ROOT/'docs/MULTIPLAYER_AUDIO_AUDIT.md'})
