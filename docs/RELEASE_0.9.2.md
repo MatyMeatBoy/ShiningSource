@@ -76,9 +76,14 @@ The original European cartridge and the port both spawn two blue Pastes and
 one Green Paste from the same hole in the second area of Goblin Fort. They
 remain in place and can attack a player within reach.
 
-The original card-drop roll matches the port. A controlled winning roll in a
-two-player session produced cards that appeared on both clients. Both players
-completed pickups using the original drop and pickup rules.
+The European cartridge and the Windows build produced identical loot records
+and RNG state in 2,408 controlled comparisons. These cover one to four
+players, Luck, normal and advanced modes, enemy-specific drops, and the
+weighted fallback tables. Ordinary items appeared and were collected in
+live sessions with two, three, and four players. The clients agreed on all
+drop and pickup messages in these runs. A controlled winning card roll in a
+two-player session also produced cards that appeared on both clients and
+could be collected by either player.
 
 ## Upgrading
 
