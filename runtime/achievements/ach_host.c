@@ -96,14 +96,14 @@ static uint32_t read_memory(uint32_t address, uint8_t *out, uint32_t size, void 
 }
 
 /* ---- icons ----
- * A RetroAchievements badge is a PNG the wrapper keeps in SS_RA_DIR; SDL's own PNG loader reads it (SDL 3.4,
+ * A RetroAchievements badge is a PNG the wrapper keeps under achievements/badges; SDL's own PNG loader reads it (SDL 3.4,
  * which is why this is here and not in the shared window code: other platforms may build with an older SDL).
  * The image becomes a square of ARGB pixels for ss_plat_notice. */
 static uint32_t icon_pixels[128 * 128];
 
-static int icon_from_png(const char *utf8_path)
+static int icon_from_surface(SDL_Surface *loaded)
 {
-    SDL_Surface *loaded = SDL_LoadPNG(utf8_path), *argb;
+    SDL_Surface *argb;
     int size = 0, y;
     if (!loaded)
         return 0;
@@ -121,15 +121,7 @@ static int icon_from_png(const char *utf8_path)
 
 static int icon_of_badge(const char *badge_name)
 {
-    char path[2200];
-    const char *c;
-    for (c = badge_name; *c; c++)
-        if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_'))
-            return 0;
-    if (!badge_name[0])
-        return 0;
-    snprintf(path, sizeof path, "%s\\badge_%s.png", folder_utf8, badge_name);
-    return icon_from_png(path);
+    return icon_from_surface(KhRaLoadBadge(folder_utf8, badge_name));
 }
 
 /* ---- the account ---- */
@@ -202,9 +194,11 @@ static void account_start(void)
     KhRaSetRom(ra, rom_bytes, rom_size);
 }
 
-static int account_loaded(void)
+static int account_sync_enabled(void)
 {
-    return ra && rc_client_get_user_info(KhRaClient(ra)) && rc_client_is_game_loaded(KhRaClient(ra));
+    rc_client_t *client = ra ? KhRaClient(ra) : NULL;
+    return client && rc_client_get_user_info(client) && rc_client_is_game_loaded(client) &&
+           !rc_client_get_spectator_mode_enabled(client);
 }
 
 static int have_set;
@@ -360,44 +354,68 @@ static void local_start(void)
 
 void ss_ach_start(const uint8_t *rom, size_t size)
 {
+    DWORD length;
     const char *text = getenv("SS_LANG"), *cheats = getenv("SS_CHEATS");
     rom_bytes = rom;
     rom_size = size;
     spanish = text && text[0] == 'e' && text[1] == 's';
     rebel_run = cheats && cheats[0];            /* the rule of core/rebel.c */
-    active = GetEnvironmentVariableW(L"SS_RA_DIR", folder, 900) > 0
+    length = GetEnvironmentVariableW(L"SS_RA_DIR", folder, SDL_arraysize(folder));
+    active = length > 0 && length < SDL_arraysize(folder)
           && WideCharToMultiByte(CP_UTF8, 0, folder, -1, folder_utf8, sizeof folder_utf8, NULL, NULL) > 0;
     if (!active)
         return;
+    KhRaMigrateBadges(folder_utf8);
     local_start();
     if (!rebel_run)
         account_start();
 }
 
-/* What this run counts for, once: after the sign-in was answered, or two seconds in when there is none. */
+/* Creating the marker exclusively makes the first notice persistent across updates and simultaneous starts. */
+static int first_mode_notice(void)
+{
+    wchar_t path[1024];
+    DWORD attributes;
+    HANDLE marker;
+    if (!active || getenv("SS_FRAMES")) return 0;   /* a headless run has no notice to show */
+    swprintf(path, SDL_arraysize(path), L"%ls\\achievements", folder);
+    attributes = GetFileAttributesW(path);
+    if (attributes == INVALID_FILE_ATTRIBUTES || !(attributes & FILE_ATTRIBUTE_DIRECTORY) ||
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
+    swprintf(path, SDL_arraysize(path), L"%ls\\achievements\\mode-seen", folder);
+    marker = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (marker == INVALID_HANDLE_VALUE) return 0;
+    CloseHandle(marker);
+    return 1;
+}
+
+/* Show the mode once per installation. Keep a diagnostic for each game's start. */
 static void announce(void)
 {
     char line[200];
+    const char *heading;
     if (announced || (ra ? KhRaBusy(ra) : frames < 120))
         return;
     announced = 1;
     if (rebel_run) {
-        snprintf(line, sizeof line, say("CHEATS ON  REBEL RECORD %u/%u", "TRUCOS ACTIVOS  REGISTRO REBELDE %u/%u"), local_earned, local_total);
-        ss_plat_notice(say("REBEL MODE", "MODO REBELDE"), active ? line : say("CHEATS ON", "TRUCOS ACTIVOS"), 1, NULL, 0);
-    } else if (account_loaded()) {
+        heading = say("REBEL MODE ACTIVATED", "MODO REBELDE ACTIVADO");
+        snprintf(line, sizeof line, say("Rebel achievements %u/%u", "Logros rebeldes %u/%u"), local_earned, local_total);
+    } else if (account_sync_enabled()) {
         rc_client_user_game_summary_t summary;
+        heading = say("ONLINE MODE ACTIVATED", "MODO EN LINEA ACTIVADO");
         rc_client_get_user_game_summary(KhRaClient(ra), &summary);
-        snprintf(line, sizeof line, say("SIGNED IN AS %s  %u/%u", "SESION DE %s  %u/%u"), rc_client_get_user_info(KhRaClient(ra))->display_name,
+        snprintf(line, sizeof line, "RetroAchievements: %s  %u/%u", rc_client_get_user_info(KhRaClient(ra))->display_name,
                  (unsigned)summary.num_unlocked_achievements, (unsigned)summary.num_core_achievements);
-        ss_plat_notice("RETROACHIEVEMENTS", line, 0, NULL, 0);
     } else {
-        /* no account in this run: not signed in, no connection, or the site does not know this ROM */
+        /* This includes signed-in spectator sessions: the game keeps progress locally. */
+        heading = say("LOCAL MODE ACTIVATED", "MODO LOCAL ACTIVADO");
         if (ra && KhRaError(ra))
             fprintf(stderr, "achievements: %s\n", KhRaStatus(ra));
-        snprintf(line, sizeof line, say("NOT SIGNED IN  LOCAL RECORD %u/%u", "SIN SESION  REGISTRO LOCAL %u/%u"), local_earned, local_total);
-        ss_plat_notice(say("ACHIEVEMENTS", "LOGROS"), line, 0, NULL, 0);
+        snprintf(line, sizeof line, "%s", say("Achievements stay on this PC", "Los logros se guardan en este PC"));
     }
-    fprintf(stderr, "achievements: %s\n", line);
+    if (first_mode_notice())
+        ss_plat_notice(heading, line, rebel_run, NULL, 0);
+    fprintf(stderr, "achievements: %s - %s\n", heading, line);
 }
 
 void ss_ach_frame(int run_flags)
@@ -410,7 +428,7 @@ void ss_ach_frame(int run_flags)
         const char *png = getenv("SS_RA_TEST_ICON");
         ss_plat_notice((run_flags & SS_RUN_REBEL) ? say("REBEL ACHIEVEMENT", "LOGRO REBELDE") : say("ACHIEVEMENT UNLOCKED", "LOGRO DESBLOQUEADO"),
                        test_notice, run_flags & SS_RUN_REBEL, icon_pixels,
-                       png ? icon_from_png(png) : 0);
+                       png ? icon_from_surface(SDL_LoadPNG(png)) : 0);
     }
     if ((run_flags & SS_RUN_REBEL) && !rebel_run) {     /* cannot happen: both read SS_CHEATS. The image has the last word */
         rebel_run = 1;

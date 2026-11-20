@@ -13,7 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build
 
 DEFINITION = re.compile(r'^(?![ \t#/])[^\n;{}#=]*?\b(\w+)\s*\(((?:[^;{}()]|\([^()]*\))*)\)\s*\{', re.M)
-ALIAS = re.compile(r'\b(\w+)\s*\([^;{}]*\)\s*(?:__asm__|asm)\s*\(\s*"_?(\w+)"\s*\)\s*;')
+ALIAS = re.compile(r'^[ \t]*[A-Za-z_][\w \t*]*?[ \t*](\w+)\s*\([^;{}#]*?\)\s*'
+                   r'(?:__asm__|asm)\s*\(\s*"_?(\w+)"\s*\)\s*;', re.M)
 
 
 def count_parameters(text):
@@ -36,6 +37,8 @@ def count_arguments(text, start):
     while i < len(text):
         ch = text[i]
         if ch in "([{":
+            if depth == 1:
+                empty = False
             depth += 1
         elif ch in ")]}":
             depth -= 1
@@ -53,10 +56,14 @@ def count_arguments(text, start):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--game", default="ss2", choices=sorted(build.GAMES))
+    parser.add_argument("--variant", default="gen", choices=("gen", "gen-elf", "gen-android-x86_64", "gen-android-arm64-v8a"),
+                        help="audit the generated sources of a specific build")
     args = parser.parse_args()
-    gen = build.ROOT / "build/gen" / args.game / "src"
+    gen = build.ROOT / "build" / args.variant / args.game / "src"
     replaced = build.port_config(args.game)["runtime"]
     files = {p: p.read_text(encoding="utf-8", errors="replace") for p in sorted(gen.glob("*.c")) if p.stem not in replaced}
+    if not files:
+        parser.error(f"No generated modules in {gen}. Build that variant first.")
     parameters = {}
     for text in files.values():
         aliases = {local: real for local, real in ALIAS.findall(text)}

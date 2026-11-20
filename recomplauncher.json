@@ -39,13 +39,25 @@
       "defaults": { "mode": "enhanced" }
     },
     {
-      "id": "fullscreen",
+      "id": "window_mode",
       "label": "Window mode",
+      "help": "Borderless covers the display at its desktop resolution. Exclusive fullscreen uses a display mode.",
       "choices": [
-        { "label": "Windowed", "set": { "fullscreen": "0" } },
-        { "label": "Full screen", "set": { "fullscreen": "1" } }
+        { "label": "Windowed", "set": { "window_mode": "windowed" } },
+        { "label": "Borderless", "set": { "window_mode": "borderless" } },
+        { "label": "Exclusive fullscreen", "set": { "window_mode": "fullscreen" } }
       ],
-      "defaults": { "fullscreen": "0" }
+      "defaults": { "window_mode": "borderless" }
+    },
+    {
+      "id": "wide_pro",
+      "label": "Wide Pro",
+      "help": "Decorates the sides of startup screens, character menus, inventory and stores in Enhanced mode.",
+      "choices": [
+        { "label": "On", "set": { "wide_pro": "1" } },
+        { "label": "Off", "set": { "wide_pro": "0" } }
+      ],
+      "defaults": { "wide_pro": "1" }
     },
     {
       "id": "vsync",

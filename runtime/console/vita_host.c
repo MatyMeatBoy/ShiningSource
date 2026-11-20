@@ -202,6 +202,7 @@ static void b_pump(void)
 /* One frame: `width` x 160 ARGB pixels (width 0: nothing new to show). Returns the held buttons. */
 static uint32_t b_present(uint32_t pixels, int width)
 {
+    width &= 0xffff;          /* the bridge carries presentation metadata above the pixel width */
     b_pump();
     if (width > 0 && width <= MAX_W && texture) {
         int scale = SCREEN_W / width < SCREEN_H / ROWS ? SCREEN_W / width : SCREEN_H / ROWS;

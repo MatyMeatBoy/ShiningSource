@@ -4,7 +4,7 @@ Usage: python tools/package_windows.py 0.9
 import hashlib,json,re,sys,zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
-import link
+import build_gamecube_sdl, link
 ROOT=Path(__file__).resolve().parents[1]
 def main():
     version=sys.argv[1]
@@ -12,20 +12,26 @@ def main():
     out=ROOT/'build/releases'/version;out.mkdir(parents=True,exist_ok=True)
     game=ROOT/'build/win64/ss2'
     sdk=next(Path(h) for h in link.SDL_HINTS if h and (Path(h)/'x86_64-w64-mingw32/lib').is_dir())
-    files={name:game/name for name in ('ShiningSource.exe','ss2_win64.exe','ss2_game.elf','SDL3.dll')}
+    files={name:game/name for name in ('ShiningSource.exe','ss2_win64.exe','ss2_game.elf')}
+    files.update(build_gamecube_sdl.runtime_files(sdk/'x86_64-w64-mingw32'))
     files.update({'ss_relay.exe':ROOT/'build/relay/ss_relay.exe','LICENSE.txt':ROOT/'LICENSE','DearImGui-LICENSE.txt':ROOT/'third_party/imgui/LICENSE.txt','rcheevos-LICENSE.txt':ROOT/'third_party/rcheevos/LICENSE','SDL3-LICENSE.txt':sdk/'LICENSE.txt','README.md':ROOT/'README.md',f'docs/RELEASE_{version}.md':ROOT/f'docs/RELEASE_{version}.md','docs/ACHIEVEMENTS_VERIFICATION.md':ROOT/'docs/ACHIEVEMENTS_VERIFICATION.md','docs/RETROACHIEVEMENTS_SOURCE.md':ROOT/'assets/achievements/SOURCE.md'})
     files['docs/MULTIPLAYER_AUDIO_AUDIT.md']=ROOT/'docs/MULTIPLAYER_AUDIO_AUDIT.md'
     files['recomplauncher.json']=ROOT/'recomplauncher.json'
+    for name in ('cover.png','title-sides.png','menu-sides.png','shop-sides.png'):
+        files['assets/launcher/'+name]=ROOT/'assets/launcher'/name
     for image in ('launcher-achievements.png','achievement-popup.png'):
         files['docs/img/'+image]=ROOT/'docs/img'/image
-    for asset in (ROOT/'assets/achievements').iterdir():
-        if re.fullmatch(r'(ra_set_[0-9a-f]{32}\.json|badge_[0-9]+\.png)',asset.name):files[asset.name]=asset
+    achievements=ROOT/'assets/achievements'
+    for asset in achievements.glob('ra_set_*.json'):
+        if re.fullmatch(r'ra_set_[0-9a-f]{32}\.json',asset.name):files[asset.name]=asset
+    for asset in (achievements/'badges').glob('badge_*.png'):
+        if re.fullmatch(r'badge_[0-9]+\.png',asset.name):files['achievements/badges/'+asset.name]=asset
     catalogs=[p for n,p in files.items() if n.startswith('ra_set_')]
     assert len(catalogs)==1
     body=json.loads(catalogs[0].read_text())
     official=[a for s in body['Sets'] for a in s['Achievements'] if a['Flags']==3 and 0<a['ID']<101000001]
     assert len(official)==52 and sum(a['Points'] for a in official)==454
-    assert all('badge_'+a['BadgeName']+'.png' in files for a in official)
+    assert all('achievements/badges/badge_'+a['BadgeName']+'.png' in files for a in official)
     assert all(path.is_file() for path in files.values()),[(n,str(p)) for n,p in files.items() if not p.is_file()]
     forbidden=('.gba','.sav','.auth','.ini','.log','.raw','.bmp')
     assert not any(name.endswith(forbidden) for name in files)

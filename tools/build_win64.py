@@ -10,11 +10,11 @@ Outputs in build/win64/<game>/:
 
 The game sources are the same generated sources as dev32 without the symbol prefix of 32-bit Windows.
 """
-import argparse, concurrent.futures, json, os, re, shutil, subprocess, sys
+import argparse, concurrent.futures, json, os, re, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build, link
+import build, build_gamecube_sdl, link
 
 ROOT = build.ROOT
 GUEST_TARGET = ["--target=x86_64-unknown-linux-gnux32", "-ffreestanding", "-fno-pic", "-mno-red-zone", "-fno-stack-protector",
@@ -155,7 +155,7 @@ def main():
          "-Wl,--image-base=0x01800000", "-Wl,--disable-dynamicbase", "-Wl,--stack,0x800000",
          # the arena is read-only until a range is handed out, so Windows does not charge memory for all of it
          "-Xlinker", "-Xlink=-section:.arena,R"], "host")
-    shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")
+    build_gamecube_sdl.copy_runtime(sdl, out)
     print("%s and %s: %d absolute symbols, %d functions still stubbed" % (host.relative_to(ROOT), image.name, len(absolute), len(stubs)))
     return 0
 

@@ -20,6 +20,7 @@ import build
 ROOT = build.ROOT
 IMAGES = {"armeabi-v7a": None, "arm64-v8a": "build/android/images/arm64-v8a/%s/%s_game.macho",
           "x86_64": "build/android/images/x86_64/%s/%s_game.elf"}
+LAUNCHER_ASSETS = ("cover.png", "title-sides.png", "menu-sides.png", "shop-sides.png")
 
 
 def main():
@@ -60,6 +61,11 @@ def main():
     # the icon is the port's own (android/app/src/main/res/mipmap-*, drawn by tools/make_icon.py)
     shutil.copytree(skeleton / "gradle", stage / "gradle", dirs_exist_ok=True)
     shutil.copy2(skeleton / "gradlew.bat", stage / "gradlew.bat")
+    # AssetManager and SDL's relative asset fallback both see this path as assets/launcher.
+    artwork = main_dir / "assets/assets/launcher"
+    artwork.mkdir(parents=True, exist_ok=True)
+    for name in LAUNCHER_ASSETS:
+        shutil.copy2(ROOT / "assets/launcher" / name, artwork / name)
     if args.test:
         manifest = main_dir / "AndroidManifest.xml"
         text = manifest.read_text(encoding="utf-8")
@@ -113,7 +119,7 @@ android {
  namespace 'com.shiningsource.android'
  compileSdk 35
  ndkVersion '%s'
- defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 25; versionName '0.9' }
+ defaultConfig { applicationId 'com.shiningsource.android'; minSdk 21; targetSdk 35; versionCode 27; versionName '0.9.2' }
  compileOptions { sourceCompatibility JavaVersion.VERSION_1_8; targetCompatibility JavaVersion.VERSION_1_8 }
  buildTypes { debug { debuggable true }; release { minifyEnabled false } }
  lint { abortOnError false }
@@ -127,6 +133,8 @@ android {
     with zipfile.ZipFile(apk) as z:
         names = z.namelist()
         assert not any(Path(n).suffix.lower() in (".gba", ".sav") for n in names), "a ROM or a save must never be packaged"
+        for name in LAUNCHER_ASSETS:
+            assert "assets/assets/launcher/" + name in names, "launcher artwork missing: " + name
         for abi in args.abi:
             assert "lib/%s/libmain.so" % abi in names, "host library missing for " + abi
     target = ROOT / "build/android/ShiningSource-debug.apk"

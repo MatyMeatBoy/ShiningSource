@@ -1,5 +1,6 @@
 """Exercise the game's actual RA evaluator, local persistence and badge notices."""
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,12 +14,29 @@ HARNESS = r"""
 #include "launcher/achievements/ra_client.c"
 #include "runtime/achievements/ach_host.c"
 static int notices, badge_size;
+static char last_heading[48], last_text[96];
 void ss_plat_notice(const char *heading, const char *text, int rebel, const uint32_t *icon, int size) {
     notices++; badge_size = size;
+    snprintf(last_heading, sizeof last_heading, "%s", heading);
+    snprintf(last_text, sizeof last_text, "%s", text);
 }
 int main(int argc, char **argv) {
     uint8_t rom[1024] = {0}; char hash[33], name[1200];
     rc_hash_iterator_t it; SDL_Surface *surface;
+    if (argc == 3) {
+        SetEnvironmentVariableA("SS_RA_DIR", argv[1]);
+        if (!strcmp(argv[2], "launcher")) {
+            KhRa *launcher = KhRaCreate(argv[1], NULL, NULL, NULL);
+            if (!launcher) return 13;
+            KhRaDestroy(launcher);
+        } else {
+            ss_ach_start(rom, sizeof rom);
+            frames = 120;
+            announce();
+            printf("%d|%s|%s\n", notices, last_heading, last_text);
+        }
+        return 0;
+    }
     if (argc != 2) return 1;
     snprintf(folder_utf8, sizeof folder_utf8, "%s", argv[1]);
     MultiByteToWideChar(CP_UTF8, 0, argv[1], -1, folder, 900);
@@ -88,7 +106,54 @@ class AchievementsTest(unittest.TestCase):
             self.assertEqual(compiled.returncode,0,compiled.stderr)
             import shutil
             shutil.copy2(sdl/'bin/SDL3.dll',directory/'SDL3.dll')
-            result=subprocess.run([str(directory/'test.exe'),str(directory)],capture_output=True,text=True)
+            def run_fixture(install, *args, **overrides):
+                env = {name: value for name, value in os.environ.items()
+                       if name not in {'SS_CHEATS', 'SS_LANG', 'SS_FRAMES'} and not name.startswith('SS_RA_')}
+                env.update(APPDATA=str(install), **overrides)
+                return subprocess.run([str(directory/'test.exe'), str(install), *args],
+                                      capture_output=True, text=True, env=env)
+
+            for entry, expected in (
+                ('launcher', ''),
+                ('game', '1|LOCAL MODE ACTIVATED|Achievements stay on this PC'),
+            ):
+                install = directory/entry
+                badges = install/'achievements'/'badges'
+                mode_marker = badges.parent/'mode-seen'
+                badges.mkdir(parents=True)
+                (install/'badge_12345.png').write_bytes(b'legacy badge')
+                (install/'badge_42.png').write_bytes(b'conflict from old install')
+                (install/'badge_44.png').write_bytes(b'same bytes')
+                (badges/'badge_42.png').write_bytes(b'current badge')
+                (badges/'badge_44.png').write_bytes(b'same bytes')
+                (install/'badge-not-app.png').write_bytes(b'unrelated image')
+                (install/'local_record.txt').write_text('keep local progress')
+                (install/'rebel_record.txt').write_text('keep rebel progress')
+                (install/'retroachievements.ini').write_text('enabled=0\n')
+                (install/'retroachievements.auth').write_bytes(b'unchanged test token')
+                if entry == 'game':
+                    headless = run_fixture(install, entry, SS_FRAMES='1')
+                    self.assertEqual(headless.returncode, 0, headless.stderr)
+                    self.assertEqual(headless.stdout.strip(), '0||')
+                    self.assertFalse(mode_marker.exists())
+                first = run_fixture(install, entry)
+                self.assertEqual(first.returncode,0,first.stderr)
+                self.assertEqual(first.stdout.strip(),expected)
+                self.assertEqual(mode_marker.exists(), entry == 'game')
+                self.assertEqual((badges/'badge_12345.png').read_bytes(),b'legacy badge')
+                self.assertEqual((badges/'badge_42.png').read_bytes(),b'current badge')
+                self.assertEqual((badges/'legacy'/'badge_42.png').read_bytes(),b'conflict from old install')
+                self.assertFalse((badges/'legacy'/'badge_44.png').exists())
+                self.assertEqual(list(install.glob('badge_*.png')),[])
+                self.assertEqual((install/'badge-not-app.png').read_bytes(),b'unrelated image')
+                self.assertEqual((install/'local_record.txt').read_text(),'keep local progress')
+                self.assertEqual((install/'rebel_record.txt').read_text(),'keep rebel progress')
+                self.assertEqual((install/'retroachievements.ini').read_text(),'enabled=0\n')
+                self.assertEqual((install/'retroachievements.auth').read_bytes(),b'unchanged test token')
+                second = run_fixture(install, entry)
+                self.assertEqual(second.returncode,0,second.stderr)
+                self.assertEqual(second.stdout.strip(),'0||' if entry == 'game' else '')
+            result=run_fixture(directory)
             self.assertEqual(result.returncode,0,result.stderr)
             lines=(directory/'local_record.txt').read_text().splitlines()
             self.assertEqual(sum(line.startswith('123\t') for line in lines),1)

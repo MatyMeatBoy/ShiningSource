@@ -41,16 +41,23 @@
 #include "../runtime/include/shiningsource/runtime.h"
 #include "backends/imgui_impl_opengl3.h"
 #include "backends/imgui_impl_sdl3.h"
+#include "../runtime/include/shiningsource/window_mode.h"
+#include "../runtime/include/shiningsource/gamepad.h"
+#include "../runtime/include/shiningsource/language_file.h"
+#include "theme.h"
+#include "rom_browser.h"
+#include "test_pad.h"
 
 /* ---- games ---- */
 
 struct Game {
     const char *id, *title, *region, *sha1, *host;
+    size_t rom_size;
     bool available;
 };
 static const Game games[] = {
-    { "ss2", "Shining Soul II", "Europe (AU2P)", "aa1288be9257337abdfe3034898cf6c7aa778fbc", "ss2_win64.exe", true },
-    { "ss1", "Shining Soul", "", "", "", false },
+    { "ss2", "Shining Soul II", "Europe (AU2P)", "aa1288be9257337abdfe3034898cf6c7aa778fbc", "ss2_win64.exe", 16777216, true },
+    { "ss1", "Shining Soul", "", "", "", 0, false },
 };
 
 /* ---- language ---- */
@@ -60,7 +67,7 @@ static const char *text(const char *english, const char *spanish) { return langu
 
 /* ---- SHA-1 of a file ---- */
 
-static std::string sha1_of(FILE *file, size_t expected_size = 0)
+static std::string sha1_of(FILE *file, size_t expected_size)
 {
     if (!file)
         return "";
@@ -107,11 +114,6 @@ static std::string sha1_of(FILE *file, size_t expected_size = 0)
     char out[41];
     snprintf(out, sizeof out, "%08x%08x%08x%08x%08x", h[0], h[1], h[2], h[3], h[4]);
     return out;
-}
-
-static std::string sha1_of(const std::string &path)
-{
-    return sha1_of(fopen(path.c_str(), "rb"));
 }
 
 /* ---- settings ---- */
@@ -162,15 +164,14 @@ static void check_rom(const Game &game)
 {
     std::string path = setting((std::string("rom_") + game.id).c_str());
     if (path.empty()) { rom_status = ""; return; }
-    std::string digest = sha1_of(path);
-    rom_status = digest.empty() ? "missing" : digest == game.sha1 ? "ok" : "wrong";
+    FILE *file = fopen(path.c_str(), "rb");
+    if (!file) { rom_status = "missing"; return; }
+    rom_status = sha1_of(file, game.rom_size) == game.sha1 ? "ok" : "wrong";
 }
 
 /* A ROM beside the program is recognised without asking: when no ROM is set for the game, or the file that was
  * set is gone, the .gba files in the launcher's folder and in the one above it are checked the same way as a
  * chosen one (SHA-1), and the first that is the supported version is taken. Choosing by hand stays as it was. */
-static bool rom_found_beside;
-
 static void find_rom_beside(const Game &game)
 {
     std::string key = std::string("rom_") + game.id, current = setting(key.c_str());
@@ -187,10 +188,9 @@ static void find_rom_beside(const Game &game)
             /* a cartridge of this console is at most 32 MiB: nothing larger is read */
             if ((found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || found.nFileSizeHigh || found.nFileSizeLow > 32u * 1024 * 1024)
                 continue;
-            if (sha1_of(place + found.cFileName) == game.sha1) {
+            if (sha1_of(fopen((place + found.cFileName).c_str(), "rb"), game.rom_size) == game.sha1) {
                 settings[key] = place + found.cFileName;
                 save_settings();
-                rom_found_beside = true;
                 FindClose(search);
                 return;
             }
@@ -272,11 +272,12 @@ static void make_title(const Game &game)
     load_title();
 }
 
-static void choose_rom(const Game &game)
+static void choose_rom(const Game &game, SDL_Window *window)
 {
     char path[MAX_PATH] = "";
     OPENFILENAMEA dialog = {};
     dialog.lStructSize = sizeof dialog;
+    dialog.hwndOwner = (HWND)SDL_GetPointerProperty(SDL_GetWindowProperties(window), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr);
     dialog.lpstrFilter = "Game Boy Advance ROM (*.gba)\0*.gba\0All files\0*.*\0";
     dialog.lpstrFile = path;
     dialog.nMaxFile = sizeof path;
@@ -316,7 +317,7 @@ static std::string server_address()
     std::string how = setting("connection", "official");
     if (how == "host")
         return "127.0.0.1:47900";
-    if (how == "ip" && !with_port(setting("server_ip")).empty())
+    if (how == "ip")
         return with_port(setting("server_ip"));
     return DEFAULT_SERVER;
 }
@@ -418,10 +419,14 @@ static const char *const BUTTON_NAMES[10] = { "A", "B", "Select", "Start", "Righ
 static const char *const BUTTON_NAMES_ES[10] = { "A", "B", "Select", "Start", "Derecha", "Izquierda", "Arriba", "Abajo", "R", "L" };
 static const int DEFAULT_KEYS[10] = { SDL_SCANCODE_X, SDL_SCANCODE_Z, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT,
                                       SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_V, SDL_SCANCODE_C };
-static const int DEFAULT_PAD[10] = { SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
-                                     SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP,
-                                     SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER };
 static int capture_key = -1, capture_pad = -1;      /* the entry waiting for a press, or -1 */
+static SDL_GamepadButton captured_button = SDL_GAMEPAD_BUTTON_INVALID;
+static SDL_JoystickID captured_device;
+
+static ss_pad_profile controller_profile()
+{
+    return ss_pad_profile_from_setting(setting("pad_profile").c_str());
+}
 
 static void bindings(const char *name, const int *defaults, int *out, int lowest = 1)
 {
@@ -456,14 +461,45 @@ static void capture_event(const SDL_Event &event)
         }
         capture_key = -1;
     }
-    if (capture_pad >= 0 && event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-        bindings("pad", DEFAULT_PAD, values, 0);
-        values[capture_pad] = (int)event.gbutton.button;
-        store_bindings("pad", values);
+    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_UP && event.gbutton.which == captured_device &&
+        event.gbutton.button == captured_button)
+        captured_button = SDL_GAMEPAD_BUTTON_INVALID;
+    if (event.type == SDL_EVENT_GAMEPAD_REMOVED && event.gdevice.which == captured_device)
+        captured_button = SDL_GAMEPAD_BUTTON_INVALID;
+    if (capture_pad >= 0 && (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN || event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION)) {
+        SDL_JoystickID device = event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN ? event.gbutton.which : event.gaxis.which;
+        SDL_Gamepad *pad = SDL_GetGamepadFromID(device);
+        const ss_pad_profile profile = controller_profile();
+        const bool gamecube = ss_pad_uses_gamecube(pad, profile);
+        SDL_GamepadButton button = SDL_GAMEPAD_BUTTON_INVALID;
+        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN)
+            button = (SDL_GamepadButton)event.gbutton.button;
+        else if (gamecube)
+            button = ss_pad_capture_trigger(pad, (SDL_GamepadAxis)event.gaxis.axis, event.gaxis.value);
+        if (button == SDL_GAMEPAD_BUTTON_INVALID) return;
+        int defaults[10];
+        ss_pad_defaults(pad, profile, defaults);
+        const char *key = gamecube ? "pad_gamecube" : "pad";
+        bindings(key, defaults, values, 0);
+        values[capture_pad] = (int)button;
+        store_bindings(key, values);
+        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+            captured_button = button;
+            captured_device = device;
+        }
         capture_pad = -1;
     }
-    if (event.type == SDL_EVENT_GAMEPAD_ADDED)
-        SDL_OpenGamepad(event.gdevice.which);       /* an open controller is what sends button events */
+}
+
+static void controller_cancel(const SDL_Event &event)
+{
+    if (event.type != SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.type != SDL_EVENT_GAMEPAD_BUTTON_UP) return;
+    SDL_Gamepad *pad = SDL_GetGamepadFromID(event.gbutton.which);
+    if (!ss_pad_uses_gamecube(pad, controller_profile())) return;
+    const auto button = ss_pad_face_button(pad, SDL_GAMEPAD_BUTTON_LABEL_B, SDL_GAMEPAD_BUTTON_WEST);
+    if (button == SDL_GAMEPAD_BUTTON_EAST || event.gbutton.button != button) return;
+    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_UP || capture_pad < 0)
+        ImGui::GetIO().AddKeyEvent(ImGuiKey_Escape, event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
 }
 
 /* ---- RetroAchievements ----
@@ -697,7 +733,7 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
     if (user) {
         ImGui::TextColored(green, text("Signed in as %s", "Sesi\xC3\xB3n iniciada como %s"), user->display_name);
         ImGui::SameLine();
-        if (ImGui::Button(text("Sign out", "Cerrar sesi\xC3\xB3n")))
+        if (soul_ui::button(text("Sign out", "Cerrar sesi\xC3\xB3n")))
             KhRaLogout(ra);
         {
             /* off unless the player turns it on: an unlock on the account cannot be taken back, and the set was
@@ -721,7 +757,7 @@ static void account_section(const Game &game, const ImVec4 &gold, const ImVec4 &
         ImGui::InputText(text("Password", "Contrase\xC3\xB1" "a"), password, sizeof password, ImGuiInputTextFlags_Password);
         ImGui::Checkbox(text("Keep me signed in on this PC", "Mantener la sesi\xC3\xB3n en este PC"), &remember);
         ImGui::BeginDisabled(!username[0] || !password[0] || KhRaBusy(ra));
-        if (ImGui::Button(text("Sign in", "Iniciar sesi\xC3\xB3n"))) {
+        if (soul_ui::button(text("Sign in", "Iniciar sesi\xC3\xB3n"))) {
             KhRaSetEnabled(ra, 1);
             KhRaLogin(ra, username, password, remember);
             SecureZeroMemory(password, sizeof password);
@@ -867,7 +903,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
         if (have_before)
             ImGui::TextColored(dim, text("Backup of the one before: %s", "Respaldo de la anterior: %s"), minute_of(before.when).c_str());
         ImGui::BeginDisabled(!have);
-        if (ImGui::Button(text("Keep a copy now", "Guardar una copia ahora")) || (have && &kind == &kinds[0] && test_press("keep"))) {
+        if (soul_ui::button(text("Keep a copy now", "Guardar una copia ahora")) || (have && &kind == &kinds[0] && test_press("keep"))) {
             std::string name = keep_copy(kind.file, kind.label);
             answer_good = !name.empty();
             answer = answer_good ? std::string(text("Copy kept: ", "Copia guardada: ")) + name : text("The copy could not be written.", "No se pudo escribir la copia.");
@@ -876,7 +912,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
         ImGui::PopID();
         ImGui::Spacing();
     }
-    if (ImGui::Button(text("Open the folder", "Abrir la carpeta")))
+    if (soul_ui::button(text("Open the folder", "Abrir la carpeta")))
         ShellExecuteA(nullptr, "open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     if (!answer.empty())
         ImGui::TextColored(answer_good ? green : red, "%s", answer.c_str());
@@ -904,7 +940,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
         ImGui::TextWrapped(text("Put %s back as %s? The present save is first kept as a copy here. Close the game before doing this.",
                                 "\xC2\xBFRecuperar %s como %s? La partida actual se guarda antes como copia aqu\xC3\xAD. Cierra el juego antes de hacerlo."),
                            ask_restore.c_str(), text(kind.english, kind.spanish));
-        if (ImGui::Button(text("Yes, put it back", "S\xC3\xAD, recuperar")) || test_press("restore-yes")) {
+        if (soul_ui::button(text("Yes, put it back", "S\xC3\xAD, recuperar")) || test_press("restore-yes")) {
             SaveFile present;
             bool safe = !file_facts(folder + kind.file, present) || !keep_copy(kind.file, rebel ? "rebel-before-restore" : "normal-before-restore").empty();
             answer_good = safe && CopyFileA((folder + "saves\\" + ask_restore).c_str(), (folder + kind.file).c_str(), FALSE);
@@ -914,7 +950,7 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
             ask_restore.clear();
         }
         ImGui::SameLine();
-        if (ImGui::Button("No"))
+        if (soul_ui::button("No"))
             ask_restore.clear();
     }
 }
@@ -922,7 +958,6 @@ static void saves_page(const ImVec4 &gold, const ImVec4 &dim, const ImVec4 &red,
 static std::string launch_error;
 
 static bool launched;            /* the game was started: the launcher's work is done and it closes */
-static Uint64 saved_at;          /* when "Save settings" was last pressed, for its short answer */
 
 static int play(const Game &game, const std::string &rom, const wchar_t *explicit_rom = nullptr)
 {
@@ -943,16 +978,17 @@ static int play(const Game &game, const std::string &rom, const wchar_t *explici
     SetEnvironmentVariableA("SS_VSYNC", setting("vsync", "1").c_str());
     SetEnvironmentVariableA("SS_LANG", language ? "es" : "en");
     SetEnvironmentVariableA("SS_SKIP", setting("skip", "1") == "0" ? "0" : nullptr);
-    SetEnvironmentVariableA("SS_FULLSCREEN", setting("fullscreen", "0") == "1" ? "1" : nullptr);
     SetEnvironmentVariableA("SS_VOLUME", setting("volume", "100").c_str());
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
     qol_environment();          /* the experimental quality-of-life options (qol.h) */
-    bool online = setting("online", "1") == "1";
-    if (online && setting("connection", "official") == "host")
+    const std::string endpoint = server_address();
+    const std::string room = setting("direct_room", "0") == "1" ? setting("room") : "";
+    if (setting("connection", "official") == "host")
         start_relay();          /* hosting: the server must be there before the game looks for it */
-    SetEnvironmentVariableA("SS_NET", online ? server_address().c_str() : nullptr);
-    SetEnvironmentVariableA("SS_NET_ROOM", online ? setting("room", "shining").c_str() : nullptr);
+    SetEnvironmentVariableA("SS_NET", endpoint.empty() ? nullptr : endpoint.c_str());
+    SetEnvironmentVariableA("SS_NET_DEFERRED", endpoint.empty() ? "0" : room.empty() ? "1" : nullptr);
+    SetEnvironmentVariableA("SS_NET_ROOM", endpoint.empty() || room.empty() ? nullptr : room.c_str());
     SetEnvironmentVariableA("SS_NET_DELAY", nullptr);       /* the direct transport has no delay to set */
     /* achievements: where the remembered sign-in, the game's list and the records are (never a password), and
      * the cheats of a Rebel run */
@@ -991,209 +1027,146 @@ static void play(const Game &game)
 
 /* ---- interface ---- */
 
-/* The launcher wears the port's own "Soul" look, the same as the classic mode's border: a deep blue-green field
- * with points of light, gold frames and jewels, in the spirit of the game's menus. Everything is drawn here; no
- * artwork of the game is in the program. */
-static void style()
-{
-    ImGuiStyle &s = ImGui::GetStyle();
-    const ImVec4 gold(0.91f, 0.66f, 0.22f, 1), pale(1.0f, 0.89f, 0.54f, 1), teal(0.31f, 0.55f, 0.59f, 1);
-    ImGui::StyleColorsDark();
-    s.WindowRounding = 0;
-    s.ChildRounding = 0;
-    s.FrameRounding = 2;
-    s.GrabRounding = 2;
-    s.WindowBorderSize = 0;
-    s.ChildBorderSize = 2;
-    s.FrameBorderSize = 1;
-    s.FramePadding = ImVec2(12, 8);
-    s.ItemSpacing = ImVec2(10, 10);
-    s.WindowPadding = ImVec2(18, 14);
-    s.Colors[ImGuiCol_WindowBg] = ImVec4(0, 0, 0, 0);                   /* the field is drawn behind everything */
-    s.Colors[ImGuiCol_ChildBg] = ImVec4(0.05f, 0.14f, 0.18f, 0.88f);
-    s.Colors[ImGuiCol_Border] = gold;
-    s.Colors[ImGuiCol_Text] = ImVec4(0.96f, 0.96f, 0.92f, 1);
-    s.Colors[ImGuiCol_TextDisabled] = ImVec4(0.55f, 0.66f, 0.68f, 1);
-    s.Colors[ImGuiCol_Button] = ImVec4(0.20f, 0.40f, 0.45f, 1);
-    s.Colors[ImGuiCol_ButtonHovered] = teal;
-    s.Colors[ImGuiCol_ButtonActive] = gold;
-    s.Colors[ImGuiCol_Header] = ImVec4(0.72f, 0.48f, 0.12f, 1);        /* the selected entry: gold, as the game's cursor */
-    s.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.26f, 0.48f, 0.52f, 1);
-    s.Colors[ImGuiCol_HeaderActive] = gold;
-    s.Colors[ImGuiCol_FrameBg] = ImVec4(0.08f, 0.22f, 0.27f, 1);
-    s.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.12f, 0.30f, 0.35f, 1);
-    s.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.16f, 0.36f, 0.41f, 1);
-    s.Colors[ImGuiCol_CheckMark] = pale;
-    s.Colors[ImGuiCol_SliderGrab] = gold;
-    s.Colors[ImGuiCol_SliderGrabActive] = pale;
-    s.Colors[ImGuiCol_PopupBg] = ImVec4(0.05f, 0.14f, 0.18f, 0.98f);
-    s.Colors[ImGuiCol_TableHeaderBg] = ImVec4(0.10f, 0.26f, 0.31f, 1);
-    s.Colors[ImGuiCol_ScrollbarBg] = ImVec4(0, 0, 0, 0.25f);
-    s.Colors[ImGuiCol_ScrollbarGrab] = ImVec4(0.72f, 0.48f, 0.12f, 1);
-    s.Colors[ImGuiCol_Separator] = gold;
-}
-
-static void jewel(ImDrawList *draw, ImVec2 centre, float size, ImU32 colour)
-{
-    draw->AddQuadFilled(ImVec2(centre.x, centre.y - size), ImVec2(centre.x + size, centre.y), ImVec2(centre.x, centre.y + size),
-                        ImVec2(centre.x - size, centre.y), colour);
-    draw->AddLine(ImVec2(centre.x - size * 0.45f, centre.y - size * 0.35f), ImVec2(centre.x, centre.y - size * 0.8f), IM_COL32(255, 250, 220, 255), 1.5f);
-}
-
-/* The field behind the whole window, and the frame around it. */
-static void backdrop()
-{
-    ImDrawList *draw = ImGui::GetBackgroundDrawList();
-    const ImVec2 size = ImGui::GetIO().DisplaySize;
-    const ImU32 gold = IM_COL32(232, 168, 56, 255), cyan = IM_COL32(92, 214, 226, 255);
-    draw->AddRectFilledMultiColor(ImVec2(0, 0), size, IM_COL32(20, 62, 74, 255), IM_COL32(20, 62, 74, 255), IM_COL32(8, 24, 34, 255), IM_COL32(8, 24, 34, 255));
-    for (int y = 9; y < (int)size.y; y += 21)
-        for (int x = 9 + (y * 5) % 33; x < (int)size.x; x += 39) {
-            int k = (x * 31 + y * 17) % 5;
-            draw->AddRectFilled(ImVec2((float)x, (float)y), ImVec2((float)x + 2, (float)y + 2), IM_COL32(60 + k * 22, 120 + k * 20, 130 + k * 20, 255));
-        }
-    draw->AddRect(ImVec2(5, 5), ImVec2(size.x - 5, size.y - 5), IM_COL32(96, 58, 16, 255), 0, 0, 5);
-    draw->AddRect(ImVec2(5, 5), ImVec2(size.x - 5, size.y - 5), gold, 0, 0, 3);
-    draw->AddRect(ImVec2(6, 6), ImVec2(size.x - 6, size.y - 6), IM_COL32(255, 226, 138, 255), 0, 0, 1);
-    jewel(draw, ImVec2(6, 6), 9, gold); jewel(draw, ImVec2(size.x - 6, 6), 9, gold);
-    jewel(draw, ImVec2(6, size.y - 6), 9, gold); jewel(draw, ImVec2(size.x - 6, size.y - 6), 9, gold);
-    jewel(draw, ImVec2(size.x / 2, 6), 8, cyan); jewel(draw, ImVec2(size.x / 2, size.y - 6), 8, cyan);
-}
-
-static void interface_frame(bool &running)
+static void interface_frame(SDL_Window *window, bool &running)
 {
     static int selected = 0, page = 0;
     static bool first = true;
-    if (first && getenv("SS_LAUNCHER_PAGE"))      /* tests: open on a given page */
-        page = atoi(getenv("SS_LAUNCHER_PAGE"));
+    static bool rail_active = false, content_active = false;
+    static rom_browser::Picker picker;
+    const bool opened = first;
+    if (first && getenv("SS_LAUNCHER_PAGE"))
+        page = std::clamp(atoi(getenv("SS_LAUNCHER_PAGE")), 0, 8);
     first = false;
     const Game &game = games[selected];
-    const ImVec4 gold(0.84f, 0.66f, 0.29f, 1), red(0.95f, 0.45f, 0.40f, 1), green(0.45f, 0.85f, 0.50f, 1), dim(0.6f, 0.65f, 0.75f, 1);
+    std::string rom = setting((std::string("rom_") + game.id).c_str());
+    const ImVec4 gold(.91f, .78f, .52f, 1), red(.99f, .55f, .48f, 1), green(.64f, .84f, .57f, 1), dim(.66f, .73f, .66f, 1);
 
-    backdrop();
+    soul_ui::backdrop();
     ImGui::SetNextWindowPos(ImVec2(0, 0));
     ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
-    ImGui::Begin("ShiningSource", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::Begin("ShiningSource", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoScrollbar);
+    soul_ui::chrome(window, running);
+    ImGui::SetCursorPos(ImVec2(14, soul_ui::title_height + 14));
 
-    ImGui::TextColored(gold, "ShiningSource");
-    ImGui::SameLine();
-    ImGui::TextColored(dim, "%s", text("native port of the Shining Soul games", "port nativo de los juegos Shining Soul"));
-    ImGui::SameLine(ImGui::GetWindowWidth() - 150);
-    ImGui::SetNextItemWidth(130);
+    const bool switching = !ImGui::IsAnyItemActive() && !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+    const bool enter_rail = opened || (switching && content_active && ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft));
+    const bool enter_content = switching && rail_active && ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight);
+    if (enter_content || (enter_rail && !opened)) ImGui::SetNavCursorVisible(true);
+    if (enter_rail) ImGui::SetNextWindowFocus();
+    ImGui::BeginChild("navigation", ImVec2(184, -14), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoScrollbar);
+    const char *pages_en[] = { "Home", "Video", "Sound", "Controls", "Online", "Achievements", "Quality of life", "Saves", "About" };
+    const char *pages_es[] = { "Inicio", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Calidad de vida", "Partidas", "Acerca de" };
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 6));
+    for (int i = 0; i < 9; ++i) {
+        ImGui::PushID(i);
+        if (enter_rail && i == page) ImGui::SetKeyboardFocusHere();
+        if (soul_ui::button(language ? pages_es[i] : pages_en[i], ImVec2(-1, 33), false, page == i, true, i)) {
+            page = i;
+            capture_key = capture_pad = -1;
+        }
+        if (i == page && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+    }
+    ImGui::PopStyleVar();
+    const float bottom_y = ImGui::GetWindowHeight() - 119;
+    if (ImGui::GetCursorPosY() < bottom_y) ImGui::SetCursorPosY(bottom_y);
+    ImGui::SetNextItemWidth(-1);
     if (ImGui::Combo("##language", &language, "English\0Espa\xC3\xB1ol\0")) {
         settings["language"] = language ? "es" : "en";
         save_settings();
     }
-    ImGui::Separator();
-
-    /* left: games and pages */
-    ImGui::BeginChild("left", ImVec2(210, 0), ImGuiChildFlags_Borders);
-    ImGui::TextColored(dim, "%s", text("GAMES", "JUEGOS"));
-    for (int i = 0; i < (int)(sizeof games / sizeof games[0]); i++) {
-        std::string label = std::string(games[i].title) + (games[i].available ? "" : text("  (closed)", "  (cerrado)"));
-        if (ImGui::Selectable(label.c_str(), selected == i)) {
-            selected = i;
-            check_rom(games[i]);
-        }
-    }
-    ImGui::Spacing();
-    ImGui::TextColored(dim, "%s", text("PAGES", "SECCIONES"));
-    const char *pages_en[] = { "Play", "Video", "Sound", "Controls", "Online", "Achievements", "Quality of life", "Saves", "About" };
-    const char *pages_es[] = { "Jugar", "V\xC3\xAD" "deo", "Sonido", "Controles", "En l\xC3\xADnea", "Logros", "Calidad de vida", "Partidas", "Acerca de" };
-    for (int i = 0; i < 9; i++)
-        if (ImGui::Selectable(language ? pages_es[i] : pages_en[i], page == i))
-            page = i;
+    const bool playable = game.available && rom_status == "ok";
+    ImGui::BeginDisabled(!playable);
+    bool start_pressed = soul_ui::button(text("Play", "Jugar"), ImVec2(-1, 41), true);
+    ImGui::EndDisabled();
+    ImGui::TextColored(dim, "%s", text("D-pad / A to select", "Cruceta / A elige"));
+    rail_active = ImGui::IsWindowFocused();
     ImGui::EndChild();
     ImGui::SameLine();
 
-    ImGui::BeginChild("right", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    if (!game.available) {
-        ImGui::TextColored(gold, "%s", game.title);
-        ImGui::TextWrapped("%s", text("This game is closed: it has no decompilation yet, so there is nothing to build. It will open here when its decompilation exists.",
-                                      "Este juego est\xC3\xA1 cerrado: a\xC3\xBAn no tiene decompilaci\xC3\xB3n, as\xC3\xAD que no hay nada que construir. Se abrir\xC3\xA1 aqu\xC3\xAD cuando exista."));
-    } else if (page == 0) {
-        std::string rom = setting((std::string("rom_") + game.id).c_str());
-        if (rom_status == "ok" || rom_status == "wrong")
-            make_title(game);
-        if (title_texture && rom_status != "missing" && !rom.empty()) {
-            /* the game's title screen, from the user's own ROM, in a gold frame */
-            /* as large as leaves room for the page below it */
-            ImVec2 room = ImGui::GetContentRegionAvail();
-            float scale = room.x >= 740 && room.y >= 840 ? 3.0f : room.x >= 500 && room.y >= 660 ? 2.0f : 1.0f;
-            ImVec2 at = ImGui::GetCursorScreenPos(), size(240 * scale, 160 * scale);
-            at.x += (ImGui::GetContentRegionAvail().x - size.x) / 2;
-            ImDrawList *draw = ImGui::GetWindowDrawList();
-            draw->AddRectFilled(ImVec2(at.x - 5, at.y - 1), ImVec2(at.x + size.x + 5, at.y + size.y + 9), IM_COL32(96, 58, 16, 255));
-            draw->AddRectFilled(ImVec2(at.x - 4, at.y), ImVec2(at.x + size.x + 4, at.y + size.y + 8), IM_COL32(232, 168, 56, 255));
-            draw->AddRectFilled(ImVec2(at.x - 2, at.y + 2), ImVec2(at.x + size.x + 2, at.y + size.y + 6), IM_COL32(255, 226, 138, 255));
-            draw->AddImage((ImTextureID)(intptr_t)title_texture, ImVec2(at.x, at.y + 4), ImVec2(at.x + size.x, at.y + size.y + 4));
-            ImGui::Dummy(ImVec2(0, size.y + 16));
-        }
-        ImGui::TextColored(gold, "%s", game.title);
-        ImGui::TextColored(dim, "%s", game.region);
-        ImGui::Spacing();
-        ImGui::TextUnformatted(text("Your cartridge dump (the game is not included):", "Tu volcado del cartucho (el juego no viene incluido):"));
-        ImGui::TextWrapped("%s", rom.empty() ? text("(none chosen)", "(ninguno elegido)") : rom.c_str());
-        if (rom_status == "ok")
-            ImGui::TextColored(green, "%s", rom_found_beside ? text("Found beside the program and verified: this is the supported version.",
-                                                                    "Encontrado junto al programa y verificado: es la versi\xC3\xB3n compatible.")
-                                                             : text("Verified: this is the supported version.", "Verificado: es la versi\xC3\xB3n compatible."));
-        else if (rom_status == "wrong")
-            ImGui::TextColored(red, "%s", text("This file is not the supported version (its SHA-1 differs). The game may not work.",
-                                               "Este archivo no es la versi\xC3\xB3n compatible (su SHA-1 es distinto). Puede que el juego no funcione."));
-        else if (rom_status == "missing")
-            ImGui::TextColored(red, "%s", text("The file is no longer there.", "El archivo ya no est\xC3\xA1."));
-        if (ImGui::Button(text("Choose ROM...", "Elegir ROM...")))
-            choose_rom(game);
-        ImGui::Spacing();
-        if (setting("mode").empty()) {
-            /* first start: the two ways to see the game */
-            ImGui::TextColored(gold, "%s", text("How do you want to see the game?", "\xC2\xBF" "C\xC3\xB3mo quieres ver el juego?"));
-            if (ImGui::Button(text("Classic", "Cl\xC3\xA1sico"), ImVec2(220, 54))) {
-                settings["mode"] = "classic";
-                save_settings();
+    if (enter_content) ImGui::SetNextWindowFocus();
+    ImGui::BeginChild("content", ImVec2(-14, -14), ImGuiChildFlags_Borders | ImGuiChildFlags_NavFlattened);
+    if (page && game.available) soul_ui::section(language ? pages_es[page] : pages_en[page]);
+    if (enter_content) ImGui::SetKeyboardFocusHere();
+    if (!game.available || page == 0) {
+        soul_ui::banner(game.title, game.available ? game.region : text("In development", "En desarrollo"), game.available);
+        if (game.available) {
+            static const auto game_language = [] {
+                const std::string path = folder + SS_GAME_LANGUAGE_FILE;
+                const auto current = ss_game_language_preference_at(path.c_str());
+                return current == SS_LANG_UNCHOSEN ? ss_game_language_preference_at((path + ".bak").c_str()) : current;
+            }();
+            const char *language_names[] = { "English", "Fran\xC3\xA7" "ais", "Deutsch", "Italiano", "Espa\xC3\xB1ol" };
+            ImGui::TextColored(dim, "%s %s", text("Game language", "Idioma del juego"), game_language == SS_LANG_UNCHOSEN
+                ? text("(to be chosen)", "(por escoger)") : language_names[game_language]);
+            ImGui::Spacing();
+            ImGui::TextColored(gold, "%s", text("Cartridge file", "Archivo del cartucho"));
+            if (rom_status == "ok") {
+                ImGui::TextColored(green, "%s", text("European ROM verified", "ROM europea verificada"));
+                ImGui::TextWrapped("%s", std::filesystem::path(rom).filename().u8string().c_str());
+            } else if (rom_status == "wrong") {
+                ImGui::TextColored(red, "%s", text("Choose an unmodified European ROM (AU2P).", "Elige una ROM europea original (AU2P)."));
+            } else if (rom_status == "missing") {
+                ImGui::TextColored(red, "%s", text("The previous ROM could not be found.", "No se encuentra la ROM anterior."));
+            } else {
+                ImGui::TextWrapped("%s", text("Choose your Shining Soul II European .gba file.", "Elige tu archivo .gba europeo de Shining Soul II."));
             }
+            if (soul_ui::button(text("Browse for ROM", "Buscar ROM"), ImVec2(0, 39), !playable))
+                picker.open(rom, folder);
             ImGui::SameLine();
-            if (ImGui::Button(text("Enhanced", "Mejorado"), ImVec2(220, 54))) {
-                settings["mode"] = "enhanced";
+            if (soul_ui::button(text("Windows file picker", "Selector de Windows"), ImVec2(0, 39))) choose_rom(game, window);
+            const std::string choice = picker.draw(text("Choose a .gba cartridge file", "Elige un archivo de cartucho .gba"),
+                text("Parent folder", "Carpeta anterior"), text("Drives", "Unidades"), text("Cancel", "Cancelar"),
+                text("No folders or .gba files", "Sin carpetas ni archivos .gba"));
+            if (!choice.empty()) {
+                settings[std::string("rom_") + game.id] = choice;
                 save_settings();
+                check_rom(game);
             }
-            ImGui::TextWrapped("%s", text("Classic: the console's picture, as an emulator shows it, at a whole scale inside a border you can adjust. Enhanced: the picture adapts to the window and shows more of the map. You can change it later in Video.",
-                                          "Cl\xC3\xA1sico: la imagen de la consola, como la muestra un emulador, a escala entera dentro de un borde que puedes ajustar. Mejorado: la imagen se adapta a la ventana y muestra m\xC3\xA1s mapa. Puedes cambiarlo luego en V\xC3\xAD" "deo."));
-        } else {
-            ImGui::BeginDisabled(rom.empty() || rom_status == "missing");
-            if (ImGui::Button(text("PLAY", "JUGAR"), ImVec2(220, 54)))
-                play(game);
-            ImGui::EndDisabled();
-            ImGui::SameLine();
-            if (ImGui::Button(text("Save settings", "Guardar ajustes"), ImVec2(0, 54))) {
-                save_settings();
-                saved_at = SDL_GetTicks();
-            }
-            if (saved_at && SDL_GetTicks() - saved_at < 2500) {
-                ImGui::SameLine();
-                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.50f, 1), "%s", text("Saved", "Guardado"));
-            }
-            ImGui::SameLine();
-            ImGui::TextColored(dim, "%s", setting("mode") == "classic" ? text("Classic mode", "Modo cl\xC3\xA1sico") : text("Enhanced mode", "Modo mejorado"));
-            if (!cheat_list().empty()) {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.42f, 0.62f, 1));
-                ImGui::TextWrapped("%s", text("Rebel mode: cheats are on. This game counts for the Rebel record only and uses its own save.",
-                                                                             "Modo rebelde: hay trucos activos. Esta partida solo cuenta para el registro rebelde y usa su propia partida guardada."));
-                ImGui::PopStyleColor();
+            if (playable && !cheat_list().empty())
+                ImGui::TextColored(gold, "%s", text("Rebel mode is active. It uses a separate save.", "El modo rebelde usa una partida aparte."));
+            if (!launch_error.empty()) ImGui::TextColored(red, "%s", launch_error.c_str());
+            if (playable && ImGui::CollapsingHeader(text("Cartridge preview", "Vista previa del cartucho"))) {
+                make_title(game);
+                if (title_texture)
+                    ImGui::Image(soul_ui::id(title_texture), ImVec2(240, 160));
             }
         }
-        if (!launch_error.empty())
-            ImGui::TextColored(red, "%s", launch_error.c_str());
-        ImGui::Spacing();
-        ImGui::TextColored(dim, "SHA-1 %s", game.sha1);
+        ImGui::SetNextItemWidth(240);
+        if (ImGui::BeginCombo(text("Game", "Juego"), game.title)) {
+            for (int i = 0; i < (int)(sizeof games / sizeof games[0]); ++i) {
+                if (ImGui::Selectable(games[i].title, selected == i)) {
+                    selected = i;
+                    check_rom(games[i]);
+                }
+            }
+            ImGui::EndCombo();
+        }
     } else if (page == 1) {
         static const char *values[] = { "auto", "240", "284", "320", "480" };
         const char *labels_en[] = { "Automatic: fill the window", "Original 3:2 (240 columns)", "16:9 (284 columns)", "Wider (320 columns)", "Maximum (480 columns)" };
         const char *labels_es[] = { "Autom\xC3\xA1tico: llenar la ventana", "Original 3:2 (240 columnas)", "16:9 (284 columnas)", "M\xC3\xA1s ancho (320 columnas)", "M\xC3\xA1ximo (480 columnas)" };
         std::string view = setting("view", "auto");
-        bool fullscreen = setting("fullscreen", "0") == "1";
+        int window_mode = ss_window_mode_from_settings(setting("window_mode").c_str(), setting("fullscreen").c_str());
         bool classic = setting("mode", "enhanced") == "classic";
+        ImGui::SetNextItemWidth(290);
+        if (ImGui::Combo(text("Window mode", "Modo de ventana"), &window_mode,
+                         language ? "Ventana\0Sin bordes\0Pantalla completa exclusiva\0"
+                                  : "Windowed\0Borderless\0Exclusive fullscreen\0")) {
+            settings["window_mode"] = ss_window_mode_name((ss_window_mode)window_mode);
+            settings.erase("fullscreen");
+            save_settings();
+        }
+        bool wide_pro = setting("wide_pro", "1") != "0";
+        ImGui::BeginDisabled(classic);
+        if (ImGui::Checkbox(text("Wide Pro for title screens", "Wide Pro en las pantallas de inicio"), &wide_pro)) {
+            settings["wide_pro"] = wide_pro ? "1" : "0";
+            save_settings();
+        }
+        ImGui::EndDisabled();
+        ImGui::Spacing();
         ImGui::TextColored(gold, "%s", text("Screen mode", "Modo de pantalla"));
         if (ImGui::RadioButton(text("Classic: the console's picture at a whole scale, with a border", "Cl\xC3\xA1sico: la imagen de la consola a escala entera, con borde"), classic)) {
             settings["mode"] = "classic";
@@ -1257,23 +1230,32 @@ static void interface_frame(bool &running)
                 save_settings();
             }
         }
-        if (ImGui::Checkbox(text("Start in full screen (F11 switches while playing)", "Empezar en pantalla completa (F11 cambia durante el juego)"), &fullscreen)) {
-            settings["fullscreen"] = fullscreen ? "1" : "0";
-            save_settings();
-        }
     } else if (page == 2) {
         int volume = atoi(setting("volume", "100").c_str());
-        ImGui::TextColored(gold, "%s", text("Sound", "Sonido"));
         if (ImGui::SliderInt(text("Volume", "Volumen"), &volume, 0, 100, "%d%%")) {
             settings["volume"] = std::to_string(volume);
             save_settings();
         }
     } else if (page == 3) {
-        int count = 0, keys[10], pad[10];
+        int count = 0, keys[10], pad[10], defaults[10];
         SDL_JoystickID *pads = SDL_GetGamepads(&count);
+        SDL_Gamepad *active = count ? SDL_GetGamepadFromID(pads[0]) : nullptr;
+        int profile = controller_profile();
+        ImGui::SetNextItemWidth(210);
+        if (ImGui::Combo(text("Controller profile", "Perfil de mando"), &profile,
+                         language ? "Autom\xC3\xA1tico\0Est\xC3\xA1ndar\0GameCube\0" : "Automatic\0Standard\0GameCube\0")) {
+            settings["pad_profile"] = ss_pad_profile_name((ss_pad_profile)profile);
+            save_settings();
+            capture_pad = -1;
+        }
+        const bool gamecube = ss_pad_uses_gamecube(active, (ss_pad_profile)profile);
+        const char *pad_key = gamecube ? "pad_gamecube" : "pad";
+        ss_pad_defaults(active, (ss_pad_profile)profile, defaults);
         bindings("keys", DEFAULT_KEYS, keys);
-        bindings("pad", DEFAULT_PAD, pad, 0);
-        ImGui::TextColored(gold, "%s", text("Controls", "Controles"));
+        bindings(pad_key, defaults, pad, 0);
+        if (gamecube)
+            ImGui::TextWrapped("%s", text("GameCube: A/B match the cartridge, Z is Select, and L/R use the trigger click.",
+                                           "GameCube: A/B como en el cartucho, Z es Select y L/R responden al clic del gatillo."));
         ImGui::TextWrapped("%s", text("Click a box and press the key or the controller button you want for it. Esc cancels. F11 is full screen.",
                                       "Haz clic en una casilla y pulsa la tecla o el bot\xC3\xB3n del mando que quieras para ella. Esc cancela. F11 es pantalla completa."));
         ImGui::TextWrapped("%s", text("While playing, Esc (or Select and Start together on a controller) opens the options menu: screen mode, border, VSync, volume and more can be changed there without leaving the game, and it is where you quit. What you change there is kept here too.",
@@ -1291,23 +1273,26 @@ static void interface_frame(bool &running)
                 ImGui::PushID(i);
                 const char *key_name = SDL_GetScancodeName((SDL_Scancode)keys[i]);
                 std::string label = capture_key == i ? text("press a key...", "pulsa una tecla...") : (key_name && *key_name ? key_name : "?");
-                if (ImGui::Button((label + "##key").c_str(), ImVec2(180, 0))) {
+                if (soul_ui::button((label + "##key").c_str(), ImVec2(180, 0))) {
                     capture_key = i;
                     capture_pad = -1;
                 }
                 ImGui::TableNextColumn();
                 /* the name printed on the connected controller (Cross, Circle, A, B...), else SDL's own */
                 const char *pad_name = SDL_GetGamepadStringForButton((SDL_GamepadButton)pad[i]);
-                if (count > 0 && pad[i] <= SDL_GAMEPAD_BUTTON_NORTH) {
+                if (gamecube && pad[i] == SDL_GAMEPAD_BUTTON_MISC3) pad_name = "L";
+                else if (gamecube && pad[i] == SDL_GAMEPAD_BUTTON_MISC4) pad_name = "R";
+                else if (gamecube && pad[i] == defaults[2] && pad[i] == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER) pad_name = "Z";
+                else if (active && pad[i] <= SDL_GAMEPAD_BUTTON_NORTH) {
                     static const char *const face[] = { nullptr, "A", "B", "X", "Y", "Cross", "Circle", "Square", "Triangle" };
                     static const char *const face_es[] = { nullptr, "A", "B", "X", "Y", "Cruz", "C\xC3\xADrculo", "Cuadrado", "Tri\xC3\xA1ngulo" };
-                    int label = (int)SDL_GetGamepadButtonLabelForType(SDL_GetGamepadTypeForID(pads[0]), (SDL_GamepadButton)pad[i]);
+                    int label = (int)SDL_GetGamepadButtonLabel(active, (SDL_GamepadButton)pad[i]);
                     if (label >= 1 && label <= 8)
                         pad_name = language ? face_es[label] : face[label];
                 }
                 label = capture_pad == i ? text("press a button...", "pulsa un bot\xC3\xB3n...") : (pad_name ? pad_name : "?");
                 ImGui::BeginDisabled(count == 0);
-                if (ImGui::Button((label + "##pad").c_str(), ImVec2(180, 0))) {
+                if (soul_ui::button((label + "##pad").c_str(), ImVec2(180, 0))) {
                     capture_pad = i;
                     capture_key = -1;
                 }
@@ -1316,9 +1301,9 @@ static void interface_frame(bool &running)
             }
             ImGui::EndTable();
         }
-        if (ImGui::Button(text("Restore defaults", "Restaurar valores"))) {
+        if (soul_ui::button(text("Restore defaults", "Restaurar valores"))) {
             settings.erase("keys");
-            settings.erase("pad");
+            settings.erase(pad_key);
             save_settings();
             capture_key = capture_pad = -1;
         }
@@ -1330,29 +1315,30 @@ static void interface_frame(bool &running)
             ImGui::BulletText("%s", SDL_GetGamepadNameForID(pads[i]));
         SDL_free(pads);
     } else if (page == 4) {
-        bool online = setting("online", "1") == "1";
+        bool direct_room = setting("direct_room", "0") == "1";
         char room[32];
-        snprintf(room, sizeof room, "%s", setting("room", "shining").c_str());
+        snprintf(room, sizeof room, "%s", setting("room").c_str());
         ImGui::TextColored(gold, "%s", text("Online play (2 to 4 players)", "Juego en l\xC3\xADnea (2 a 4 jugadores)"));
-        if (ImGui::Checkbox(text("Play online", "Jugar en l\xC3\xADnea"), &online)) {
-            settings["online"] = online ? "1" : "0";
+        ImGui::TextWrapped("%s", text("Create or join a room from Multiplayer in the game. Change the server here only if needed.",
+                                      "Crea o \xC3\xBA" "nete a una sala desde Multijugador en el juego. Cambia el servidor aqu\xC3\xAD si lo necesitas."));
+        if (ImGui::Checkbox(text("Use a room from the launcher", "Usar una sala desde el launcher"), &direct_room)) {
+            settings["direct_room"] = direct_room ? "1" : "0";
             save_settings();
         }
-        ImGui::BeginDisabled(!online);
+        ImGui::BeginDisabled(!direct_room);
         ImGui::SetNextItemWidth(260);
         if (ImGui::InputText(text("Room", "Sala"), room, sizeof room)) {
             settings["room"] = room;
             save_settings();
         }
-        ImGui::TextWrapped("%s", text("Everyone types the same room name. The first to enter is the host (player 1). In the game choose MULTIPLAYER MODE: the cable is the network.",
-                                      "Todos escriben el mismo nombre de sala. El primero en entrar es el anfitri\xC3\xB3n (jugador 1). En el juego elige MULTIPLAYER MODE: el cable es la red."));
+        ImGui::EndDisabled();
         ImGui::Separator();
         ImGui::TextColored(gold, "%s", text("Server", "Servidor"));
         {
             std::string how = setting("connection", "official");
             static std::string notice;
             auto choose = [&](const char *value) { settings["connection"] = value; save_settings(); ping_ms = -2; notice.clear(); };
-            if (ImGui::RadioButton(text("Official server (default)", "Servidor oficial (por defecto)"), how == "official"))
+            if (ImGui::RadioButton(text("ShiningSource Server", "Servidor ShiningSource"), how == "official"))
                 choose("official");
             if (ImGui::RadioButton(text("Host on this PC", "Alojar en este PC"), how == "host"))
                 choose("host");
@@ -1364,7 +1350,7 @@ static void interface_frame(bool &running)
                 ImGui::TextWrapped("%s", text("This PC runs the server. Give the others one of these addresses; they choose \"Connect by IP\" and paste it. The server starts when you press Play and ends by itself ten minutes after the last game.",
                                               "Este PC hace de servidor. Pasa a los dem\xC3\xA1s una de estas direcciones; ellos eligen \"Conectar por IP\" y la pegan. El servidor arranca al pulsar Jugar y se cierra solo diez minutos despu\xC3\xA9s de la \xC3\xBAltima partida."));
                 if (!running) {
-                    if (ImGui::Button(text("Start the server now", "Arrancar el servidor ahora")))
+                    if (soul_ui::button(text("Start the server now", "Arrancar el servidor ahora")))
                         notice = start_relay() ? "" : text("The server could not be started (ss_relay.exe must be next to the launcher, and UDP port 47900 free).",
                                                            "No se pudo arrancar el servidor (ss_relay.exe debe estar junto al launcher y el puerto UDP 47900 libre).");
                 } else {
@@ -1394,7 +1380,7 @@ static void interface_frame(bool &running)
                     ping_ms = -2;
                 }
                 ImGui::SameLine();
-                if (ImGui::Button(text("Paste", "Pegar"))) {
+                if (soul_ui::button(text("Paste", "Pegar"))) {
                     char *clip = SDL_GetClipboardText();
                     if (clip && *clip) {
                         settings["server_ip"] = with_port(clip);
@@ -1405,11 +1391,14 @@ static void interface_frame(bool &running)
                 }
                 ImGui::TextWrapped("%s", text("The address the host copied from their launcher, for example 192.168.1.20:47900.",
                                               "La direcci\xC3\xB3n que el anfitri\xC3\xB3n copi\xC3\xB3 de su launcher, por ejemplo 192.168.1.20:47900."));
+                if (server_address().empty())
+                    ImGui::TextColored(red, "%s", text("Enter a relay address to play online.", "Escribe la direcci\xC3\xB3n del servidor para jugar en l\xC3\xADnea."));
             }
             if (!notice.empty())
                 ImGui::TextColored(dim, "%s", notice.c_str());
         }
-        if (ImGui::Button(text("Measure my connection", "Medir mi conexi\xC3\xB3n")))
+        ImGui::BeginDisabled(server_address().empty());
+        if (soul_ui::button(text("Measure my connection", "Medir mi conexi\xC3\xB3n")))
             measure_ping(server_address());
         ImGui::SameLine();
         if (ping_ms == -1)
@@ -1427,12 +1416,17 @@ static void interface_frame(bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.9", "Versi\xC3\xB3n 0.9"));
+        ImGui::TextColored(gold, "%s", text("Version 0.9.2", "Versi\xC3\xB3n 0.9.2"));
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
+        if (soul_ui::button(text("Exit launcher", "Cerrar launcher"))) running = false;
     }
+    content_active = ImGui::IsWindowFocused();
     ImGui::EndChild();
+    if (running && games[selected].available && rom_status == "ok" && !ImGui::GetIO().WantTextInput &&
+        !ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) &&
+        capture_key < 0 && capture_pad < 0 && (start_pressed || ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false)))
+        play(games[selected]);
     ImGui::End();
-    (void)running;
 }
 
 int wmain(int argc, wchar_t **argv)
@@ -1442,7 +1436,8 @@ int wmain(int argc, wchar_t **argv)
     folder = path;
     folder.erase(folder.find_last_of("\\/") + 1);
     load_settings();
-    language = setting("language", "en") == "es";
+    const char *system_language = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_SPANISH ? "es" : "en";
+    language = setting("language", system_language) == "es";
     const bool prepare = argc > 1 && !wcscmp(argv[1], L"--prepare");
     if (prepare || (argc > 1 && !wcscmp(argv[1], L"--game"))) {
         int flag = prepare ? 2 : 1;
@@ -1456,7 +1451,7 @@ int wmain(int argc, wchar_t **argv)
         }
         wchar_t rom_path[32768];
         DWORD length = GetFullPathNameW(argv[flag + 1], 32768, rom_path, nullptr);
-        if (!length || length >= 32768 || sha1_of(_wfopen(rom_path, L"rb"), 16777216) != games[0].sha1) {
+        if (!length || length >= 32768 || sha1_of(_wfopen(rom_path, L"rb"), games[0].rom_size) != games[0].sha1) {
             fprintf(stderr, "Choose an unmodified Shining Soul II European ROM (AU2P, .gba).\n");
             return 20;
         }
@@ -1472,18 +1467,22 @@ int wmain(int argc, wchar_t **argv)
     find_rom_beside(games[0]);
     check_rom(games[0]);
 
+    ss_pad_enable_gamecube();
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
         MessageBoxA(nullptr, SDL_GetError(), "ShiningSource", MB_ICONERROR);
         return 1;
     }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    SDL_Window *window = SDL_CreateWindow("ShiningSource", 880, 540, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window *window = SDL_CreateWindow("ShiningSource", 1040, 650, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE |
+                                                                SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     SDL_GLContext context = window ? SDL_GL_CreateContext(window) : nullptr;
     if (!context) {
         MessageBoxA(nullptr, SDL_GetError(), "ShiningSource", MB_ICONERROR);
         return 1;
     }
+    SDL_SetWindowMinimumSize(window, 780, 600);
+    SDL_SetWindowHitTest(window, soul_ui::hit_test, nullptr);
     SDL_GL_SetSwapInterval(1);
     IMGUI_CHECKVERSION();
     {                                   /* the client takes its folder as UTF-8; a remembered session signs in by itself */
@@ -1497,29 +1496,38 @@ int wmain(int argc, wchar_t **argv)
     }
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;
-    ImGui::GetIO().FontGlobalScale = 1.25f;
-    style();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+    soul_ui::style();
+    soul_ui::init();
     ImGui_ImplSDL3_InitForOpenGL(window, context);
     ImGui_ImplOpenGL3_Init("#version 130");
 
     bool running = true;
     const char *frames = getenv("SS_LAUNCHER_FRAMES");      /* tests: draw N frames and leave */
     long remaining = frames ? atol(frames) : -1;
+    LauncherTestPad test_pad(remaining > 0 ? getenv("SS_LAUNCHER_TEST_PAD") : nullptr);
     while (running && remaining != 0 && !launched) {
+        test_pad.tick();
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
+            const bool remapping_key = capture_key >= 0;
             ImGui_ImplSDL3_ProcessEvent(&event);
+            controller_cancel(event);
             capture_event(event);
-            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && capture_key < 0)
+            if (event.type == SDL_EVENT_KEY_DOWN && event.key.scancode == SDL_SCANCODE_F11 && !remapping_key)
                 SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
-            if (event.type == SDL_EVENT_QUIT)
+            if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                 running = false;
         }
+        if (capture_pad >= 0 || captured_button != SDL_GAMEPAD_BUTTON_INVALID)
+            ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+        else
+            ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
         KhRaPump(ra, 0);                 /* answers from the site; nothing is evaluated in the launcher */
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-        interface_frame(running);
+        interface_frame(window, running);
         ImGui::Render();
         int w, h;
         SDL_GetWindowSizeInPixels(window, &w, &h);
@@ -1544,7 +1552,11 @@ int wmain(int argc, wchar_t **argv)
     }
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
+    test_pad.close();
     ImGui::DestroyContext();
+    glDeleteTextures(1, &soul_ui::grain);
+    glDeleteTextures(1, &soul_ui::cover);
+    if (title_texture) glDeleteTextures(1, &title_texture);
     SDL_GL_DestroyContext(context);
     SDL_DestroyWindow(window);
     SDL_Quit();

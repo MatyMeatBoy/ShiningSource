@@ -3,6 +3,7 @@
 #define SHININGSOURCE_RUNTIME_H
 
 #include <stdint.h>
+#include "roster.h"
 
 /* GBA address space, mapped at its hardware addresses (dev32 and host64 modes). */
 #define SS_EWRAM   0x02000000u   /* 256 KiB */
@@ -78,9 +79,28 @@ int ss_scene_active(void);
 uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view);
 /* Online side of it (core/netlink.c): a vote per player, and one frame of the shared timeline to start at. */
 int ss_net_active(void);
+enum ss_net_room_status {
+    SS_ROOM_IDLE,
+    SS_ROOM_CONNECTING,
+    SS_ROOM_READY,
+    SS_ROOM_UNAVAILABLE,
+    SS_ROOM_ACTIVE
+};
+enum { SS_ROOM_CODE_LENGTH = 8, SS_ROOM_CODE_CAPACITY = SS_ROOM_CODE_LENGTH + 1 };
+#define SS_ROOM_CODE_ALPHABET "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+int ss_net_room_ui_enabled(void);
+void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]);
+int ss_net_room_begin(const char *code, int create);
+int ss_net_room_status(void);
+void ss_net_room_cancel(void);
 void ss_net_vote(int wants);
 void ss_net_votes(int *have, int *need);
 int ss_net_skip_now(void);
+struct ss_skip_ballot_view {
+    int have, need, seconds, owns, voted, committed, back_taken;
+};
+/* Returns zero for legacy rooms. Buttons: 0 (none), 1 (Start), 2 (B). */
+int ss_net_skip_ballot(int kind, int open, int button, struct ss_skip_ballot_view *view);
 unsigned long ss_net_label(void);
 /* The game's one-time messages, online (core/netlink.c, "messages"): whole, in order, once to every player.
  * Called from the game's own sender and receivers through games/<game>/port/patches.json. */
@@ -144,6 +164,19 @@ void ss_remote_sfx_event(int song);
  * there). The platform draws each group at its edge of the picture, as large as it likes. Frames without the
  * flag are whole as they are (pages, messages, scenes that keep the console's composition). Off by default. */
 enum { SS_HUD_ROWS = 56, SS_HUD_SPLIT = 176, SS_PRESENT_HUD = 0x10000 };
+/* Front-end decoration is drawn in the unused columns by the host. */
+enum { SS_PRESENT_WIDE_BRAND = 0x20000, SS_PRESENT_WIDE_MENU = 0x40000,
+       SS_PRESENT_WIDE_TITLE = 0x60000, SS_PRESENT_WIDE_MARBLE = 0x80000,
+       SS_PRESENT_WIDE_SHOP = 0xa0000, SS_PRESENT_WIDE_TRANSITION = 0xc0000,
+       SS_PRESENT_WIDE_FIELD = 0xe0000, SS_PRESENT_WIDE_MASK = 0xe0000 };
+/* Presentation metadata in the existing width argument. Zero denotes English
+ * and remains compatible with images built before language metadata. */
+enum { SS_PRESENT_LANG_SHIFT = 20, SS_PRESENT_LANG_MASK = 7 << SS_PRESENT_LANG_SHIFT };
+int ss_frontend_picture(void);
+/* The native title task waits in room selection before it starts character selection. */
+int ss_link_room_select(void);
+/* Paint room selection or the online lobby, returning 1 only when it owns the frame. */
+int ss_link_screen_draw(uint32_t *pixels, int width);
 void ss_frame_set_hud(int on);
 void ss_ppu_hud_layer(int on);           /* core/ppu.c: the same switch, for the renderer */
 const uint32_t *ss_ppu_hud(void);        /* the layer of the picture drawn last, NULL if that picture has none */
@@ -164,13 +197,19 @@ int ss_qol_bars(void);
 void ss_plat_pump(void);
 /* One line about what the program is doing, shown in the window title (NULL or "" clears it). */
 void ss_plat_status(const char *text);
-/* Network: one UDP socket to the relay. open returns 0 on success; recv returns 0 when nothing is waiting;
+/* Network: one UDP socket to the relay. open returns 0 on success or closes it with a null host;
+ * recv returns 0 when nothing is waiting;
  * wait sleeps until a packet arrives or the time passes; farewell is a packet sent when the program exits. */
 int ss_plat_net_open(const char *host, int port);
 int ss_plat_net_send(const void *data, int size);
 int ss_plat_net_recv(void *data, int capacity);
 void ss_plat_net_wait(int milliseconds);
 void ss_plat_net_farewell(const void *data, int size);
+/* Send the native host's stored farewell before a deliberate immediate exit. */
+void ss_plat_net_send_farewell(void);
+/* Native hosts expose the same default relay token for the lifetime of the process. */
+const char *ss_plat_net_default_token(void);
+const char *ss_plat_net_default_env(const char *name);
 uint32_t ss_plat_ticks_ms(void);
 /* Coroutines for the game's task scheduler. ss_co_switch(NULL) returns to the thread that called ss_co_init. */
 void ss_co_init(void);

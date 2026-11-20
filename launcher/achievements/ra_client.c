@@ -102,6 +102,118 @@ static FILE* DataFile(KhRa* ra, const char* name, const char* mode) {
 #define RA_MODE(m) m
 #endif
 
+#define BADGE_DIR "achievements/badges"
+
+static int BadgeName(const char* id, char* name, size_t size) {
+    const char* c;
+    int written;
+    for (c = id; *c; ++c)
+        if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_'))
+            return 0;
+    if (c == id) return 0;
+    written = snprintf(name, size, "badge_%s.png", id);
+    return written > 0 && (size_t)written < size;
+}
+
+#ifdef _WIN32
+static int BadgeDirectory(const wchar_t* path) {
+    DWORD attributes;
+    CreateDirectoryW(path, NULL);
+    attributes = GetFileAttributesW(path);
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY) &&
+        !(attributes & FILE_ATTRIBUTE_REPARSE_POINT);
+}
+
+static int BadgeLegacyFile(const wchar_t* name) {
+    const wchar_t* suffix = wcsrchr(name, L'.');
+    const wchar_t* c;
+    if (wcsncmp(name, L"badge_", 6) || !suffix || suffix <= name + 6 || lstrcmpiW(suffix, L".png")) return 0;
+    for (c = name + 6; c < suffix; ++c)
+        if (!((*c >= L'0' && *c <= L'9') || (*c >= L'a' && *c <= L'z') || (*c >= L'A' && *c <= L'Z') || *c == L'_'))
+            return 0;
+    return 1;
+}
+
+/* Lock both files while comparing them and remove only the exact loose duplicate. */
+static void RemoveDuplicateBadge(const wchar_t* source, const wchar_t* destination) {
+    HANDLE old = CreateFileW(source, GENERIC_READ | DELETE, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    HANDLE current = CreateFileW(destination, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    BY_HANDLE_FILE_INFORMATION old_info, current_info;
+    if (old != INVALID_HANDLE_VALUE && current != INVALID_HANDLE_VALUE &&
+        GetFileInformationByHandle(old, &old_info) && GetFileInformationByHandle(current, &current_info) &&
+        !((old_info.dwFileAttributes | current_info.dwFileAttributes) & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
+        !old_info.nFileSizeHigh && !current_info.nFileSizeHigh && old_info.nFileSizeLow == current_info.nFileSizeLow &&
+        old_info.nFileSizeLow <= 1024 * 1024) {
+        unsigned char a[4096], b[4096];
+        DWORD remaining = old_info.nFileSizeLow;
+        while (remaining) {
+            DWORD count = remaining < sizeof a ? remaining : sizeof a;
+            DWORD n, m;
+            if (!ReadFile(old, a, count, &n, NULL) || !ReadFile(current, b, count, &m, NULL) ||
+                n != count || m != count || memcmp(a, b, count)) break;
+            remaining -= count;
+        }
+        if (!remaining) {
+            FILE_DISPOSITION_INFO discard = { TRUE };
+            SetFileInformationByHandle(old, FileDispositionInfo, &discard, sizeof discard);
+        }
+    }
+    if (current != INVALID_HANDLE_VALUE) CloseHandle(current);
+    if (old != INVALID_HANDLE_VALUE) CloseHandle(old);
+}
+#endif
+
+void KhRaMigrateBadges(const char* directory) {
+#ifdef _WIN32
+    wchar_t *wide = Wide(directory), path[1200], to[1200], from[1200], archive[1200];
+    WIN32_FIND_DATAW entry;
+    HANDLE search;
+    if (!wide || wcslen(wide) > 900) { free(wide); return; }
+    swprintf(path, SDL_arraysize(path), L"%ls\\achievements", wide);
+    if (!BadgeDirectory(path)) { free(wide); return; }
+    swprintf(path, SDL_arraysize(path), L"%ls\\achievements\\badges", wide);
+    if (!BadgeDirectory(path)) { free(wide); return; }
+    swprintf(archive, SDL_arraysize(archive), L"%ls\\legacy", path);
+    swprintf(from, SDL_arraysize(from), L"%ls\\badge_*.png", wide);
+    search = FindFirstFileW(from, &entry);
+    if (search != INVALID_HANDLE_VALUE) {
+        do {
+            if (entry.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) ||
+                !BadgeLegacyFile(entry.cFileName)) continue;
+            swprintf(from, SDL_arraysize(from), L"%ls\\%ls", wide, entry.cFileName);
+            swprintf(to, SDL_arraysize(to), L"%ls\\%ls", path, entry.cFileName);
+            if (MoveFileW(from, to)) continue;
+            if (GetFileAttributesW(to) == INVALID_FILE_ATTRIBUTES) continue;
+            RemoveDuplicateBadge(from, to);
+            if (GetFileAttributesW(from) == INVALID_FILE_ATTRIBUTES || !BadgeDirectory(archive)) continue;
+            swprintf(to, SDL_arraysize(to), L"%ls\\%ls", archive, entry.cFileName);
+            if (!MoveFileW(from, to)) RemoveDuplicateBadge(from, to);
+        } while (FindNextFileW(search, &entry));
+        FindClose(search);
+    }
+    free(wide);
+#else
+    char path[1200];
+    int written = snprintf(path, sizeof path, "%s/" BADGE_DIR, directory);
+    if (written > 0 && (size_t)written < sizeof path) SDL_CreateDirectory(path);
+#endif
+}
+
+SDL_Surface* KhRaLoadBadge(const char* directory, const char* badge_name) {
+    char name[32], path[2200];
+    SDL_Surface* image;
+    if (!BadgeName(badge_name, name, sizeof name)) return NULL;
+    if (snprintf(path, sizeof path, "%s/" BADGE_DIR "/%s", directory, name) >= (int)sizeof path) return NULL;
+    image = SDL_LoadPNG(path);
+    if (image) return image;
+    snprintf(path, sizeof path, "%s/" BADGE_DIR "/legacy/%s", directory, name);
+    image = SDL_LoadPNG(path);
+    if (image) return image;
+    /* A read-only installation can still use the loose images. */
+    snprintf(path, sizeof path, "%s/%s", directory, name);
+    return SDL_LoadPNG(path);
+}
+
 /* The session of this computer's user (25/10): the last account signed in with any ReKHCoM on this PC, for a year, so a
  * portable copy elsewhere (another disk) signs in by itself. A copy with its own account keeps it (it wins) and that
  * becomes the last one. Per user of the system: %APPDATA%\ShiningSource (DPAPI, this Windows user only) or
@@ -648,10 +760,10 @@ static void RestrictOfficial(KhRa* ra) {
     }
 }
 
-/* The badge of every achievement of the set is kept as badge_<name>.png next to the set: the game shows it in the
+/* The badge of every achievement of the set is kept under achievements/badges: the game shows it in the
  * unlock notice, also in runs that never connect (no account, Rebel). Public images, fetched once, on the same
  * queue as everything else. */
-typedef struct KhRaBadge { KhRa* ra; char name[32]; } KhRaBadge;
+typedef struct KhRaBadge { KhRa* ra; char name[64]; } KhRaBadge;
 
 static void BadgeFetched(const uint8_t* bytes, size_t size, int status, void* userdata) {
     KhRaBadge* badge = (KhRaBadge*)userdata;
@@ -670,17 +782,14 @@ static void KeepBadges(KhRa* ra) {
         rc_client_achievement_info_t* a = subset->achievements;
         rc_client_achievement_info_t* end = a + subset->public_.num_achievements;
         for (; a < end; ++a) {
-            char url[512];
-            const char* c;
+            char url[512], name[32];
             KhRaBadge* badge;
             FILE* have;
-            for (c = a->public_.badge_name; *c; ++c)
-                if (!((*c >= '0' && *c <= '9') || (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_')) break;
-            if (*c || !a->public_.badge_name[0]) continue;      /* the name becomes part of a file name */
+            if (!BadgeName(a->public_.badge_name, name, sizeof name)) continue;
             badge = (KhRaBadge*)calloc(1, sizeof(*badge));
             if (!badge) return;
             badge->ra = ra;
-            snprintf(badge->name, sizeof(badge->name), "badge_%s.png", a->public_.badge_name);
+            snprintf(badge->name, sizeof(badge->name), BADGE_DIR "/%s", name);
             have = DataFile(ra, badge->name, RA_MODE("rb"));
             if (have) { fclose(have); free(badge); continue; }
             if (rc_client_achievement_get_image_url(&a->public_, RC_CLIENT_ACHIEVEMENT_STATE_UNLOCKED, url, sizeof(url)) != RC_OK ||
@@ -741,6 +850,7 @@ KhRa* KhRaCreate(const char* directory, KhRaRead read, void* userdata, KhRaTrans
     FILE* file;
     if (!ra) return NULL;
     snprintf(ra->directory, sizeof(ra->directory), "%s", directory);
+    KhRaMigrateBadges(ra->directory);
     ra->read = read; ra->userdata = userdata; ra->transport = transport;
     ra->client = rc_client_create(ReadMemory, ServerCall);
     if (!ra->client) { free(ra); return NULL; }

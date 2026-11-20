@@ -48,6 +48,7 @@
  *                   SS_BENCH_SCRIPT=path test sprites are put into the sprite table for the picture only.
  */
 #include "shiningsource/runtime.h"
+#include "shiningsource/language.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1205,10 +1206,11 @@ void VBlankIntrWait(void)
         ss_prof(SS_PROF_RENDER, 0);
         ss_prof(SS_PROF_FINISH, 1);
         finish_picture(pixels, test_render);
+        int link_screen = ss_link_screen_draw(pixels, test_render);
         ss_prof(SS_PROF_FINISH, 0);
         for (i = 0; i < count; i++)
             picture_hash = (picture_hash ^ pixels[i]) * 16777619u;
-        if (ss_ppu_hud())
+        if (!link_screen && ss_ppu_hud())
             for (i = 0; i < SS_SCREEN_W * SS_HUD_ROWS; i++)
                 picture_hash = (picture_hash ^ ss_ppu_hud()[i]) * 16777619u;
         picture_count++;
@@ -1273,31 +1275,36 @@ void VBlankIntrWait(void)
             static uint16_t held;
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
             static int late, left_out;
+            const int language = (int)ss_game_language_current() << SS_PRESENT_LANG_SHIFT;
             if (skip.present && late && left_out < 3) {
                 /* The machine is more than a frame behind: this frame goes by without its picture, so that the
                  * game keeps its speed. At most three in a row: a quarter of the pictures is always shown. */
                 left_out++;
                 ss_ppu_unseen(&view);
                 ss_prof(SS_PROF_PRESENT, 1);
-                held = ss_plat_present(pixels, 0);
+                held = ss_plat_present(pixels, language);
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;
             } else if (skip.present) {
+                int present_width = width | language;
                 left_out = 0;
                 ss_prof(SS_PROF_RENDER, 1);
                 ss_ppu_render(pixels, width, &view);
                 ss_prof(SS_PROF_RENDER, 0);
                 ss_prof(SS_PROF_FINISH, 1);
                 finish_picture(pixels, width);
+                int link_screen = ss_link_screen_draw(pixels, width);
                 ss_prof(SS_PROF_FINISH, 0);
                 ss_plat_overlay(skip.darkness, skip.text);
                 ss_prof(SS_PROF_PRESENT, 1);
-                if (ss_ppu_hud()) {     /* the status display goes with the picture as a layer of its own */
+                if (width > SS_SCREEN_W && !link_screen)
+                    present_width |= view.world ? SS_PRESENT_WIDE_FIELD : ss_frontend_picture();
+                if (!link_screen && ss_ppu_hud()) {     /* the status display goes with the picture as a layer of its own */
                     memcpy(pixels + width * SS_SCREEN_H, ss_ppu_hud(), SS_SCREEN_W * SS_HUD_ROWS * sizeof *pixels);
-                    held = ss_plat_present(pixels, width | SS_PRESENT_HUD);
+                    held = ss_plat_present(pixels, present_width | SS_PRESENT_HUD);
                 } else
-                    held = ss_plat_present(pixels, width);
+                    held = ss_plat_present(pixels, present_width);
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;

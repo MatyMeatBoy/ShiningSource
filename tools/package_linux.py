@@ -24,6 +24,9 @@ def main():
                   'SDL3-LICENSE.txt': ROOT/'third_party/SDL3-LICENSE.txt',
                   f'docs/RELEASE_{version}.md': ROOT/f'docs/RELEASE_{version}.md',
                   'docs/MULTIPLAYER_AUDIO_AUDIT.md': ROOT/'docs/MULTIPLAYER_AUDIO_AUDIT.md'})
+    for name in ('title-sides.png', 'menu-sides.png', 'shop-sides.png'):
+        path = 'assets/launcher/' + name
+        files[path] = ROOT/path
     # The cross-build's SDL SDK supplies its own upstream license.
     if not files['SDL3-LICENSE.txt'].is_file():
         import os

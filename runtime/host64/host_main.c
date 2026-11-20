@@ -138,6 +138,8 @@ static SYSV int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
     const char *value = getenv(PTR(name));
     size_t length;
     if (!value)
+        value = ss_plat_net_default_env(PTR(name));
+    if (!value)
         return -1;
     length = strlen(value);
     if (length >= capacity)

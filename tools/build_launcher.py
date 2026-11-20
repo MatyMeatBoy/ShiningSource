@@ -9,7 +9,7 @@ import shutil, subprocess, sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build, link
+import build, build_gamecube_sdl, link
 
 ROOT = build.ROOT
 
@@ -31,7 +31,12 @@ def main():
                                    "backends/imgui_impl_sdl3.cpp", "backends/imgui_impl_opengl3.cpp")] + [ROOT / "launcher/launcher.cpp"]
     for source in sources:
         target = work / (source.stem + ".o")
-        if not target.exists() or target.stat().st_mtime < source.stat().st_mtime:
+        dependencies = [source]
+        if source == ROOT / "launcher/launcher.cpp":
+            dependencies += sorted((ROOT / "launcher").glob("*.h"))
+            dependencies += sorted((ROOT / "launcher/achievements").glob("*.h"))
+            dependencies += sorted((ROOT / "runtime/include/shiningsource").glob("*.h"))
+        if not target.exists() or target.stat().st_mtime < max(dep.stat().st_mtime for dep in dependencies):
             done = subprocess.run([cxx, *flags, "-c", str(source), "-o", str(target)], capture_output=True, text=True)
             if done.returncode:
                 print(done.stderr[-3000:])
@@ -59,11 +64,21 @@ def main():
     if done.returncode:
         print(done.stderr[-3000:])
         sys.exit("launcher link failed")
-    shutil.copy2(sdl / "bin/SDL3.dll", out / "SDL3.dll")
-    # Seed only absent files: preserve a newer catalog downloaded by the player.
-    for asset in (ROOT / "assets/achievements").iterdir():
-        if asset.suffix in (".json", ".png") and not (out / asset.name).exists():
+    build_gamecube_sdl.copy_runtime(sdl, out)
+    artwork = Path("assets/launcher")
+    (out / artwork).mkdir(parents=True, exist_ok=True)
+    for name in ("cover.png", "title-sides.png", "menu-sides.png", "shop-sides.png"):
+        shutil.copy2(ROOT / artwork / name, out / artwork / name)
+    # Preserve a newer catalog or a cached badge already in the installation.
+    achievements = ROOT / "assets/achievements"
+    for asset in achievements.glob("ra_set_*.json"):
+        if not (out / asset.name).exists():
             shutil.copy2(asset, out / asset.name)
+    badges = out / "achievements/badges"
+    badges.mkdir(parents=True, exist_ok=True)
+    for asset in (achievements / "badges").glob("badge_*.png"):
+        if not (badges / asset.name).exists():
+            shutil.copy2(asset, badges / asset.name)
     print(exe.relative_to(ROOT))
     return 0
 

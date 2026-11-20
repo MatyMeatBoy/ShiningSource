@@ -29,7 +29,7 @@ add_library(main SHARED ${HOST_SOURCES}
     "${ROOT}/runtime/plat/net_udp.c")
 target_include_directories(main PRIVATE "${ROOT}/runtime/include")
 target_compile_options(main PRIVATE -O2 -Wall)
-target_compile_definitions(main PRIVATE SS_HOST_VERSION="0.9")
+target_compile_definitions(main PRIVATE SS_HOST_VERSION="0.9.2")
 if(NOT ANDROID_ABI STREQUAL "armeabi-v7a")
     target_compile_definitions(main PRIVATE SS_REBASED_HOST=1)
 endif()

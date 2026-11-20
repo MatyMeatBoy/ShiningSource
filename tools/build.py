@@ -60,7 +60,7 @@ CFLAGS = ["--target=i686-w64-mingw32",
           # agbcc accepts these; they are findings to clean in the decomp over time, not blockers
           "-Wno-error=int-conversion", "-Wno-error=return-mismatch", "-Wno-error=incompatible-pointer-types",
           "-Wno-error=implicit-function-declaration", "-Wno-error=implicit-int", "-Wno-error=return-type",
-          "-DSHININGSOURCE=1", "-DPORT=1"]
+          "-DSHININGSOURCE=1", "-DPORT=1", "-I", str(ROOT / "runtime/include")]
 if os.environ.get("SHININGSOURCE_TRACE"):       # call trace build, see runtime/core/trace.c
     CFLAGS.append("-finstrument-functions")
 # for the runtime's own sources: only a call trace build carries the trace's 4 MiB buffer
@@ -224,7 +224,7 @@ def compile_all(game, jobs):
     sources = [p for p in sorted((gen / "src").glob("*.c")) if p.stem not in replaced]
 
     def one(path):
-        cmd = [cc, *CFLAGS, "-iquote", str(gen / "include"), "-I", str(gen / "include"), "-I", str(ROOT / "runtime/include"),
+        cmd = [cc, *CFLAGS, "-iquote", str(gen / "include"), "-I", str(gen / "include"),
                "-c", str(path), "-o", str(objdir / (path.stem + ".o"))]
         run = subprocess.run(cmd, capture_output=True, text=True, cwd=gen)
         return path.stem, run.returncode, re.findall(r"^(.*?):(\d+):\d+: error: (.*)$", run.stderr, re.M)

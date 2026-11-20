@@ -2,7 +2,10 @@
  * frame pacing. Used natively by the dev32 build and by the 64-bit hosts (Windows, Linux, Android); the game side
  * only sees the ss_plat_* calls. */
 #include "shiningsource/runtime.h"
+#include "shiningsource/gamepad.h"
 #include "shiningsource/ini.h"
+#include "shiningsource/language_file.h"
+#include "shiningsource/window_mode.h"
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -46,15 +49,22 @@ static int display_paced;
  * Each has an environment variable (the launcher and the tests set those) and a key in shiningsource.ini, the
  * launcher's settings file in the working folder ("key=value" lines). At start the variable decides when it is
  * set, else the file, else the default; the menu writes what it changes back to the file (see "options menu"). */
-enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_FULLSCREEN, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP, SET_BARS, SET_HUD, SET_REMOTE_SFX, SET_COUNT };
-static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "fullscreen", "vsync", "volume", "smooth", "skip", "qol_bars",
-                                                     "hud_scale", "remote_sfx" };
-static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_FULLSCREEN", "SS_VSYNC",
-                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS", "SS_HUD_SCALE", "SS_REMOTE_SFX" };
-static char setting_file[SET_COUNT][16];        /* what the file said at start ("" if nothing) */
-static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, option_fullscreen, vsync_refused;
+enum { SET_MODE, SET_BORDER, SET_STYLE, SET_SIDES, SET_WINDOW_MODE, SET_VSYNC, SET_VOLUME, SET_SMOOTH, SET_SKIP,
+       SET_BARS, SET_HUD, SET_REMOTE_SFX, SET_LEGACY_FULLSCREEN, SET_PAD_PROFILE, SET_PAD, SET_PAD_GAMECUBE, SET_WIDE_PRO, SET_COUNT };
+static const char *const setting_keys[SET_COUNT] = { "mode", "border", "border_style", "sides", "window_mode", "vsync", "volume", "smooth", "skip", "qol_bars",
+                                                     "hud_scale", "remote_sfx", "fullscreen", "pad_profile", "pad", "pad_gamecube", "wide_pro" };
+static const char *const setting_variables[SET_COUNT] = { "SS_MODE", "SS_BORDER", "SS_BORDER_STYLE", "SS_SIDES", "SS_WINDOW_MODE", "SS_VSYNC",
+                                                          "SS_VOLUME", "SS_SMOOTH", "SS_SKIP", "SS_QOL_BARS", "SS_HUD_SCALE", "SS_REMOTE_SFX", "SS_FULLSCREEN",
+                                                          "SS_PAD_PROFILE", "SS_PAD", "SS_PAD_GAMECUBE", "SS_WIDE_PRO" };
+static char setting_file[SET_COUNT][64];        /* includes the ten comma-separated controller bindings */
+static int option_vsync = 1, option_volume = 100, option_smooth = 1, option_skip = 1, vsync_refused;
+static enum ss_window_mode option_window_mode = SS_WINDOW_WINDOWED;
+#ifndef __ANDROID__
+static enum ss_window_mode last_fullscreen_mode = SS_WINDOW_BORDERLESS;
+#endif
 static int option_hud;                          /* SS_HUD_SCALE: the status display larger than the field, see "status display" */
 static int option_remote_sfx = 1;
+static int option_wide_pro = 1;
 static int view_forced;                         /* SS_VIEW: the enhanced picture's width, 0 to follow the window */
 
 static void read_setting_file(void)
@@ -222,18 +232,13 @@ static SDL_Scancode keys[10] = {
     SDL_SCANCODE_X, SDL_SCANCODE_Z, SDL_SCANCODE_RSHIFT, SDL_SCANCODE_RETURN, SDL_SCANCODE_RIGHT,
     SDL_SCANCODE_LEFT, SDL_SCANCODE_UP, SDL_SCANCODE_DOWN, SDL_SCANCODE_V, SDL_SCANCODE_C,
 };
-/* controller buttons in the same order; the east button is A as on the console's layout */
-static SDL_GamepadButton pad_buttons[10] = {
-    SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_BUTTON_START,
-    SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_BUTTON_DPAD_DOWN,
-    SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
-};
+static int pad_buttons[10];
+static bool pad_uses_gamecube;
+static uint16_t stick_buttons;
 
-/* SS_KEYS and SS_PAD: ten numbers separated by commas (SDL scancodes, SDL controller buttons) in the order
- * above. The launcher writes them; a number out of range or a short list keeps the default of that entry. */
-static void read_bindings(const char *name, int *out, int lowest, int limit)
+/* The launcher writes ten numbers separated by commas. An out-of-range or missing value keeps its default. */
+static void read_bindings(const char *text, int *out, int lowest, int limit)
 {
-    const char *text = getenv(name);
     int i;
     for (i = 0; text && *text && i < 10; i++) {
         char *end;
@@ -246,10 +251,39 @@ static void read_bindings(const char *name, int *out, int lowest, int limit)
     }
 }
 
+static void configure_pad(void)
+{
+    const char *value = setting_text(SET_PAD_PROFILE);
+    enum ss_pad_profile profile = ss_pad_profile_from_setting(value);
+#ifdef __ANDROID__
+    if (!value) profile = SS_PAD_STANDARD;
+#endif
+    pad_uses_gamecube = ss_pad_uses_gamecube(gamepad, profile);
+    ss_pad_defaults(gamepad, profile, pad_buttons);
+    read_bindings(setting_text(pad_uses_gamecube ? SET_PAD_GAMECUBE : SET_PAD), pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
+    stick_buttons = 0;
+}
+
+static void open_available_pad(void)
+{
+    int count = 0;
+    SDL_JoystickID *ids = SDL_GetGamepads(&count);
+    for (int i = 0; i < count && !gamepad; ++i)
+        gamepad = SDL_OpenGamepad(ids[i]);
+    SDL_free(ids);
+    configure_pad();
+}
+
 /* The picture's texture. Made at the start, and again when the system says the graphics device was reset (a
  * driver restart, an Android app coming back without its graphics context): every texture is gone then. The
  * others are made again where they are used: the typeface from the ROM, a notice's icon from its pixels. */
-static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture;
+static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture, *wide_texture;
+static int wide_picture, wide_drawn_width, wide_dirty;
+static uint32_t wide_edges[2][SS_SCREEN_H];
+enum { WIDE_FIELD_HOLD = 8, WIDE_MENU_BLACKOUT = 30, WIDE_SIDE_PIXELS = (SS_MAX_VIEW_W - SS_SCREEN_W) * SS_SCREEN_H };
+static uint32_t wide_field[WIDE_SIDE_PIXELS];
+static int wide_field_extra, wide_field_age, wide_menu_blackout;
+static unsigned wide_field_light, wide_transition_light;
 static int font_state, texture_remade;
 
 static void make_textures(void)
@@ -271,6 +305,10 @@ static void make_textures(void)
     if (field_texture)
         SDL_DestroyTexture(field_texture);
     field_texture = NULL;
+    if (wide_texture)
+        SDL_DestroyTexture(wide_texture);
+    wide_texture = NULL;
+    wide_drawn_width = 0;
     if (hud_texture)
         SDL_DestroyTexture(hud_texture);
     hud_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_SCREEN_W, SS_HUD_ROWS);
@@ -288,6 +326,58 @@ void ss_plat_last_words(void)
         stats_report();
 }
 
+#ifndef __ANDROID__
+static bool apply_window_mode(enum ss_window_mode mode)
+{
+    SDL_DisplayMode exclusive;
+    const SDL_DisplayMode *requested = NULL;
+    if (mode == SS_WINDOW_FULLSCREEN) {
+        SDL_DisplayID display = SDL_GetDisplayForWindow(window);
+        const SDL_DisplayMode *desktop = SDL_GetDesktopDisplayMode(display);
+        if (!desktop || !SDL_GetClosestFullscreenDisplayMode(display, desktop->w, desktop->h,
+                                                             desktop->refresh_rate, true, &exclusive)) {
+            fprintf(stderr, "window mode: no exclusive mode for this display: %s\n", SDL_GetError());
+            return false;
+        }
+        requested = &exclusive;
+    }
+    if (mode == SS_WINDOW_WINDOWED) {
+        if (!SDL_SetWindowFullscreen(window, false)) {
+            fprintf(stderr, "window mode: %s\n", SDL_GetError());
+            return false;
+        }
+    } else {
+        const SDL_DisplayMode *previous = SDL_GetWindowFullscreenMode(window);
+        SDL_DisplayMode previous_mode;
+        if (previous)
+            previous_mode = *previous;
+        if (!SDL_SetWindowFullscreenMode(window, requested)) {
+            fprintf(stderr, "window mode: %s\n", SDL_GetError());
+            return false;
+        }
+        if (!SDL_SetWindowFullscreen(window, true)) {
+            fprintf(stderr, "window mode: %s\n", SDL_GetError());
+            SDL_SetWindowFullscreenMode(window, previous ? &previous_mode : NULL);
+            return false;
+        }
+        last_fullscreen_mode = mode;
+    }
+    option_window_mode = mode;
+    return true;
+}
+
+static enum ss_window_mode startup_window_mode(void)
+{
+    read_setting_file();
+    const char *override = getenv("SS_WINDOW_MODE");
+    if (override && *override)
+        return ss_window_mode_from_settings(override, setting_file[SET_LEGACY_FULLSCREEN]);
+    if (getenv("SS_FULLSCREEN"))          /* historical force-fullscreen override */
+        return SS_WINDOW_BORDERLESS;
+    return ss_window_mode_from_settings(setting_file[SET_WINDOW_MODE], setting_file[SET_LEGACY_FULLSCREEN]);
+}
+#endif
+
 int ss_plat_video_init(const char *title)
 {
     SDL_AudioSpec spec;
@@ -297,8 +387,8 @@ int ss_plat_video_init(const char *title)
     SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");                    /* Back is a key here: it opens the options menu */
 #endif
     stat_start_ms[0] = process_age_ms();
-    read_bindings("SS_KEYS", (int *)keys, 1, SDL_SCANCODE_COUNT);
-    read_bindings("SS_PAD", (int *)pad_buttons, 0, SDL_GAMEPAD_BUTTON_COUNT);
+    read_bindings(getenv("SS_KEYS"), (int *)keys, 1, SDL_SCANCODE_COUNT);
+    ss_pad_enable_gamecube();
 #ifdef __ANDROID__
     /* A missing/broken optional audio driver must not prevent video and input. */
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -308,6 +398,7 @@ int ss_plat_video_init(const char *title)
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
     }
+    open_available_pad();
 #ifdef __ANDROID__
     if (!android_lifecycle_watch_installed) {
         android_lifecycle_watch_installed = SDL_AddEventWatch(android_lifecycle_watch, NULL);
@@ -345,6 +436,13 @@ int ss_plat_video_init(const char *title)
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
     }
+#ifndef __ANDROID__
+    {
+        enum ss_window_mode requested = startup_window_mode();
+        if (!apply_window_mode(requested) && requested == SS_WINDOW_FULLSCREEN)
+            apply_window_mode(SS_WINDOW_BORDERLESS);
+    }
+#endif
     {
         const char *text = setting_text(SET_VSYNC);
         option_vsync = text ? atoi(text) : 1;
@@ -355,14 +453,6 @@ int ss_plat_video_init(const char *title)
     stat_start_ms[3] = process_age_ms();
 #ifdef __ANDROID__
     SDL_SetWindowFullscreen(window, true);
-#else
-    /* The variable's presence is the launcher's "yes"; the file says 1 or 0. */
-    const char *fullscreen = setting_text(SET_FULLSCREEN);
-    const char *launcher_mode = getenv("RECOMPLAUNCHER_MODE");
-    option_fullscreen = getenv("SS_FULLSCREEN") || (fullscreen ? atoi(fullscreen) != 0 :
-                        launcher_mode && !strcmp(launcher_mode, "bigpicture"));
-    if (option_fullscreen)
-        SDL_SetWindowFullscreen(window, true);
 #endif
     {
         /* Two of the settings live in the core, which reads its variables by itself: it is only told when the
@@ -385,6 +475,8 @@ int ss_plat_video_init(const char *title)
         text = setting_text(SET_REMOTE_SFX);
         option_remote_sfx = !(text && text[0] == '0');
         ss_remote_sfx_set_enabled(option_remote_sfx);
+        text = setting_text(SET_WIDE_PRO);
+        option_wide_pro = !(text && text[0] == '0');
         if (classic < 0)
             read_mode();
         if (classic && !getenv("SS_MODE"))
@@ -742,14 +834,25 @@ static void handle_event(const SDL_Event *event)
 #endif
     if (event->type == SDL_EVENT_QUIT)      /* closing the window (or Alt+F4); Escape opens the options menu */
         exit(0);
-    if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad)
+    if (event->type == SDL_EVENT_GAMEPAD_ADDED && !gamepad) {
         gamepad = SDL_OpenGamepad(event->gdevice.which);
+        configure_pad();
+    }
     if (event->type == SDL_EVENT_GAMEPAD_REMOVED && gamepad && SDL_GetGamepadID(gamepad) == event->gdevice.which) {
         SDL_CloseGamepad(gamepad);
         gamepad = NULL;
+        open_available_pad();
     }
-    if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F11)
+    if (event->type == SDL_EVENT_GAMEPAD_REMAPPED && gamepad && SDL_GetGamepadID(gamepad) == event->gdevice.which)
+        configure_pad();
+    if (event->type == SDL_EVENT_KEY_DOWN && event->key.scancode == SDL_SCANCODE_F11) {
+#ifdef __ANDROID__
         SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+#else
+        if (window && !event->key.repeat)
+            apply_window_mode(option_window_mode == SS_WINDOW_WINDOWED ? last_fullscreen_mode : SS_WINDOW_WINDOWED);
+#endif
+    }
     if (event->type == SDL_EVENT_RENDER_DEVICE_RESET)
         make_textures();
     /* the window went to another display, or its display changed mode: who keeps time is decided again */
@@ -776,7 +879,8 @@ static void handle_event(const SDL_Event *event)
             else if (code == SDL_SCANCODE_BACKSPACE || code == keys[1]) menu_command(MENU_BACK);
         }
     }
-    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) {
+    if (event->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE
+        && gamepad && SDL_GetGamepadID(gamepad) == event->gbutton.which) {
         int i, taken = 0;
         for (i = 0; i < 10; i++)
             taken |= pad_buttons[i] == SDL_GAMEPAD_BUTTON_GUIDE;
@@ -815,6 +919,12 @@ void ss_plat_pump(void)
 /* ---- overlay: the fade and the one line of text of "skip scene" ---- */
 static int overlay_darkness, overlay_skipping;
 static char overlay_text[64];
+static enum ss_game_language display_language;
+
+static const char *ui_text(const char *en, const char *fr, const char *de, const char *it, const char *es)
+{
+    return ss_language_text(display_language, en, fr, de, it, es);
+}
 
 void ss_plat_overlay(int darkness, const char *text)
 {
@@ -1110,28 +1220,35 @@ static void draw_text(const char *text, int bytes, int x, int y, int r, int g, i
     }
 }
 
-/* Draw the overlay over a picture `width` x `height` units big (the current logical size). */
-static void draw_overlay(int width, int height)
+static void draw_notice_panel(SDL_FRect box, int alpha, int rebel);
+
+/* Fade the whole picture. Keep the prompt in the game's top margin, above dialogue. */
+static int draw_overlay(int width, int height, int left, int top, int view)
 {
     SDL_FRect box;
-    int length = (int)SDL_strlen(overlay_text), wide, tall, x, y;
+    const char *heading;
+    int length, wide, heading_wide, panel_wide, tall;
     if (overlay_darkness > 0) {
         SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)overlay_darkness);
         box = (SDL_FRect){ 0, 0, (float)width, (float)height };
         SDL_RenderFillRect(renderer, &box);
     }
-    if (!length)
-        return;
-    wide = text_width(overlay_text, -1);
+    if (!overlay_text[0])
+        return 0;
+    heading = ui_text("SKIP SCENE", "PASSER LA SCÈNE", "SZENE ÜBERSPRINGEN",
+                           "SALTA SCENA", "SALTAR ESCENA");
+    length = text_fit(overlay_text, view - 16);
+    wide = text_width(overlay_text, length);
+    heading_wide = text_width(heading, -1);
+    panel_wide = wide > heading_wide ? wide : heading_wide;
     tall = text_height();
-    x = (width - wide) / 2;
-    y = height - 15 - tall;
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 170);
-    box = (SDL_FRect){ (float)x - 4, (float)y - 3, (float)(wide + 8), (float)(tall + 6) };
-    SDL_RenderFillRect(renderer, &box);
-    draw_text(overlay_text, -1, x, y, 255, 232, 150, 255);
+    box = (SDL_FRect){ (float)(left + (view - panel_wide) / 2 - 6), (float)top + 2,
+                       (float)(panel_wide + 12), (float)(2 * tall + 10) };
+    draw_notice_panel(box, 255, 0);
+    draw_text(heading, -1, left + (view - heading_wide) / 2, top + 5, 235, 197, 120, 255);
+    draw_text(overlay_text, length, left + (view - wide) / 2, top + 8 + tall, 255, 244, 214, 255);
+    return 2 * tall + 14;  /* if an achievement is also visible, stack it immediately after the vote */
 }
 
 /* ---- notices: a heading and one line, over the top of the picture for a few seconds ----
@@ -1172,6 +1289,41 @@ void ss_plat_notice(const char *heading, const char *text, int rebel, const uint
     }
 }
 
+static void draw_notice_panel(SDL_FRect box, int alpha, int rebel)
+{
+    SDL_FRect shadow = { box.x + 1, box.y + 2, box.w, box.h };
+    SDL_FPoint grain[256];
+    float right = box.x + box.w - 1, bottom = box.y + box.h - 1;
+    SDL_FPoint outline[] = {
+        { box.x + 2, box.y }, { right - 2, box.y }, { right, box.y + 2 },
+        { right, bottom - 2 }, { right - 2, bottom }, { box.x + 2, bottom },
+        { box.x, bottom - 2 }, { box.x, box.y + 2 }, { box.x + 2, box.y },
+    };
+    int count = 0, row, column;
+
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(alpha * 125 / 255));
+    SDL_RenderFillRect(renderer, &shadow);
+    for (row = 1; row < (int)box.h - 1; ++row) {
+        int edge = row < 3 || row >= (int)box.h - 3 ? 2 : 1;
+        int depth = row * 16 / (int)box.h;
+        SDL_SetRenderDrawColor(renderer, (Uint8)(22 - depth / 2), (Uint8)(48 - depth),
+                               (Uint8)(39 - depth), (Uint8)(alpha * 247 / 255));
+        SDL_RenderLine(renderer, box.x + edge, box.y + row, right - edge, box.y + row);
+    }
+    for (row = 4; row < (int)box.h - 3; row += 5)
+        for (column = 4 + row * 3 % 11; column < (int)box.w - 3 && count < (int)SDL_arraysize(grain); column += 11)
+            grain[count++] = (SDL_FPoint){ box.x + column, box.y + row };
+    SDL_SetRenderDrawColor(renderer, 190, 157, 92, (Uint8)(alpha * 34 / 255));
+    SDL_RenderPoints(renderer, grain, count);
+    SDL_SetRenderDrawColor(renderer, rebel ? 170 : 160, rebel ? 80 : 117, rebel ? 109 : 58, (Uint8)alpha);
+    SDL_RenderLines(renderer, outline, (int)SDL_arraysize(outline));
+    SDL_SetRenderDrawColor(renderer, rebel ? 232 : 211, rebel ? 131 : 177, rebel ? 151 : 102, (Uint8)alpha);
+    SDL_RenderLine(renderer, box.x + 3, box.y + 1, right - 3, box.y + 1);
+    SDL_SetRenderDrawColor(renderer, 69, 49, 27, (Uint8)alpha);
+    SDL_RenderLine(renderer, box.x + 3, bottom - 1, right - 3, bottom - 1);
+}
+
 /* Draw the notice whose turn it is, centred at the top of the picture: `width` columns from (left, top). */
 static void draw_notice(int left, int top, int width)
 {
@@ -1209,22 +1361,18 @@ static void draw_notice(int left, int top, int width)
     shown_wide = text_width(line, shown);
     wide = shown_wide > heading_wide ? shown_wide : heading_wide;
     x = left + (width - wide - icon) / 2 + icon;
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, (Uint8)(alpha * 190 / 255));
-    box = (SDL_FRect){ (float)(x - 5 - icon), (float)top + 2, (float)(wide + 10 + icon), (float)(2 * tall + 10) };
-    SDL_RenderFillRect(renderer, &box);
-    if (notice->rebel)
-        SDL_SetRenderDrawColor(renderer, 255, 96, 150, (Uint8)alpha);
-    else
-        SDL_SetRenderDrawColor(renderer, 232, 168, 56, (Uint8)alpha);
-    SDL_RenderRect(renderer, &box);
-    draw_text(notice->heading, heading, x + (wide - heading_wide) / 2, top + 5, notice->rebel ? 255 : 232, notice->rebel ? 96 : 168,
-              notice->rebel ? 150 : 56, alpha);
+    box = (SDL_FRect){ (float)(x - 6 - icon), (float)top + 2, (float)(wide + 12 + icon), (float)(2 * tall + 10) };
+    draw_notice_panel(box, alpha, notice->rebel);
+    draw_text(notice->heading, heading, x + (wide - heading_wide) / 2, top + 5, notice->rebel ? 252 : 235, notice->rebel ? 157 : 197,
+              notice->rebel ? 188 : 120, alpha);
     draw_text(line, shown, x + (wide - shown_wide) / 2, top + 8 + tall, 255, 244, 214, alpha);
     if (notice_texture) {
-        box = (SDL_FRect){ (float)(x - 2 - icon), (float)(top + 2 + (2 * tall + 10 - NOTICE_ICON) / 2), NOTICE_ICON, NOTICE_ICON };
+        box = (SDL_FRect){ (float)(x - icon), (float)(top + 2 + (2 * tall + 10 - NOTICE_ICON) / 2), NOTICE_ICON, NOTICE_ICON };
         SDL_SetTextureAlphaMod(notice_texture, (Uint8)alpha);
         SDL_RenderTexture(renderer, notice_texture, NULL, &box);
+        box.x -= 1; box.y -= 1; box.w += 2; box.h += 2;
+        SDL_SetRenderDrawColor(renderer, 149, 111, 61, (Uint8)alpha);
+        SDL_RenderRect(renderer, &box);
     }
     if (++notice_age >= NOTICE_FRAMES) {
         if (notice_texture)
@@ -1370,10 +1518,12 @@ static uint16_t touch_buttons(int width)
  * SS_INPUT), click:X:Y (a press at that window pixel), min and restore (the window is minimised, brought back), or
  * reset (the textures are made again, as when the graphics device was reset). With it set, what the menu does is
  * written to stderr. */
-enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_FULLSCREEN, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
-       ITEM_BARS, ITEM_HUD, ITEM_REMOTE_SFX, ITEM_QUIT, ITEM_KINDS };
+enum { ITEM_RESUME, ITEM_MODE, ITEM_BORDER, ITEM_STYLE, ITEM_SIDES, ITEM_WINDOW_MODE, ITEM_VSYNC, ITEM_VOLUME, ITEM_SMOOTH, ITEM_SKIP,
+       ITEM_BARS, ITEM_HUD, ITEM_REMOTE_SFX, ITEM_WIDE_PRO, ITEM_LANGUAGE, ITEM_QUIT, ITEM_KINDS };
 enum { INFO_LINES = 8, INFO_BYTES = 96 };
 static int menu_row, menu_quit_armed, menu_online;
+static enum ss_game_language menu_language = SS_LANG_UNCHOSEN;
+static int menu_language_error;
 static uint16_t menu_swallow;           /* buttons still held from the menu: not the game's until they are let go */
 static unsigned settings_changed;       /* one bit per setting the menu changed in this session */
 static long pictures, game_frames;      /* what the window has shown, and how many of those were new game frames */
@@ -1381,16 +1531,6 @@ static int test_log;
 static uint16_t test_pad;
 static int logical_w, logical_h;        /* the logical size the renderer has now (0: none, the menu's own scale) */
 static struct { int scale, x, w, rows_y, pitch, count, items[ITEM_KINDS], middle[ITEM_KINDS], reach[ITEM_KINDS]; } menu_shape;
-
-static int spanish(void)
-{
-    static int known = -1;
-    if (known < 0) {
-        const char *text = getenv("SS_LANG");
-        known = text && text[0] == 'e' && text[1] == 's';
-    }
-    return known;
-}
 
 /* The entries shown now, top to bottom. */
 static int menu_items(int *items)
@@ -1406,7 +1546,7 @@ static int menu_items(int *items)
         items[n++] = ITEM_HUD;          /* the classic picture is the console's: its status display keeps its size */
     }
 #ifndef __ANDROID__
-    items[n++] = ITEM_FULLSCREEN;       /* an Android app always has the whole screen */
+    items[n++] = ITEM_WINDOW_MODE;      /* an Android app always has the whole screen */
 #endif
     items[n++] = ITEM_VSYNC;
     items[n++] = ITEM_VOLUME;
@@ -1414,42 +1554,71 @@ static int menu_items(int *items)
     items[n++] = ITEM_SMOOTH;
     items[n++] = ITEM_SKIP;
     items[n++] = ITEM_BARS;             /* experimental: the triggers step the L and R bars backwards */
+    if (!classic)
+        items[n++] = ITEM_WIDE_PRO;
+    items[n++] = ITEM_LANGUAGE;
     items[n++] = ITEM_QUIT;
     return n;
 }
 
 static const char *item_label(int item)
 {
-    static const char *const names[ITEM_KINDS][2] = {
-        { "Resume", "Continuar" }, { "Screen mode", "Modo de pantalla" }, { "Border size", "Grosor del borde" },
-        { "Border style", "Aspecto del borde" }, { "Sides", "Lados" }, { "Full screen", "Pantalla completa" }, { "VSync", "VSync" },
-        { "Volume", "Volumen" }, { "Smooth fast blinking", "Suavizar parpadeo r\xC3\xA1pido" },
-        { "Skip scene with Start", "Saltar escena con Start" }, { "LT / RT: bars backwards", "LT / RT: barras hacia atr\xC3\xA1s" },
-        { "Experimental: larger status", "Experimental: indicadores grandes" },
-        { "Restored Multiplayer Audio", "Audio Multijugador Restaurado" },
-        { "Quit game", "Salir del juego" },
+    static const char *const names[ITEM_KINDS][SS_LANG_COUNT] = {
+        { "Resume", "Reprendre", "Fortsetzen", "Riprendi", "Continuar" },
+        { "Screen mode", "Mode d'écran", "Bildmodus", "Modalità schermo", "Modo de pantalla" },
+        { "Border size", "Taille de la bordure", "Randgröße", "Spessore bordo", "Grosor del borde" },
+        { "Border style", "Style de bordure", "Randstil", "Stile bordo", "Aspecto del borde" },
+        { "Sides", "Côtés", "Seiten", "Lati", "Lados" },
+        { "Window mode", "Mode fenêtre", "Fenstermodus", "Modalità finestra", "Modo de ventana" },
+        { "VSync", "VSync", "VSync", "VSync", "VSync" },
+        { "Volume", "Volume", "Lautstärke", "Volume", "Volumen" },
+        { "Smooth fast blinking", "Atténuer le clignotement", "Schnelles Blinken glätten", "Attenua lampeggi rapidi", "Suavizar parpadeo rápido" },
+        { "Skip scene with Start", "Passer la scène avec Start", "Szene mit Start überspringen", "Salta scena con Start", "Saltar escena con Start" },
+        { "LT / RT: bars backwards", "LT / RT : barres en arrière", "LT / RT: Leisten rückwärts", "LT / RT: barre indietro", "LT / RT: barras hacia atrás" },
+        { "Experimental: larger status", "Expérimental : état agrandi", "Experimentell: größere Anzeige", "Sperimentale: stato ingrandito", "Experimental: indicadores grandes" },
+        { "Restored Multiplayer Audio", "Audio multijoueur restauré", "Mehrspieler-Audio wiederhergestellt", "Audio multigiocatore ripristinato", "Audio Multijugador Restaurado" },
+        { "Wide Pro", "Wide Pro", "Wide Pro", "Wide Pro", "Wide Pro" },
+        { "Game language", "Langue du jeu", "Spielsprache", "Lingua del gioco", "Idioma del juego" },
+        { "Quit game", "Quitter le jeu", "Spiel beenden", "Esci dal gioco", "Salir del juego" },
     };
     if (item == ITEM_QUIT && menu_quit_armed)
-        return spanish() ? "Pulsa otra vez para salir" : "Press again to quit";
-    return names[item][spanish()];
+        return ui_text("Press again to quit", "Appuyer encore pour quitter", "Erneut drücken zum Beenden",
+                            "Premi ancora per uscire", "Pulsa otra vez para salir");
+    if (item == ITEM_BARS && pad_uses_gamecube)
+        return ui_text("Keyboard: bars backwards", "Clavier : barres en arrière", "Tastatur: Leisten rückwärts",
+                            "Tastiera: barre indietro", "Teclado: barras hacia atrás");
+    return names[item][display_language];
 }
 
 /* The value an entry shows at its right, or NULL for one that only does something. */
 static const char *item_value(int item, char *buffer, size_t capacity)
 {
-    static const char *const styles[5][2] = { { "Black", "Negro" }, { "Graphite", "Grafito" }, { "Indigo", "\xC3\x8Dndigo" },
-                                              { "Silver", "Plata" }, { "Soul", "Soul" } };
-    const int es = spanish();
-    const char *on = es ? "S\xC3\xAD" : "On", *off = es ? "No" : "Off";
+    static const char *const languages[] = { "English", "Français", "Deutsch", "Italiano", "Español" };
+    static const char *const styles[5][SS_LANG_COUNT] = {
+        { "Black", "Noir", "Schwarz", "Nero", "Negro" },
+        { "Graphite", "Graphite", "Graphit", "Grafite", "Grafito" },
+        { "Indigo", "Indigo", "Indigo", "Indaco", "Índigo" },
+        { "Silver", "Argent", "Silber", "Argento", "Plata" },
+        { "Soul", "Soul", "Soul", "Soul", "Soul" },
+    };
+    static const char *const window_modes[SS_WINDOW_MODE_COUNT][SS_LANG_COUNT] = {
+        { "Windowed", "Fenêtré", "Fenster", "In finestra", "Ventana" },
+        { "Borderless", "Sans bordure", "Randlos", "Senza bordi", "Sin bordes" },
+        { "Exclusive", "Exclusif", "Exklusiv", "Esclusivo", "Exclusiva" },
+    };
+    const int language = display_language;
+    const char *on = ui_text("On", "Oui", "Ein", "Sì", "Sí"), *off = ui_text("Off", "Non", "Aus", "No", "No");
     switch (item) {
-    case ITEM_MODE: return classic ? (es ? "Cl\xC3\xA1sico" : "Classic") : (es ? "Mejorado" : "Enhanced");
+    case ITEM_MODE: return classic ? ui_text("Classic", "Classique", "Klassisch", "Classico", "Clásico")
+                                   : ui_text("Enhanced", "Amélioré", "Erweitert", "Migliorato", "Mejorado");
     case ITEM_BORDER: SDL_snprintf(buffer, capacity, "%d", border); return buffer;
-    case ITEM_STYLE: return styles[border_style][es];
-    case ITEM_SIDES: return sides_field ? (es ? "Campo" : "Field") : (es ? "Negro" : "Black");
-    case ITEM_FULLSCREEN: return option_fullscreen ? on : off;
+    case ITEM_STYLE: return styles[border_style][language];
+    case ITEM_SIDES: return sides_field ? ui_text("Field", "Terrain", "Spielfeld", "Campo", "Campo") : styles[0][language];
+    case ITEM_WINDOW_MODE: return window_modes[option_window_mode][language];
     case ITEM_VSYNC:
         if (option_vsync == 2)
-            return vsync_refused ? (es ? "VRR (sin sincron\xC3\xAD" "a)" : "VRR (no sync)") : "VRR";
+            return vsync_refused ? ui_text("VRR (no sync)", "VRR (sans synchro)", "VRR (ohne Sync)",
+                                                "VRR (senza sync)", "VRR (sin sincronía)") : "VRR";
         return option_vsync ? on : off;
     case ITEM_VOLUME: SDL_snprintf(buffer, capacity, "%d%%", option_volume); return buffer;
     case ITEM_SMOOTH: return option_smooth ? on : off;
@@ -1457,6 +1626,11 @@ static const char *item_value(int item, char *buffer, size_t capacity)
     case ITEM_BARS: return ss_qol_bars() ? on : off;
     case ITEM_HUD: return option_hud ? on : off;
     case ITEM_REMOTE_SFX: return option_remote_sfx ? on : off;
+    case ITEM_WIDE_PRO: return option_wide_pro ? on : off;
+    case ITEM_LANGUAGE:
+        return menu_language == SS_LANG_UNCHOSEN
+            ? ui_text("(to be chosen)", "(à choisir)", "(auswählen)", "(da scegliere)", "(por escoger)")
+            : languages[menu_language];
     }
     return NULL;
 }
@@ -1465,11 +1639,13 @@ static const char *item_value(int item, char *buffer, size_t capacity)
 static void setting_value(int which, char *out, size_t capacity)
 {
     int number = which == SET_BORDER ? border : which == SET_STYLE ? border_style : which == SET_SIDES ? sides_field
-                 : which == SET_FULLSCREEN ? option_fullscreen : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
+                 : which == SET_VSYNC ? option_vsync : which == SET_VOLUME ? option_volume
                  : which == SET_SMOOTH ? option_smooth : which == SET_BARS ? ss_qol_bars() : which == SET_HUD ? option_hud
-                 : which == SET_REMOTE_SFX ? option_remote_sfx : option_skip;
+                 : which == SET_REMOTE_SFX ? option_remote_sfx : which == SET_WIDE_PRO ? option_wide_pro : option_skip;
     if (which == SET_MODE)
         SDL_snprintf(out, capacity, "%s", classic ? "classic" : "enhanced");
+    else if (which == SET_WINDOW_MODE)
+        SDL_snprintf(out, capacity, "%s", ss_window_mode_name(option_window_mode));
     else
         SDL_snprintf(out, capacity, "%d", number);
 }
@@ -1575,11 +1751,16 @@ static void item_change(int item, int step)
         sides_field = !sides_field;
         which = SET_SIDES;
         break;
-    case ITEM_FULLSCREEN:
-        option_fullscreen = !option_fullscreen;
-        SDL_SetWindowFullscreen(window, option_fullscreen);
-        which = SET_FULLSCREEN;
+    case ITEM_WIDE_PRO:
+        option_wide_pro = !option_wide_pro;
+        which = SET_WIDE_PRO;
         break;
+#ifndef __ANDROID__
+    case ITEM_WINDOW_MODE:
+        if (apply_window_mode((option_window_mode + step + SS_WINDOW_MODE_COUNT) % SS_WINDOW_MODE_COUNT))
+            which = SET_WINDOW_MODE;
+        break;
+#endif
     case ITEM_VSYNC:
         option_vsync = (option_vsync + step + 3) % 3;
         set_vsync(option_vsync);
@@ -1616,6 +1797,15 @@ static void item_change(int item, int step)
         option_hud = !option_hud;       /* show_picture tells the core, with the next picture */
         which = SET_HUD;
         break;
+    case ITEM_LANGUAGE: {
+        enum ss_game_language next = menu_language == SS_LANG_UNCHOSEN
+            ? (step < 0 ? SS_LANG_ES : SS_LANG_EN)
+            : (enum ss_game_language)((menu_language + step + SS_LANG_COUNT) % SS_LANG_COUNT);
+        menu_language_error = !ss_game_language_save(next);
+        if (!menu_language_error)
+            menu_language = next;
+        return;
+    }
     }
     if (which < 0)
         return;
@@ -1644,9 +1834,10 @@ static void menu_command(int command)
         if (!window)
             return;
         menu_open = 1;
+        menu_language = ss_game_language_preference();
+        menu_language_error = 0;
         menu_row = 0;
         menu_quit_armed = 0;
-        option_fullscreen = (SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN) != 0;      /* F11 may have changed it */
         if (test_log)
             fprintf(stderr, "menu: opened at picture %ld, game frame %ld\n", pictures, game_frames);
         return;
@@ -1776,11 +1967,14 @@ static uint16_t menu_chord(uint16_t pad)
 /* What a controller's button is called in the menu's line about the controls. */
 static const char *pad_name(SDL_GamepadButton button)
 {
-    static const char *const face[] = { NULL, "A", "B", "X", "Y", "Cross", "Circle", "Square", "Triangle" };
-    static const char *const face_es[] = { NULL, "A", "B", "X", "Y", "Cruz", "C\xC3\xADrculo", "Cuadrado", "Tri\xC3\xA1ngulo" };
+    static const char *const face[] = { NULL, "A", "B", "X", "Y" };
     int label = gamepad ? (int)SDL_GetGamepadButtonLabel(gamepad, button) : 0;
-    if (label >= 1 && label <= 8)
-        return spanish() ? face_es[label] : face[label];
+    if (label >= 1 && label <= 4)
+        return face[label];
+    if (label == 5) return ui_text("Cross", "Croix", "Kreuz", "Croce", "Cruz");
+    if (label == 6) return ui_text("Circle", "Rond", "Kreis", "Cerchio", "Círculo");
+    if (label == 7) return ui_text("Square", "Carré", "Quadrat", "Quadrato", "Cuadrado");
+    if (label == 8) return ui_text("Triangle", "Triangle", "Dreieck", "Triangolo", "Triángulo");
     switch (button) {
     case SDL_GAMEPAD_BUTTON_BACK: return "Back";
     case SDL_GAMEPAD_BUTTON_GUIDE: return "Guide";
@@ -1788,11 +1982,16 @@ static const char *pad_name(SDL_GamepadButton button)
     case SDL_GAMEPAD_BUTTON_LEFT_STICK: return "L3";
     case SDL_GAMEPAD_BUTTON_RIGHT_STICK: return "R3";
     case SDL_GAMEPAD_BUTTON_LEFT_SHOULDER: return "LB";
-    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER: return "RB";
-    case SDL_GAMEPAD_BUTTON_DPAD_UP: return spanish() ? "Arriba" : "Up";
-    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return spanish() ? "Abajo" : "Down";
-    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return spanish() ? "Izquierda" : "Left";
-    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return spanish() ? "Derecha" : "Right";
+    case SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER:
+        return pad_uses_gamecube && pad_buttons[2] == SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER ? "Z" : "RB";
+    case SDL_GAMEPAD_BUTTON_MISC3:
+        return pad_uses_gamecube ? "L" : "Misc 3";
+    case SDL_GAMEPAD_BUTTON_MISC4:
+        return pad_uses_gamecube ? "R" : "Misc 4";
+    case SDL_GAMEPAD_BUTTON_DPAD_UP: return ui_text("Up", "Haut", "Hoch", "Su", "Arriba");
+    case SDL_GAMEPAD_BUTTON_DPAD_DOWN: return ui_text("Down", "Bas", "Runter", "Giù", "Abajo");
+    case SDL_GAMEPAD_BUTTON_DPAD_LEFT: return ui_text("Left", "Gauche", "Links", "Sinistra", "Izquierda");
+    case SDL_GAMEPAD_BUTTON_DPAD_RIGHT: return ui_text("Right", "Droite", "Rechts", "Destra", "Derecha");
     default: break;
     }
     return "?";
@@ -1808,27 +2007,48 @@ static const char *key_name(SDL_Scancode code)
  * launcher), and how the menu is used. */
 static int menu_info(char lines[INFO_LINES][INFO_BYTES])
 {
-    const int es = spanish();
     int n = 0;
-    SDL_snprintf(lines[n++], INFO_BYTES, "%s", menu_online ? (es ? "En l\xC3\xADnea: el juego sigue en marcha" : "Online: the game keeps running")
-                                                            : (es ? "Juego en pausa" : "Game paused"));
+    SDL_snprintf(lines[n++], INFO_BYTES, "%s", menu_online
+        ? ui_text("Online: the game keeps running", "En ligne : la partie continue", "Online: Das Spiel läuft weiter",
+                       "Online: la partita continua", "En línea: el juego sigue en marcha")
+        : ui_text("Game paused", "Jeu en pause", "Spiel pausiert", "Gioco in pausa", "Juego en pausa"));
 #ifndef __ANDROID__
-    SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s", es ? "Teclas" : "Keys", key_name(keys[0]), key_name(keys[1]),
-                 key_name(keys[9]), key_name(keys[8]));
+    SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s",
+                 ui_text("Keys", "Touches", "Tasten", "Tasti", "Teclas"),
+                 key_name(keys[0]), key_name(keys[1]), key_name(keys[9]), key_name(keys[8]));
     SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", key_name(keys[3]), key_name(keys[2]));
 #endif
     if (gamepad) {
-        SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s", es ? "Mando" : "Pad", pad_name(pad_buttons[0]), pad_name(pad_buttons[1]),
-                     pad_name(pad_buttons[9]), pad_name(pad_buttons[8]));
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s",
+                     ui_text("Pad", "Manette", "Controller", "Pad", "Mando"),
+                     pad_name(pad_buttons[0]), pad_name(pad_buttons[1]), pad_name(pad_buttons[9]), pad_name(pad_buttons[8]));
         SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", pad_name(pad_buttons[3]), pad_name(pad_buttons[2]));
-        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Select+Start: men\xC3\xBA. A: elegir. B: volver" : "Select+Start: menu. A: choose. B: back");
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+                     ui_text("Select+Start: menu. A: choose. B: back", "Select+Start : menu. A : choisir. B : retour",
+                                  "Select+Start: Menü. A: wählen. B: zurück", "Select+Start: menu. A: scegli. B: indietro",
+                                  "Select+Start: menú. A: elegir. B: volver"));
     } else {
 #ifdef __ANDROID__
-        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Toca una opci\xC3\xB3n para cambiarla" : "Touch an option to change it");
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+                     ui_text("Touch an option to change it", "Touchez une option pour la modifier",
+                                  "Zum Ändern eine Option antippen", "Tocca un'opzione per cambiarla", "Toca una opción para cambiarla"));
 #else
-        SDL_snprintf(lines[n++], INFO_BYTES, "%s", es ? "Flechas: mover y cambiar. Esc: volver" : "Arrows: move and change. Esc: back");
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+                     ui_text("Arrows: move and change. Esc: back", "Flèches : naviguer et modifier. Échap : retour",
+                                  "Pfeile: bewegen und ändern. Esc: zurück", "Frecce: sposta e cambia. Esc: indietro",
+                                  "Flechas: mover y cambiar. Esc: volver"));
 #endif
     }
+    if (menu_language_error)
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+                     ui_text("Language could not be saved", "Impossible d'enregistrer la langue",
+                                  "Sprache konnte nicht gespeichert werden", "Impossibile salvare la lingua",
+                                  "No se pudo guardar el idioma"));
+    else if (menu_language != SS_LANG_UNCHOSEN && menu_language != display_language)
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+                     ui_text("Restart the game to change language", "Redémarrez le jeu pour changer la langue",
+                                  "Sprache ändert sich nach dem Neustart", "Riavvia il gioco per cambiare lingua",
+                                  "Reinicia el juego para cambiar el idioma"));
     return n;
 }
 
@@ -1841,7 +2061,7 @@ static void draw_menu(void)
     char info[INFO_LINES][INFO_BYTES], buffer[32];
     int items[ITEM_KINDS], count = menu_items(items), lines = menu_info(info);
     int out_w = 0, out_h = 0, attempt, game = 0, pitch = 0, info_pitch = 0, title = 0, w = 0, h = 0, scale = 1, x, y, i, k, row_y, tall;
-    const char *heading = spanish() ? "Opciones" : "Options";
+    const char *heading = ui_text("Options", "Options", "Optionen", "Opzioni", "Opciones");
 
     SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
     SDL_SetRenderLogicalPresentation(renderer, 0, 0, SDL_LOGICAL_PRESENTATION_DISABLED);
@@ -1998,15 +2218,11 @@ static uint16_t read_buttons(void)
         if (state[keys[i]])
             held |= (uint16_t)(1 << i);
     if (gamepad) {
-        /* the stick acts as the d-pad */
-        int x = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX), y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
         for (i = 0; i < 10; i++)
-            if (SDL_GetGamepadButton(gamepad, pad_buttons[i]))
+            if (ss_pad_button_down(gamepad, pad_buttons[i], pad_uses_gamecube))
                 pad |= (uint16_t)(1 << i);
-        if (x > 12000) pad |= 1 << 4;
-        if (x < -12000) pad |= 1 << 5;
-        if (y < -12000) pad |= 1 << 6;
-        if (y > 12000) pad |= 1 << 7;
+        stick_buttons = ss_pad_stick(gamepad, pad_uses_gamecube, stick_buttons);
+        pad |= stick_buttons;
     }
 #ifdef __ANDROID__
     if (android_background)
@@ -2081,6 +2297,175 @@ static void draw_hud(const SDL_FRect *inside, int view)
     SDL_RenderTexture(renderer, hud_texture, &from, &to);
 }
 
+static uint32_t wide_mix(uint32_t from, uint32_t to, unsigned part)
+{
+    unsigned rest = 256 - part;
+    uint32_t rb = ((from & 0x00ff00ffu) * rest + (to & 0x00ff00ffu) * part) >> 8;
+    uint32_t g = ((from & 0x0000ff00u) * rest + (to & 0x0000ff00u) * part) >> 8;
+    return 0xff000000u | (rb & 0x00ff00ffu) | (g & 0x0000ff00u);
+}
+
+/* The images are optional, with the left and right strips joined at column 128.
+ * Crop from that join as the window changes width, with one artwork pixel per game pixel. */
+static const SDL_Surface *wide_art(void)
+{
+    static struct { int scene; const char *name; bool loaded; SDL_Surface *surface; } files[] = {
+        { SS_PRESENT_WIDE_TITLE, "title-sides.png", false, NULL },
+        { SS_PRESENT_WIDE_MARBLE, "menu-sides.png", false, NULL },
+        { SS_PRESENT_WIDE_SHOP, "shop-sides.png", false, NULL },
+    };
+    for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
+        if (files[i].scene != wide_picture)
+            continue;
+        if (!files[i].loaded) {
+            const char *base = SDL_GetBasePath();
+            char *path = NULL;
+            files[i].loaded = true;
+            if (base && SDL_asprintf(&path, "%sassets/launcher/%s", base, files[i].name) >= 0) {
+                SDL_Surface *image = SDL_LoadPNG(path);
+                if (image && image->w == 256 && image->h == SS_SCREEN_H)
+                    files[i].surface = SDL_ConvertSurface(image, SDL_PIXELFORMAT_ARGB8888);
+                if (image)
+                    SDL_DestroySurface(image);
+                SDL_free(path);
+            }
+        }
+        return files[i].surface;
+    }
+    return NULL;
+}
+
+static unsigned wide_center_light(const uint32_t *pixels, int width, int left)
+{
+    unsigned sum = 0;
+    for (int y = 4; y < SS_SCREEN_H; y += 8)
+        for (int x = 8; x < SS_SCREEN_W; x += 16)
+            sum += (pixels[y * width + left + x] >> 8) & 255;
+    return sum;
+}
+
+static void take_wide_picture(const uint32_t *pixels, int width, int scene)
+{
+    int extra = width - SS_SCREEN_W, left = extra / 2;
+    if (wide_field_age <= WIDE_FIELD_HOLD)
+        wide_field_age++;
+    if (scene == SS_PRESENT_WIDE_FIELD) {
+        wide_menu_blackout = 0;
+        if (option_wide_pro && sides_field && extra > 0) {
+            for (int y = 0; y < SS_SCREEN_H; y++) {
+                const uint32_t *row = pixels + y * width;
+                uint32_t *dst = wide_field + y * extra;
+                memcpy(dst, row, (size_t)left * sizeof *dst);
+                memcpy(dst + left, row + left + SS_SCREEN_W, (size_t)(extra - left) * sizeof *dst);
+            }
+            wide_field_extra = extra;
+            wide_field_light = wide_center_light(pixels, width, left);
+            wide_field_age = 0;
+        }
+        wide_picture = 0;      /* let the live world render without any added layer */
+        return;
+    }
+    if (scene == SS_PRESENT_WIDE_MARBLE || scene == SS_PRESENT_WIDE_SHOP) {
+        wide_menu_blackout = WIDE_MENU_BLACKOUT;
+    } else if (wide_menu_blackout > 0) {
+        wide_menu_blackout--;
+        /* The drawer can finish before the next picture is ready. Keep its black fade over the sides. */
+        if (!scene && extra > 0 &&
+            (wide_picture == SS_PRESENT_WIDE_MARBLE || wide_picture == SS_PRESENT_WIDE_SHOP ||
+             wide_center_light(pixels, width, left) == 0))
+            scene = SS_PRESENT_WIDE_TRANSITION;
+    }
+    wide_picture = scene;
+    if (!scene || extra <= 0)
+        return;
+    for (int y = 0; y < SS_SCREEN_H; y++) {
+        wide_edges[0][y] = pixels[y * width + left] | 0xff000000u;
+        wide_edges[1][y] = pixels[y * width + left + SS_SCREEN_W - 1] | 0xff000000u;
+    }
+    if (scene == SS_PRESENT_WIDE_TRANSITION)
+        wide_transition_light = wide_center_light(pixels, width, left);
+    wide_dirty = 1;
+}
+
+static void update_wide_strips(int extra)
+{
+    static uint32_t stripes[WIDE_SIDE_PIXELS];
+    int left = extra / 2, transition = wide_picture == SS_PRESENT_WIDE_TRANSITION;
+    int menu = wide_picture == SS_PRESENT_WIDE_MARBLE || wide_picture == SS_PRESENT_WIDE_SHOP;
+    int seam = menu ? 6 : 10;
+    const SDL_Surface *art = wide_art();
+    bool keep_field = transition && wide_field_extra == extra && wide_field_age <= WIDE_FIELD_HOLD && wide_field_light != 0;
+    unsigned field_light = keep_field ? wide_transition_light * 256 / wide_field_light : 0;
+    unsigned light = 0;
+    for (int y = 0; y < SS_SCREEN_H; y++)
+        for (int side = 0; side < 2; side++)
+            light += (wide_edges[side][y] >> 8) & 255;    /* G estimates the brightness of both seams */
+    int daylight = wide_picture == SS_PRESENT_WIDE_TITLE ? 160 : wide_picture == SS_PRESENT_WIDE_SHOP ? 122 : 80;
+    light = light * 256 / (SS_SCREEN_H * 2 * daylight);
+    if (light > 256)
+        light = 256;
+    if (field_light > 256)
+        field_light = 256;
+
+    for (int y = 0; y < SS_SCREEN_H; y++) {
+        uint32_t *out = stripes + extra * y;
+        const uint32_t *art_row = art ? (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch) : NULL;
+        /* Colour-matched sides for the other menus. The lightweight background falls to black with their fade. */
+        uint32_t panel = wide_mix(0xff000000u, wide_mix(0xff142f34u, 0xff0c171eu, y * 256 / SS_SCREEN_H), light);
+        for (int side = 0; side < 2; side++) {
+            uint32_t edge = wide_edges[side][y];
+            uint32_t smoothed = edge;
+            int count = side ? extra - left : left;
+            if (menu && y > 0 && y + 1 < SS_SCREEN_H)
+                smoothed = wide_mix(edge, wide_mix(wide_edges[side][y - 1], wide_edges[side][y + 1], 128), 128);
+            for (int d = 0; d < count; d++) {
+                int x = side ? left + d : left - 1 - d;
+                if (keep_field) {
+                    out[x] = wide_mix(0xff000000u, wide_field[y * extra + x], field_light);
+                } else if (!d || transition || wide_picture == SS_PRESENT_WIDE_BRAND || (!art_row && wide_picture == SS_PRESENT_WIDE_TITLE)) {
+                    out[x] = edge;
+                } else {
+                    uint32_t outer = art_row ? wide_mix(0xff000000u, art_row[side ? 128 + d : 127 - d], light) : panel;
+                    out[x] = wide_mix(smoothed, outer, d < seam ? (unsigned)d * 256 / seam : 256);
+                }
+            }
+        }
+    }
+    SDL_Rect update = { 0, 0, extra, SS_SCREEN_H };
+    if (SDL_UpdateTexture(wide_texture, &update, stripes, extra * 4)) {
+        wide_drawn_width = extra;
+        wide_dirty = 0;
+    }
+}
+
+static void draw_wide_strips(int view)
+{
+    int extra = view - SS_SCREEN_W, left = extra / 2, right = extra - left;
+    if (extra <= 0 || !option_wide_pro || !sides_field || !wide_picture)
+        return;
+    if (!wide_texture) {
+        wide_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+                                         SS_MAX_VIEW_W - SS_SCREEN_W, SS_SCREEN_H);
+        if (!wide_texture)
+            return;
+        SDL_SetTextureScaleMode(wide_texture, SDL_SCALEMODE_NEAREST);
+        SDL_SetTextureBlendMode(wide_texture, SDL_BLENDMODE_NONE);
+    }
+    if (wide_dirty || wide_drawn_width != extra)
+        update_wide_strips(extra);
+    if (wide_drawn_width != extra)
+        return;
+    /* Composite after the game texture so its translucent side fade does not darken the already-faded edges
+     * a second time. The center is never covered. */
+    if (left) {
+        SDL_FRect strip = { 0, 0, (float)left, SS_SCREEN_H };
+        SDL_RenderTexture(renderer, wide_texture, &strip, &strip);
+    }
+    SDL_FRect strip = { (float)left, 0, (float)right, SS_SCREEN_H };
+    SDL_FRect target = { (float)(left + SS_SCREEN_W), 0, (float)right, SS_SCREEN_H };
+    SDL_RenderTexture(renderer, wide_texture, &strip, &target);
+}
+
 /* Draw the frame in the texture (`width` columns), what goes over it, and the menu. Returns the buttons the
  * touch controls hold. The picture shown is `width` wide except right after the mode changed and while a game
  * waits behind the menu, when the frame at hand has the width of the mode before: its middle is shown then, or
@@ -2101,8 +2486,7 @@ static uint16_t show_picture(int width)
     if (classic) {
         draw_border();
         SDL_RenderTexture(renderer, texture, &source, &inside);
-        draw_overlay(w, h);
-        draw_notice(border, border, view);
+        draw_notice(border, border + draw_overlay(w, h, border, border, view), view);
     } else {
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
@@ -2111,9 +2495,9 @@ static uint16_t show_picture(int width)
         if (view > SS_SCREEN_W && sides_field)
             draw_field(view, SS_SCREEN_H, 0, 0, 0, 0);
         SDL_RenderTexture(renderer, texture, &source, &inside);
+        draw_wide_strips(view);
         draw_hud(&inside, view);
-        draw_overlay(w, h);
-        draw_notice(0, 0, view);
+        draw_notice(0, draw_overlay(w, h, 0, 0, view), view);
     }
     held = touch_buttons(w);
     if (menu_open)
@@ -2164,7 +2548,7 @@ static uint16_t qol_buttons(const bool *state)
     if (!ss_qol_bars())
         return 0;
     for (i = 0; i < 2; i++) {
-        if (gamepad) {      /* a trigger is an axis, 0 to 32767: pulled past half, let go under a quarter */
+        if (gamepad && !pad_uses_gamecube) {      /* GameCube triggers belong to GBA L/R; keyboard shortcuts remain. */
             int value = SDL_GetGamepadAxis(gamepad, trigger[i]);
             pulled[i] = value > 16000 || (pulled[i] && value > 8000);
         } else
@@ -2184,9 +2568,10 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     uint32_t *part = stat_part_us[PART_UPLOAD] ? stat_part_us[PART_UPLOAD] + stat_part_count % STAT_SLOTS : NULL;
     SDL_Event event;
     static int frameskip = -1, test_slow_ms;
-    int waiting, late, hud = width & SS_PRESENT_HUD;
+    int waiting, late, hud = width & SS_PRESENT_HUD, frontend = width & SS_PRESENT_WIDE_MASK;
 
-    width &= ~SS_PRESENT_HUD;
+    display_language = ss_game_language_from_id((unsigned)(width & SS_PRESENT_LANG_MASK) >> SS_PRESENT_LANG_SHIFT);
+    width &= ~(SS_PRESENT_HUD | SS_PRESENT_WIDE_MASK | SS_PRESENT_LANG_MASK);
     update.w = width;
     if (!window)
         return 0;
@@ -2230,6 +2615,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     if (part)
         part_from = SDL_GetTicksNS();
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
+    take_wide_picture(pixels, width, frontend);
     hud_have = hud != 0;
     if (hud && (!hud_texture || !SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4))) {
         hud_have = 0;                   /* the status display's layer follows the picture (runtime.h) */

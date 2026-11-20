@@ -1,5 +1,82 @@
 {
+ "code_08002118.c": [
+  {
+   "why": "The title exit could draw PRESS START over confirmed Single Player or Multiplayer for one frame. Keep that prompt in the pre-selection state.",
+   "find": "            draw2694(anim, 0x78, 0x5A, 3, 0);\n            sub_080003F0();",
+   "replace": "            if (started == 0)\n                draw2694(anim, 0x78, 0x5A, 3, 0);\n            sub_080003F0();"
+  },
+  {
+   "why": "An explicitly deferred online launch asks for a room on the title screen before entering native saved-character selection.",
+   "find": "                    sub_08006D08(0xF);\n                    running = 0;",
+   "replace": "                    extern int ss_net_room_ui_enabled(void);\n                    extern int ss_link_room_select(void);\n                    if (gUnk_03002838 == 1 && ss_net_room_ui_enabled() && !ss_link_room_select())\n                        goto draw;\n                    sub_08006D08(0xF);\n                    running = 0;"
+  },
+  {
+   "why": "After the original cable shutdown on return to the title, release any deferred room before allowing another selection.",
+   "find": "        while (sub_08002228() != 0)\n            sub_080003F0();\n        if (sub_08002228() == 0)\n            sub_0800208C(1);",
+   "replace": "        while (sub_08002228() != 0)\n            sub_080003F0();\n        {\n            extern void ss_net_room_cancel(void);\n            ss_net_room_cancel();\n        }\n        if (sub_08002228() == 0)\n            sub_0800208C(1);"
+  },
+  {
+   "why": "GameLink presentation observes the original menu boundaries through the runtime roster API.",
+   "find": "#include \"global.h\"",
+   "replace": "#include \"global.h\"\n#include \"shiningsource/roster.h\"\n#include \"shiningsource/language.h\""
+  },
+  {
+   "why": "Keep the original first-start language selector. Later starts confirm the saved language through the same cartridge transition.",
+   "find": "    var_r4_2 = 0;\n    while (!(1 & pressedMenu000)) {",
+   "replace": "    int preferred_language = ss_game_language_start_menu();\n    var_r4_2 = preferred_language < 0 ? 0 : (u32)preferred_language;\n    while (preferred_language < 0 && !(1 & pressedMenu000)) {"
+  },
+  {
+   "why": "Remember the language only after the player confirms it or the cartridge accepts an existing selection.",
+   "find": "    gUnk_03003470 = (s32) languages000[var_r4_2];",
+   "replace": "    gUnk_03003470 = (s32) languages000[var_r4_2];\n    ss_game_language_confirm((unsigned)gUnk_03003470);"
+  },
+  {
+   "why": "Returning to the title clears the previous GameLink status and character.",
+   "find": "        sub_080003F4(0x14);\n        if (*(u8 *)&gUnk_0300129C",
+   "replace": "        sub_080003F4(0x14);\n        ss_net_roster_set_stage(SS_ROSTER_EMPTY);\n        if (*(u8 *)&gUnk_0300129C"
+  },
+  {
+   "why": "Advertise the actual multiplayer saved-slot screen when it opens.",
+   "find": "    memcpy2B70(cursor, cursor2B70, 2);",
+   "replace": "    if (sel2B70 == 1)\n        ss_net_roster_set_stage(SS_ROSTER_SELECTING_SAVE);\n    memcpy2B70(cursor, cursor2B70, 2);"
+  },
+  {
+   "why": "Advertise character creation only while the actual new-character task owns the screen.",
+   "find": "                    newGame2B70(&saves[slot], all);\n                    wait2B70(0x25A112EBFULL);",
+   "replace": "                    if (sel2B70 == 1)\n                        ss_net_roster_set_stage(SS_ROSTER_CREATING_CHARACTER);\n                    newGame2B70(&saves[slot], all);\n                    wait2B70(0x25A112EBFULL);\n                    if (sel2B70 == 1 && saves[slot].used == 0)\n                        ss_net_roster_set_stage(SS_ROSTER_SELECTING_SAVE);"
+  },
+  {
+   "why": "Read the selected class and palette only from the confirmed saved record while it still exists.",
+   "find": "    free2B70(saves);\n    switch (result) {",
+   "replace": "    if (sel2B70 == 1 && result)\n        ss_net_roster_set_character(saves[slot].cls, saves[slot].pal);\n    free2B70(saves);\n    switch (result) {"
+  },
+  {
+   "why": "Use the actual cartridge GameLink task as the presentation boundary.",
+   "find": "    call66_0801AB50(6);\n    result = 0;",
+   "replace": "    ss_net_roster_set_stage(SS_ROSTER_READY);\n    call66_0801AB50(6);\n    result = 0;"
+  },
+  {
+   "why": "Expose the exact cartridge eligibility check to the GameLink renderer without touching the host start gate.",
+   "find": "            if (sub_080022F4() && n == sub_08002164() - 1) {\n                anim66",
+   "replace": "            if (sub_080022F4() && n == sub_08002164() - 1) {\n                ss_net_roster_set_host_start(1);\n                anim66"
+  },
+  {
+   "why": "Withdraw the host start hint when the original lobby no longer allows it.",
+   "find": "            } else {\n                active = 0;\n                timer = 0;\n                peer = peer66(0);",
+   "replace": "            } else {\n                ss_net_roster_set_host_start(0);\n                active = 0;\n                timer = 0;\n                peer = peer66(0);"
+  },
+  {
+   "why": "The original lobby cancel and Go paths also end the GameLink presentation.",
+   "find": "    switch (result) {\n    case 0:\n        peer = peer66(sub_080020F4());",
+   "replace": "    ss_net_roster_set_stage(result == 1 ? SS_ROSTER_IN_GAME : SS_ROSTER_EMPTY);\n    switch (result) {\n    case 0:\n        peer = peer66(sub_080020F4());"
+  }
+ ],
  "code_08021DC4.c": [
+  {
+   "why": "The paired encounter exit still has the current level in ARM r0 at EU ROM 08027BA6, including the default case.",
+   "find": "            sub_08057BD0();\n            goto skip;",
+   "replace": "            sub_08057BD0(gUnk_03003170.curLevel);\n            goto skip;"
+  },
   {
    "why": "The original reads the three incoming argument registers with ARM instructions; in C they are the parameters.",
    "find": "asm volatile(\"movs %0, r0\\n\\tmov %1, r1\\n\\tmovs %2, r2\" : \"=r\"(val0), \"=r\"(val1), \"=r\"(val2));",
@@ -168,6 +245,11 @@
  ],
  "code_0805FB7C.c": [
   {
+   "why": "Bank regeneration receives the result of the area-flag query in ARM r0 at EU ROM 0806501A–0806501E.",
+   "find": "        sub_08057AE8(0x15);\n        sub_0805C7B8();",
+   "replace": "        sub_0805C7B8(sub_08057AE8(0x15));"
+  },
+  {
    "why": "Wide picture: sub_0805FC80 does not queue a field item's icon outside x -16..248. Queue it from -128 to 367; the sprite renderer still hides each part. Vertical limits unchanged. Drawing only.",
    "find": "if (((u32)(screenX + 16) << 16) > 0x1080000 || screenY < -16 || screenY > 168)",
    "replace": "if (((u32)(screenX + 128) << 16) > 0x1EF0000 || screenY < -16 || screenY > 168)"
@@ -272,6 +354,11 @@
    "replace": "#include \"global.h\"\nextern void ss_remote_sfx_event(int);"
   },
   {
+   "why": "A pickup request may reach the host after another player has reserved or removed the item. The cartridge failure reply reads from BIOS address 0xC through the null record pointer. Return the requested item ID in the failure reply instead, avoiding a native access violation.",
+   "find": "                        *(u32 *)(e + 8) = pid << 16;\n                        *(u32 *)(e + 12) = *(u16 *)(record + 12);",
+   "replace": "                        *(u32 *)(e + 8) = pid << 16;\n                        *(u32 *)(e + 12) = (u16)d[0];"
+  },
+  {
    "why": "Restored Multiplayer Audio: one generic impact for a positive accepted peer hit on an active matching enemy. The high damage bit is not a critical cue. Own echoes and unknown IDs stay silent.",
    "find": "                            gRxEnts[i].f58 = peer;",
    "replace": "                            if ((*(u16 *)(hit + 4) & 0x7FFF) != 0)\n                                ss_remote_sfx_event(0x1A);\n                            gRxEnts[i].f58 = peer;"
@@ -318,9 +405,87 @@
  ],
  "code_080443EC.c": [
   {
+   "why": "Pass the returned field item to the removal packet producer as the EU ROM does at 0804ADFA–0804ADFE.",
+   "find": "        sub_0805D37C(0x9300, 0x8800, 4);\n        sub_080687A8();",
+   "replace": "        sub_080687A8(sub_0805D37C(0x9300, 0x8800, 4));"
+  },
+  {
    "why": "The same in sub_08048A74 (a town scene with several characters): it takes the address of frame.pos[3] as `stack pointer + 20` for the camera's return to its place. With a null `stack` the eased y went to address 20 and the camera's y stayed 0. `stack` is set so that stack + 20 is frame.pos[3], as in the original frame.",
    "find": "    struct T47EFrame frame;\n    s32 *stack;",
    "replace": "    struct T47EFrame frame;\n    s32 *stack = (s32 *)((u32)&frame.pos[3] - 20);"
+  }
+ ],
+ "code_0804D330.c": [
+  {
+   "why": "Pass the found field item to the removal packet at EU ROM 0804D5DE–0804D5E2.",
+   "find": "        sub_0805D37C(0xE800, 0x8C00, 6);\n        sub_080687A8();\n        cmdOne=1;cmdKind=2;",
+   "replace": "        sub_080687A8(sub_0805D37C(0xE800, 0x8C00, 6));\n        cmdOne=1;cmdKind=2;"
+  },
+  {
+   "why": "Pass the found field item to the removal packet at EU ROM 0804D70E–0804D712.",
+   "find": "        sub_0805D37C(0xE800, 0x8C00, 6);\n        sub_080687A8();\n        cmdOne=1;cmdKind=0x2F;",
+   "replace": "        sub_080687A8(sub_0805D37C(0xE800, 0x8C00, 6));\n        cmdOne=1;cmdKind=0x2F;"
+  },
+  {
+   "why": "Pass the found field item to the removal packet at EU ROM 0804D83E–0804D842.",
+   "find": "        sub_0805D37C(0xE800, 0x8C00, 6);\n        sub_080687A8();\n        cmdOne=1;cmdKind=0x1A;",
+   "replace": "        sub_080687A8(sub_0805D37C(0xE800, 0x8C00, 6));\n        cmdOne=1;cmdKind=0x1A;"
+  },
+  {
+   "why": "Pass the found field item to the removal packet at EU ROM 0804D93C–0804D940.",
+   "find": "        sub_0805D37C(0xE800, 0x8C00, 6);\n        sub_080687A8();\n        return;",
+   "replace": "        sub_080687A8(sub_0805D37C(0xE800, 0x8C00, 6));\n        return;"
+  },
+  {
+   "why": "Pass the found field item to the removal packet at EU ROM 08051536–0805153A.",
+   "find": "        sub_0805D37C(0x7800,0x7800,0);\n        sub_080687A8();",
+   "replace": "        sub_080687A8(sub_0805D37C(0x7800, 0x7800, 0));"
+  }
+ ],
+ "code_08057CAC.c": [
+  {
+   "why": "The actor reset wrapper forwards the original ARM r0 index at EU ROM 0805874E.",
+   "find": "void sub_0805874C(void) {\n    sub_0801A388();",
+   "replace": "void sub_0805874C(u32 index) {\n    sub_0801A388(index);"
+  },
+  {
+   "why": "The item removal wrapper keeps the incoming key in ARM r2 and forwards the lookup result in r0 at EU ROM 080585F4–080585FE.",
+   "find": "void sub_080585F4(s32 arg0, s32 arg1) {\n    sub_0805D37C(arg0 << 8, arg1 << 8);\n    sub_080687A8();\n}",
+   "replace": "void sub_080585F4(s32 x, s32 y, s32 key) {\n    sub_080687A8(sub_0805D37C((s32)((u32)x << 8), (s32)((u32)y << 8), key));\n}"
+  }
+ ],
+ "code_08058790.c": [
+  {
+   "why": "The inventory selector forwards the same weapon slot in ARM r0 at EU ROM 08058C7E, where a missing argument can index unrelated memory.",
+   "find": "    M2C_FIELD(gUnk_030034E0, s16 *, 0x68) = arg0;\n    sub_0805AD78();",
+   "replace": "    M2C_FIELD(gUnk_030034E0, s16 *, 0x68) = arg0;\n    sub_0805AD78((u32)arg0);"
+  }
+ ],
+ "functions.h": [
+  {
+   "why": "Declare the key forwarded by the field item removal wrapper on the native target.",
+   "find": "void sub_080585F4(s32 arg0, s32 arg1);",
+   "replace": "void sub_080585F4(s32 x, s32 y, s32 key);"
+  },
+  {
+   "why": "Declare the actor index on the native reset wrapper so callers can forward it explicitly.",
+   "find": "void sub_0805874C(void);",
+   "replace": "void sub_0805874C(u32 index);"
+  },
+  {
+   "why": "Check native argument lists for weapon activation, field item lookup and field item removal.",
+   "find": "void sub_0805AD78();",
+   "replace": "s32 sub_0805AD78(u32 index);"
+  },
+  {
+   "why": "Check that native field item lookups still pass position and key.",
+   "find": "void *sub_0805D37C();",
+   "replace": "void *sub_0805D37C(s32 x, s32 y, s32 key);"
+  },
+  {
+   "why": "Check that native field item removals pass the intended item record.",
+   "find": "u32 sub_080687A8();",
+   "replace": "u32 sub_080687A8(const u8 *item);"
   }
  ],
  "code_0805D094.c": [
@@ -342,6 +507,11 @@
  ],
  "code_08009088.c": [
   {
+   "why": "The fade request receives the checked zero result in ARM r0 at EU ROM 0800BE66.",
+   "find": "    if (sub_0801AAF8() == 0) {\n        sub_0801ABE8();",
+   "replace": "    if (sub_0801AAF8() == 0) {\n        sub_0801ABE8(0);"
+  },
+  {
    "why": "Music in multiplayer. In a game started from the multiplayer lobby the cartridge's area-music selector stops the music in every stage except the town and the first field (its second branch ends in a stop); the port lets the stages play the song they have in a single-player game (ss_music_everywhere, on unless SS_MP_MUSIC=0). Music is local to each machine: nothing the players share depends on it.",
    "find": "void sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0) {",
    "replace": "int ss_music_everywhere(void);\nvoid sub_0800A34C(u32 music, s32 previous, s32 changed) {\n    u32 selection;\n    if (sub_0800CB9C() == 0 || (music != 0 && music != 12 && ss_music_everywhere())) {"
@@ -358,6 +528,16 @@
   }
  ],
  "code_0800CF58.c": [
+  {
+   "why": "Local player setup: name the live weapon subtype cleared by the character header copy, preserving the original actor layout.",
+   "find": "u16 fC, fE; u8 pad10[0x10]; u16 f20; u8 pad22[0x12]; struct T6Slot135",
+   "replace": "u16 fC, fE, weaponSubtype; u8 pad12[0xE]; u16 f20; u8 pad22[0x12]; struct T6Slot135"
+  },
+  {
+   "why": "Local player setup: the original actor initialization reselects the active weapon through sub_0801E024's appearance branch. Restore it explicitly if the native initialization leaves the actor unarmed.",
+   "find": "    if (id == sub_080020F4())\n        t6_init135(t6_players135[id]);\n    t6_tasks135[id].fC = t6_update135;",
+   "replace": "    if (id == sub_080020F4()) {\n        extern void ss_restore_selected_weapon(const u8 *save);\n        t6_init135(t6_players135[id]);\n        if (pl->weaponSubtype == 0)\n            ss_restore_selected_weapon((const u8 *)t6_template135);\n    }\n    t6_tasks135[id].fC = t6_update135;"
+  },
   {
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
    "find": "#include \"global.h\"",
@@ -429,6 +609,16 @@
   }
  ],
  "code_0805A630.c": [
+  {
+   "why": "Restore the already-active weapon through the original selection and link synchronization path, leaving intentionally unequipped slots alone.",
+   "find": "    return sub_08065DAC();\n}\n/* [CanSelectWeaponItem]",
+   "replace": "    return sub_08065DAC();\n}\nvoid ss_restore_selected_weapon(const u8 *save)\n{\n    u16 slot = *(const u16 *)(save + 0x68);\n    const u8 *item;\n    if (slot >= 3)\n        return;\n    item = save + 0x70 + slot * 0x10;\n    if (*(const u16 *)item == 2 && item[8] == 0 && item[9] == 1)\n        impl_0805AD78(slot);\n}\n/* [CanSelectWeaponItem]"
+  },
+  {
+   "why": "Weapon selection: the cartridge passes the weapon subtype in ARM r0 at 0805AE7A. Native code must pass that subtype explicitly to check the corresponding skill rank.",
+   "find": "    raw = sub_0801D028();\n    needed = *(u16 *)resource;",
+   "replace": "    {\n        extern s32 sub_0801D028(u16 subtype);\n        raw = sub_0801D028(*kind);\n    }\n    needed = *(u16 *)resource;"
+  },
   {
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
    "find": "#include \"global.h\"",
@@ -560,6 +750,30 @@
    "why": "Restored Multiplayer Audio: remote buff activation from its existing action transition; local cost and buff installation unchanged.",
    "find": "    case 6:\n        if (who == sub_080020F4()) {",
    "replace": "    case 6:\n        if (who != sub_080020F4()) ss_remote_sfx_event(0x165);\n        if (who == sub_080020F4()) {"
+  }
+ ],
+ "code_0808D4A8.c": [
+  {
+   "why": "Port ABI: AU2P 0808F1FA–0808F202 passes the actor's stat block at +0x204 to the player-count scaler in r0.",
+   "find": "extern void resetF1E4(void) asm(\"sub_08019F60\");",
+   "replace": "extern void resetF1E4(s16 *) asm(\"sub_08019F60\");"
+  },
+  {
+   "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
+   "find": "    resetF1E4();",
+   "replace": "    resetF1E4((s16 *)data);"
+  }
+ ],
+ "code_08097E28.c": [
+  {
+   "why": "Port ABI: AU2P 0809CCAA–0809CCB2 passes the actor's stat block at +0x204 to the player-count scaler in r0.",
+   "find": "extern void s19F60(void) asm(\"sub_08019F60\");",
+   "replace": "extern void s19F60(s16 *) asm(\"sub_08019F60\");"
+  },
+  {
+   "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
+   "find": "    s19F60();",
+   "replace": "    s19F60((s16 *)sub);"
   }
  ]
 }

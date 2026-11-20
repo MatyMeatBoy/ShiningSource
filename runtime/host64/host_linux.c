@@ -253,6 +253,8 @@ static int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
 #endif
     size_t length;
     if (!value)
+        value = ss_plat_net_default_env(PTR(name));
+    if (!value)
         return -1;
     length = strlen(value);
     if (length >= capacity)
@@ -295,6 +297,7 @@ static void b_exit(int code)
         ss_plat_last_words();
     }
     fflush(NULL);
+    ss_plat_net_send_farewell();
     _exit(reported_code);
 #endif
     exit(reported_code);

@@ -109,9 +109,25 @@ unsigned __umodsi3(unsigned a, unsigned b) { return b == 0 ? 0 : a % b; }
 /* ---- no network in a browser ---- */
 
 int ss_net_active(void) { return 0; }
+int ss_net_room_ui_enabled(void) { return 0; }
+void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]) { code[0] = 0; }
+int ss_net_room_begin(const char *code, int create) { (void)code; (void)create; return 0; }
+int ss_net_room_status(void) { return SS_ROOM_IDLE; }
+void ss_net_room_cancel(void) {}
+int ss_net_roster(struct ss_net_roster_entry entries[4]) { (void)entries; return 0; }
+int ss_net_roster_lobby(void) { return 0; }
+int ss_net_roster_can_start(void) { return 0; }
+void ss_net_roster_set_stage(enum ss_net_roster_stage stage) { (void)stage; }
+void ss_net_roster_set_character(int class_id, int palette_id) { (void)class_id; (void)palette_id; }
+void ss_net_roster_set_host_start(int enabled) { (void)enabled; }
 void ss_net_vote(int wants) { (void)wants; }
 void ss_net_votes(int *have, int *need) { *have = 0; *need = 1; }
 int ss_net_skip_now(void) { return 0; }
+int ss_net_skip_ballot(int kind, int open, int button, struct ss_skip_ballot_view *view)
+{
+    (void)kind; (void)open; (void)button; (void)view;
+    return 0;
+}
 unsigned long ss_net_label(void) { return 0; }
 void ss_net_leave(void) {}
 void ss_net_flush(void) {}

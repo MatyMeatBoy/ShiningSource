@@ -1,4 +1,7 @@
 /* One UDP socket to the relay, for every desktop platform. The core (core/netlink.c) decides what travels. */
+#ifdef _WIN32
+#define _CRT_RAND_S
+#endif
 #include "shiningsource/runtime.h"
 
 #include <stdio.h>
@@ -28,7 +31,48 @@ static socket_t sock = BAD_SOCKET;
 static unsigned char farewell[128];
 static int farewell_size, farewell_hooked;
 
-static void say_farewell(void)
+const char *ss_plat_net_default_token(void)
+{
+    static char text[11];
+    uint32_t token = 0;
+    if (text[0])
+        return text;
+#ifdef _WIN32
+    unsigned int random_value = 0;
+    if (rand_s(&random_value) == 0)
+        token = random_value;
+    if (!token) {
+        LARGE_INTEGER now = {0};
+        QueryPerformanceCounter(&now);
+        token = (uint32_t)now.QuadPart ^ (uint32_t)GetCurrentProcessId() * 2654435761u;
+    }
+#else
+    FILE *random_source = fopen("/dev/urandom", "rb");
+    if (random_source) {
+        if (fread(&token, sizeof token, 1, random_source) != 1)
+            token = 0;
+        fclose(random_source);
+    }
+    if (!token) {
+        struct timespec now = {0};
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        token = (uint32_t)now.tv_nsec ^ (uint32_t)getpid() * 2654435761u;
+    }
+#endif
+    snprintf(text, sizeof text, "%u", (unsigned)(token ? token : 1));
+    return text;
+}
+
+const char *ss_plat_net_default_env(const char *name)
+{
+    if (strcmp(name, "SS_NET_TOKEN") == 0)
+        return ss_plat_net_default_token();
+    if (strcmp(name, "SS_NET_DEFAULT") == 0)
+        return "45.8.207.150:47900";
+    return NULL;
+}
+
+void ss_plat_net_send_farewell(void)
 {
     if (sock != BAD_SOCKET && farewell_size > 0) {
         send(sock, (const char *)farewell, farewell_size, 0);
@@ -45,7 +89,7 @@ void ss_plat_net_farewell(const void *data, int size)
     farewell_size = size;
     if (!farewell_hooked) {
         farewell_hooked = 1;
-        atexit(say_farewell);
+        atexit(ss_plat_net_send_farewell);
     }
 }
 
@@ -54,15 +98,23 @@ int ss_plat_net_open(const char *host, int port)
     struct addrinfo hints, *found = NULL, *it;
     char service[16];
 #ifdef _WIN32
+    static int winsock_ready;
     WSADATA data;
     u_long on = 1;
-    if (WSAStartup(MAKEWORD(2, 2), &data))
-        return -1;
 #endif
     if (sock != BAD_SOCKET) {
         closesocket(sock);
         sock = BAD_SOCKET;
     }
+    if (!host)
+        return 0;
+#ifdef _WIN32
+    if (!winsock_ready) {
+        if (WSAStartup(MAKEWORD(2, 2), &data))
+            return -1;
+        winsock_ready = 1;
+    }
+#endif
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;

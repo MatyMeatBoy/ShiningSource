@@ -13,6 +13,7 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.system.Os;
 import android.text.InputType;
 import android.util.Log;
 import android.view.Gravity;
@@ -62,7 +63,7 @@ public class MainActivity extends Activity {
     private static final String CODE = "AU2P";                                          // its game code, at 0xAC
     private static final String DEFAULT_SERVER = "45.8.207.150:47900";
     private static final int PICK_ROM = 1, ASK_STORAGE = 2;
-    private static final long SMALLEST = 1L << 20, LARGEST = 32L << 20;                 // the game reads 1 to 16 MiB
+    private static final long SMALLEST = 1L << 20, LARGEST = 16L << 20;
     // what a file turned out to be; from OTHER_VERSION on it is kept (the Windows launcher also lets another version be tried)
     private static final int NOT_A_ROM = 0, OTHER_GAME = 1, OTHER_VERSION = 2, MODIFIED = 3, VERIFIED = 4;
     private static final int RED = Color.rgb(242, 115, 102), GREEN = Color.rgb(115, 217, 128), AMBER = Color.rgb(232, 190, 96);
@@ -75,9 +76,10 @@ public class MainActivity extends Activity {
     private static final ExecutorService REPORT_WORKER = Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicBoolean REPORT_SCHEDULED = new java.util.concurrent.atomic.AtomicBoolean();
     private CrashUpload crashUpload;
-    private TextView romStatus, romNote, romHelp, playHint, gameNote;
+    private TextView romStatus, romNote, romHelp, playHint, gameNote, gameLanguage;
     private Button choose, play;
-    private CheckBox online;
+    private LauncherTheme theme;
+    private CheckBox customServer, directRoom;
     private EditText room, server, border;
     private RadioButton classic, enhanced;
 
@@ -105,72 +107,108 @@ public class MainActivity extends Activity {
         SharedPreferences saved = getPreferences(MODE_PRIVATE);
         crashUpload = new CrashUpload(getFilesDir());
         crashUpload.setEnabled(saved.getBoolean("automatic_reports", true));
-        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        theme = new LauncherTheme(this);
+        int pad = theme.dp(12);
 
         LinearLayout page = new LinearLayout(this);
         page.setOrientation(LinearLayout.VERTICAL);
         page.setPadding(pad, pad, pad, pad);
-        page.setBackgroundColor(Color.rgb(18, 23, 36));
         page.setFocusableInTouchMode(true);         // so that the keyboard does not open by itself
-
-        TextView title = new TextView(this);
-        title.setText("ShiningSource");
-        title.setTextSize(28);
-        title.setTextColor(Color.rgb(214, 168, 74));
-        page.addView(title);
-        page.addView(label(text("Native port of Shining Soul II. The game is not included: you add your own cartridge dump (Europe).",
-                                "Port nativo de Shining Soul II. El juego no viene incluido: tú añades tu propio volcado del cartucho (Europa).")));
+        LinearLayout[] panels = new LinearLayout[4];
+        Button[] tabs = new Button[4];
+        LinearLayout navigation = new LinearLayout(this);
+        navigation.setGravity(Gravity.CENTER);
+        navigation.setPadding(pad / 2, pad, pad / 2, 0);
+        String[] names = { text("Home", "Inicio"), text("Video", "Vídeo"), text("Online", "En línea"), text("Settings", "Ajustes") };
+        for (int i = 0; i < panels.length; i++) {
+            final int selected = i;
+            LinearLayout panel = new LinearLayout(this);
+            panel.setOrientation(LinearLayout.VERTICAL);
+            panel.setPadding(pad, pad, pad, pad);
+            panel.setBackground(theme.panel());
+            panel.setVisibility(i == 0 ? View.VISIBLE : View.GONE);
+            panels[i] = panel;
+            page.addView(panel);
+            Button tab = new Button(this);
+            tab.setText(names[i]);
+            tabs[i] = tab;
+            theme.tab(tab, i, i == 0);
+            LinearLayout.LayoutParams tabSize = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+            tabSize.setMargins(pad / 4, 0, pad / 4, 0);
+            navigation.addView(tab, tabSize);
+            tab.setOnClickListener(view -> {
+                for (int j = 0; j < panels.length; j++) {
+                    panels[j].setVisibility(j == selected ? View.VISIBLE : View.GONE);
+                    theme.tab(tabs[j], j, j == selected);
+                }
+            });
+        }
+        LinearLayout home = panels[0], video = panels[1], network = panels[2], settings = panels[3];
+        home.addView(theme.hero("ShiningSource", "Shining Soul II"));
+        gameLanguage = label("");
+        home.addView(gameLanguage);
 
         romStatus = label("");
-        page.addView(romStatus);
+        home.addView(romStatus);
         romNote = label("");
-        page.addView(romNote);
+        home.addView(romNote);
         romHelp = label("");
-        page.addView(romHelp);
+        home.addView(romHelp);
         choose = new Button(this);
         choose.setOnClickListener(view -> pick());
-        page.addView(choose);
+        theme.button(choose, false);
+        home.addView(choose);
 
-        // the two ways to see the game; nothing is chosen on the first start, and Play waits for the choice
-        page.addView(label(text("How do you want to see the game?", "¿Cómo quieres ver el juego?")));
+        video.addView(label(text("Display mode", "Modo de imagen")));
         RadioGroup modes = new RadioGroup(this);
         classic = new RadioButton(this);
         classic.setText(text("Classic: the console's picture at a whole scale, inside a border", "Clásico: la imagen de la consola a escala entera, dentro de un borde"));
-        classic.setTextColor(Color.WHITE);
+        theme.choice(classic);
         enhanced = new RadioButton(this);
         enhanced.setText(text("Enhanced: the picture adapts to the screen and shows more of the map", "Mejorado: la imagen se adapta a la pantalla y muestra más mapa"));
-        enhanced.setTextColor(Color.WHITE);
+        theme.choice(enhanced);
+        classic.setId(View.generateViewId());
+        enhanced.setId(View.generateViewId());
         modes.addView(classic);
         modes.addView(enhanced);
-        String mode = saved.getString("mode", "");
-        classic.setChecked(mode.equals("classic"));
-        enhanced.setChecked(mode.equals("enhanced"));
+        String mode = saved.getString("mode", "enhanced");
+        modes.check(mode.equals("classic") ? classic.getId() : enhanced.getId());
         modes.setOnCheckedChangeListener((group, id) -> show());
-        page.addView(modes);
-        border = field(text("Border thickness in classic mode (0 to 64)", "Grosor del borde en modo clásico (0 a 64)"), saved.getString("border", "16"), true, page);
+        video.addView(modes);
+        border = field(text("Classic border thickness (0–64)", "Grosor del borde clásico (0–64)"), saved.getString("border", "16"), true, video);
 
-        online = new CheckBox(this);
-        online.setText(text("Play online (2 to 4 players)", "Jugar en línea (2 a 4 jugadores)"));
-        online.setTextColor(Color.WHITE);
-        online.setChecked(saved.getBoolean("online", true));
-        page.addView(online);
-        room = field(text("Room (the same for everyone)", "Sala (la misma para todos)"), saved.getString("room", "shining"), false, page);
-        server = field(text("Server", "Servidor"), saved.getString("server", DEFAULT_SERVER), false, page);
-        page.addView(label(text("The first to enter a room is the host. In the game choose MULTIPLAYER MODE.",
-                                "El primero en entrar a una sala es el anfitrión. En el juego elige MULTIPLAYER MODE.")));
+        network.addView(label(text("ShiningSource Server is the default. Create or join from Multiplayer in the game.",
+                                   "Servidor ShiningSource es el predeterminado. Crea o únete a una sala desde Multijugador en el juego.")));
+        String previousServer = saved.getString("server", DEFAULT_SERVER);
+        customServer = new CheckBox(this);
+        customServer.setText(text("Connect by IP", "Conectar por IP"));
+        theme.choice(customServer);
+        customServer.setChecked(saved.getBoolean("custom_server", !previousServer.isEmpty() && !previousServer.equals(DEFAULT_SERVER)));
+        network.addView(customServer);
+        server = field(text("Relay address (IP or hostname)", "Dirección del servidor (IP o nombre)"), previousServer.equals(DEFAULT_SERVER) ? "" : previousServer, false, network);
+        server.setEnabled(customServer.isChecked());
+        customServer.setOnCheckedChangeListener((view, checked) -> server.setEnabled(checked));
+        directRoom = new CheckBox(this);
+        directRoom.setText(text("Use a room from the launcher", "Usar una sala desde el launcher"));
+        theme.choice(directRoom);
+        directRoom.setChecked(saved.getBoolean("direct_room", false));
+        network.addView(directRoom);
+        room = field(text("Room", "Sala"), saved.getString("room", ""), false, network);
+        room.setEnabled(directRoom.isChecked());
+        directRoom.setOnCheckedChangeListener((view, checked) -> room.setEnabled(checked));
         CheckBox automaticReports = new CheckBox(this);
         automaticReports.setText(text("Automatic crash reports", "Informes automáticos de errores"));
-        automaticReports.setTextColor(Color.WHITE);
+        theme.choice(automaticReports);
         automaticReports.setChecked(saved.getBoolean("automatic_reports", true));
         automaticReports.setOnCheckedChangeListener((button, checked) -> {
             getPreferences(MODE_PRIVATE).edit().putBoolean("automatic_reports", checked).commit();
             crashUpload.setEnabled(checked);
             if (checked) { captureCrashReport(); uploadPendingReport(); }
         });
-        page.addView(automaticReports);
-        page.addView(label(text("On return, send device/version and a short error log to ShiningSource's HTTPS service, without ROMs, saves or room/address/path details. Turning this off deletes pending reports.",
+        settings.addView(automaticReports);
+        settings.addView(label(text("On return, send device/version and a short error log to ShiningSource's HTTPS service, without ROMs, saves or room/address/path details. Turning this off deletes pending reports.",
             "Al volver, envía dispositivo/versión y un registro breve al servicio HTTPS de ShiningSource, sin ROM, partidas ni detalles de sala/dirección/ruta. Desactivarlo borra los informes pendientes.")));
-        if (reportEndpoint().isEmpty()) page.addView(label(text("Reports stay on this device until the HTTPS report service is configured.",
+        if (reportEndpoint().isEmpty()) settings.addView(label(text("Reports stay on this device until the HTTPS report service is configured.",
             "Los informes quedan en este dispositivo hasta configurar el servicio HTTPS.")));
 
         // Play stays at the bottom of the screen, whatever the length of the page above it
@@ -181,6 +219,7 @@ public class MainActivity extends Activity {
         play.setText(text("PLAY", "JUGAR"));
         play.setTextSize(20);
         play.setOnClickListener(view -> start());
+        theme.button(play, true);
         foot.addView(play);
         playHint = label("");
         foot.addView(playHint);
@@ -191,14 +230,16 @@ public class MainActivity extends Activity {
         Button report = new Button(this);
         report.setText(text("Share report...", "Compartir informe..."));
         report.setOnClickListener(view -> shareReport());
-        foot.addView(report);
+        theme.button(report, false);
+        settings.addView(report);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(page);
         LinearLayout screen = new LinearLayout(this);
         screen.setOrientation(LinearLayout.VERTICAL);
-        screen.setBackgroundColor(Color.rgb(18, 23, 36));
+        screen.setBackground(theme.background());
         screen.setFitsSystemWindows(true);          // Android 15 draws under the system bars: keep clear of them
+        screen.addView(navigation);
         screen.addView(scroll, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
         screen.addView(foot, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
         setContentView(screen);
@@ -231,7 +272,7 @@ public class MainActivity extends Activity {
     private TextView label(String value) {
         TextView view = new TextView(this);
         view.setText(value);
-        view.setTextColor(Color.rgb(200, 206, 220));
+        theme.label(view);
         view.setPadding(0, 12, 0, 12);
         return view;
     }
@@ -244,6 +285,7 @@ public class MainActivity extends Activity {
         edit.setTextColor(Color.WHITE);
         edit.setGravity(Gravity.START);
         edit.setInputType(number ? InputType.TYPE_CLASS_NUMBER : InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        theme.field(edit);
         page.addView(edit);
         return edit;
     }
@@ -278,6 +320,11 @@ public class MainActivity extends Activity {
         File folder = folder();
         boolean ready = remembered(), chosen = classic.isChecked() || enhanced.isChecked();
         int kind = saved.getInt("rom_kind", NOT_A_ROM);
+        String language = folder == null ? "" : gameLanguageName(new File(folder, "shiningsource-language.txt"));
+        if (language.isEmpty() && folder != null)
+            language = gameLanguageName(new File(folder, "shiningsource-language.txt.bak"));
+        gameLanguage.setText(text("Game language", "Idioma del juego") + " " + (language.isEmpty()
+            ? text("(to be chosen)", "(por escoger)") : language));
 
         if (folder == null) {
             romStatus.setText(text("The phone's storage is not available right now. The app keeps the ROM and the saves there.",
@@ -332,6 +379,30 @@ public class MainActivity extends Activity {
                       : !ready ? text("To play, add your ROM first (above).", "Para jugar, añade primero tu ROM (arriba).")
                                : text("To play, choose above how you want to see the game: Classic or Enhanced.",
                                       "Para jugar, elige arriba cómo quieres ver el juego: Clásico o Mejorado."));
+    }
+
+    private static String gameLanguageName(File file) {
+        try (InputStream in = new FileInputStream(file)) {
+            String code = "" + (char) in.read() + (char) in.read();
+            int next = in.read();
+            if (next == '\r') {
+                if (in.read() != '\n') return "";
+                next = in.read();
+            } else if (next == '\n') {
+                next = in.read();
+            }
+            if (next != -1) return "";
+            switch (code) {
+                case "en": return "English";
+                case "fr": return "Français";
+                case "de": return "Deutsch";
+                case "it": return "Italiano";
+                case "es": return "Español";
+                default: return "";
+            }
+        } catch (java.io.IOException unavailable) {
+            return "";
+        }
     }
 
     /** One ROM job on the worker; the screen is refreshed when it ends. */
@@ -397,29 +468,29 @@ public class MainActivity extends Activity {
         return code.toString();
     }
 
-    /** Copies a stream to rom.gba if it is a ROM (`supported`: only the supported cartridge), and remembers it. */
+    /** Validates a separate temporary copy before atomically replacing the playable ROM. */
     private Rom store(InputStream in, boolean supported) throws Exception {
-        File target = new File(folder(), "rom.gba"), partial = new File(folder(), "rom.gba.part");
-        Rom rom;
-        try {
-            OutputStream out = new FileOutputStream(partial);
-            try {
-                rom = examine(in, out);
-            } finally {
-                out.close();
-                in.close();
+        File partial = null;
+        try (InputStream source = in) {
+            File directory = folder();
+            if (directory == null)
+                throw new java.io.IOException("Game storage unavailable");
+            File target = new File(directory, "rom.gba");
+            partial = File.createTempFile("rom-", ".part", directory);
+            Rom rom;
+            try (FileOutputStream out = new FileOutputStream(partial)) {
+                rom = examine(source, out);
+                if (rom.kind >= (supported ? MODIFIED : OTHER_VERSION))
+                    out.getFD().sync();
             }
             if (rom.kind < (supported ? MODIFIED : OTHER_VERSION))
                 return rom;
-            if (!partial.renameTo(target)) {
-                target.delete();
-                if (!partial.renameTo(target))
-                    throw new java.io.IOException("rename");
-            }
+            Os.rename(partial.getAbsolutePath(), target.getAbsolutePath());
             remember(target, rom);
             return rom;
         } finally {
-            partial.delete();
+            if (partial != null)
+                partial.delete();
         }
     }
 
@@ -458,15 +529,21 @@ public class MainActivity extends Activity {
         } catch (Exception error) {
             // not on this device
         }
-        File folder = folder();
-        if (folder != null)
-            list.add(folder);                               // Android/data/PACKAGE/files
+        for (File directory : getExternalFilesDirs(null))
+            if (directory != null)
+                list.add(directory);
         return list;
     }
 
     /** Where a .gba file is looked for, in order. Folders this app may not read simply list nothing. */
     private List<File> places() {
         List<File> list = ownFolders();
+        for (File directory : new ArrayList<>(list)) {
+            File[] children = directory.listFiles(File::isDirectory);
+            if (children != null)
+                for (File child : children)
+                    list.add(child);
+        }
         File folder = folder();
         if (folder != null && folder.getParentFile() != null)
             list.add(folder.getParentFile());
@@ -519,12 +596,27 @@ public class MainActivity extends Activity {
             File target = new File(folder, "rom.gba");
             try {
                 if (target.isFile()) {          // put there by hand, or stored by an earlier version of the app
-                    Rom rom = examine(new FileInputStream(target), null);
+                    Rom rom;
+                    try (InputStream in = new FileInputStream(target)) {
+                        rom = examine(in, null);
+                    }
                     if (rom.kind >= OTHER_VERSION) {
                         remember(target, rom);
                         return;
                     }
                     refuse("rom.gba", rom);
+                }
+                SharedPreferences saved = getPreferences(MODE_PRIVATE);
+                String savedUri = saved.getString("rom_uri", "");
+                if (!savedUri.isEmpty() && restoreRom(Uri.parse(savedUri)))
+                    return;
+                String savedPath = saved.getString("rom_source_file", "");
+                if (!savedPath.isEmpty()) {
+                    File original = new File(savedPath);
+                    if (!original.equals(target) && looksSupported(original)) {
+                        if (store(new FileInputStream(original), true).kind >= MODIFIED)
+                            return;
+                    }
                 }
                 for (File place : places()) {
                     File[] files = place.listFiles();
@@ -535,6 +627,8 @@ public class MainActivity extends Activity {
                             continue;
                         Log.i(TAG, "ROM: candidate " + file);
                         if (store(new FileInputStream(file), true).kind >= MODIFIED) {
+                            forgetDocument(null);
+                            saved.edit().putString("rom_source_file", file.getAbsolutePath()).apply();
                             say("Found \"" + file.getName() + "\" in " + shown(place) + " and copied it into the app. You can delete that file if you want.",
                                 "Se encontró \"" + file.getName() + "\" en " + shown(place) + " y se copió a la app. Puedes borrar ese archivo si quieres.", false);
                             return;
@@ -568,9 +662,14 @@ public class MainActivity extends Activity {
         Intent open = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         open.addCategory(Intent.CATEGORY_OPENABLE);
         open.setType("*/*");                    // .gba has no type of its own
-        if (Build.VERSION.SDK_INT >= 26)        // start in Download, where the file usually is
-            open.putExtra(DocumentsContract.EXTRA_INITIAL_URI,
-                          DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + Environment.DIRECTORY_DOWNLOADS));
+        open.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+        if (Build.VERSION.SDK_INT >= 26) {
+            String previous = getPreferences(MODE_PRIVATE).getString("rom_uri", "");
+            Uri initial = previous.isEmpty()
+                ? DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", "primary:" + Environment.DIRECTORY_DOWNLOADS)
+                : Uri.parse(previous);
+            open.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+        }
         try {
             startActivityForResult(open, PICK_ROM);
             return;
@@ -591,13 +690,9 @@ public class MainActivity extends Activity {
 
     private String nameOf(Uri uri) {
         String name = null;
-        try {
-            Cursor cursor = getContentResolver().query(uri, new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null);
-            if (cursor != null) {
-                if (cursor.moveToFirst())
-                    name = cursor.getString(0);
-                cursor.close();
-            }
+        try (Cursor cursor = getContentResolver().query(uri, new String[] { OpenableColumns.DISPLAY_NAME }, null, null, null)) {
+            if (cursor != null && cursor.moveToFirst())
+                name = cursor.getString(0);
         } catch (Exception error) {
             // a provider without names
         }
@@ -606,23 +701,67 @@ public class MainActivity extends Activity {
         return name == null ? "?" : name;
     }
 
+    private Rom readDocument(Uri source) throws Exception {
+        InputStream in = getContentResolver().openInputStream(source);
+        if (in == null)
+            throw new java.io.IOException("Document provider returned no stream");
+        return store(in, false);
+    }
+
+    private boolean restoreRom(Uri source) {
+        try {
+            if (readDocument(source).kind >= OTHER_VERSION) {
+                say("ROM restored from your previous selection.", "ROM recuperada de tu selección anterior.", false);
+                return true;
+            }
+        } catch (Exception error) {
+            Log.i(TAG, "Previously selected ROM is unavailable", error);
+        }
+        return false;
+    }
+
+    private void forgetDocument(Uri replacement) {
+        SharedPreferences saved = getPreferences(MODE_PRIVATE);
+        String previous = saved.getString("rom_uri", "");
+        if (replacement != null && previous.equals(replacement.toString()))
+            return;
+        saved.edit().remove("rom_uri").apply();
+        if (!previous.isEmpty()) {
+            try {
+                getContentResolver().releasePersistableUriPermission(Uri.parse(previous), Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (SecurityException unavailable) {
+                // The provider already revoked the permission.
+            }
+        }
+    }
+
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request != PICK_ROM || result != RESULT_OK || data == null || data.getData() == null || folder() == null)
             return;
         final Uri source = data.getData();
+        final int grants = data.getFlags();
         job(() -> {
             String name = nameOf(source);
             try {
-                InputStream in = getContentResolver().openInputStream(source);
-                if (in == null)
-                    throw new java.io.IOException("no stream");
-                Rom rom = store(in, false);
-                if (rom.kind >= OTHER_VERSION)
+                Rom rom = readDocument(source);
+                if (rom.kind >= OTHER_VERSION) {
+                    forgetDocument(source);
+                    SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit().remove("rom_source_file");
+                    if ((grants & Intent.FLAG_GRANT_READ_URI_PERMISSION) != 0) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(source, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                            edit.putString("rom_uri", source.toString());
+                        } catch (SecurityException transientGrant) {
+                            // The verified private copy works with transient-only providers too.
+                        }
+                    }
+                    edit.apply();
                     say("\"" + name + "\" was copied into the app.", "\"" + name + "\" se copió a la app.", false);
-                else
+                } else {
                     refuse(name, rom);
+                }
             } catch (Exception error) {
                 Log.w(TAG, "ROM: could not read " + source, error);
                 say("\"" + name + "\" could not be read or copied.", "No se pudo leer o copiar \"" + name + "\".", true);
@@ -636,7 +775,8 @@ public class MainActivity extends Activity {
         SharedPreferences.Editor edit = getPreferences(MODE_PRIVATE).edit();
         if (classic.isChecked() || enhanced.isChecked())
             edit.putString("mode", classic.isChecked() ? "classic" : "enhanced");
-        edit.putString("border", border.getText().toString()).putBoolean("online", online.isChecked())
+        edit.putString("border", border.getText().toString()).putBoolean("custom_server", customServer.isChecked())
+            .putBoolean("direct_room", directRoom.isChecked())
             .putString("room", room.getText().toString())
             .putString("server", server.getText().toString()).apply();
     }
@@ -656,10 +796,17 @@ public class MainActivity extends Activity {
                 env.println("SS_BORDER=" + border.getText().toString().trim());
                 // the border's look is not set here: the game's options menu chooses it and keeps it (shiningsource.ini)
             }
-            if (online.isChecked()) {
-                env.println("SS_NET=" + server.getText().toString().trim());
-                env.println("SS_NET_ROOM=" + room.getText().toString().trim());
-                // no SS_NET_DELAY: the direct transport, as on the PC (a delay would select the older stepped one)
+            String endpoint = customServer.isChecked() ? server.getText().toString().trim() : DEFAULT_SERVER;
+            if (endpoint.isEmpty()) {
+                env.println("SS_NET_DEFERRED=0");
+            } else {
+                if (!endpoint.contains(":")) endpoint += ":47900";
+                env.println("SS_NET=" + endpoint);
+                String roomName = room.getText().toString().trim();
+                if (directRoom.isChecked() && !roomName.isEmpty())
+                    env.println("SS_NET_ROOM=" + roomName);
+                else
+                    env.println("SS_NET_DEFERRED=1");
             }
             env.close();
         } catch (Exception error) {

@@ -78,6 +78,8 @@ static SERVICE int b_getenv(uint32_t name, uint32_t out, uint32_t capacity)
     const char *value = SDL_getenv(PTR(name));
 #endif
     size_t length;
+    if (!value)
+        value = ss_plat_net_default_env(PTR(name));
     if (!value || !capacity) return -1;
     length = strlen(value);
     if (length >= capacity) length = capacity - 1;
@@ -97,6 +99,7 @@ static SERVICE void b_exit(int code)
     }
 #endif
     fflush(NULL);
+    ss_plat_net_send_farewell();
     _exit(code);                         /* SDL/Java threads still own process resources */
 }
 static SERVICE uint32_t b_stack_alloc(uint32_t size)

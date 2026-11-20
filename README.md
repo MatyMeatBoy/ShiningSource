@@ -54,6 +54,11 @@ With a release that includes `recomplauncher.json`, you can also install
 through RecompLauncher on Windows or Linux. Choose your European `.gba` in
 Easy Setup. Display and audio settings are available on the game's page.
 
+**0.9.2 (Windows, Android and Linux)** adds in-game co-op rooms, an updated
+Game Link screen, redesigned Windows and Android launchers, Wide Pro artwork,
+GameCube adapter support and fixes to the port's equipment and link handling.
+See the [release notes](docs/RELEASE_0.9.2.md).
+
 **0.9 (Windows, Android and Linux)** releases cancelled Archer arrows and
 preserves enemy deaths received during initialization in online co-op. Windows
 and Linux add RecompLauncher setup and settings. Online rules remain 7.
@@ -147,9 +152,9 @@ display stays at the left edge.*
 ![Video settings](docs/img/launcher-video.png)
 
 ### Online, 2 to 4 players
-- The game's own MULTIPLAYER MODE over the internet, through a small relay
-  (`relay/`, one UDP port; a public one is the default). Same room name for
-  everybody, then MULTIPLAYER MODE in the game.
+- Open **Multiplayer** from the title to create a room or join with the host's
+  code. ShiningSource Server uses the public relay by default. The launcher’s
+  Online tab also supports a direct connection to a custom relay address.
 - Built around what the game's link code really does (see
   [GBANoCable, chapter 8](https://github.com/MatyMeatBoy/GBANoCable/blob/main/docs/08-decomp-to-native-port.md)):
   each player's state is handed over the moment it arrives, nobody waits for a
@@ -235,10 +240,29 @@ Keyboard: arrows, `X` = A, `Z` = B, `C` = L, `V` = R, `Enter` = Start, right
 port's options in the game. A controller works when plugged in. All of it can
 be changed in the launcher.
 
+**GameCube.** The GameCube profile maps the physical A and B buttons to GBA A
+and B, Z to Select, and the L/R clicks to the GBA shoulders. Both the D-pad and
+main stick move the character. If an adapter in PC mode exposes only analog
+triggers, a firm pull acts as a click. Recognized GameCube adapters select this
+profile automatically. For a compatible adapter that SDL reports as a generic
+pad, choose GameCube under Controls and remap any buttons that differ.
+
+On Windows, the original Nintendo WUP-028 and compatible adapters in Wii U
+mode require a WinUSB-compatible driver and the SDL3 package with libusb.
+An adapter already working in another program may be held open by it. The
+[Dolphin adapter guide](https://dolphin-emu.org/docs/guides/how-use-official-gc-controller-adapter-wii-u/)
+explains Windows driver setup.
+
 ## Building (developers)
 
 Requirements: Python 3, git, [llvm-mingw](https://github.com/mstorsjo/llvm-mingw)
 (`SHININGSOURCE_LLVM_MINGW`) and SDL3 development files (`SHININGSOURCE_SDL3`).
+
+For a Windows build with native Nintendo adapter support, run
+`python tools/build_gamecube_sdl.py --sdl-source PATH` with the SDL 3.4.18
+source, CMake and Ninja. Set `SHININGSOURCE_GAMECUBE_SDL` to the output directory
+when building the host, building the launcher and packaging the Windows release.
+The regular SDL paths and builds continue to work with the standard runtime.
 
 ```sh
 git clone --recurse-submodules https://github.com/MatyMeatBoy/ShiningSource

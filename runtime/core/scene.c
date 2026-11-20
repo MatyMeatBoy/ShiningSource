@@ -26,8 +26,9 @@
  * menu, a name), and nothing is pressed after the lock went off, so no press reaches the game that follows.
  *
  * Alone: Start during a scene asks "skip?"; Start again does it, B or three seconds cancel.
- * Online: Start is a vote. The scene is skipped when every player in the room has voted, and all of them start
- * at the same frame of the shared timeline (core/netlink.c), so the session stays in step. B withdraws the vote.
+ * Online: Start opens a 30-second vote. Each player can open one vote in a scene. Start or B cancels your own
+ * vote, and B withdraws your yes from someone else's. Every player must agree, and all start at the same frame
+ * of the shared timeline (core/netlink.c). A room with an older client uses its original yes/no voting rules.
  * Nothing is run fast online: the game counts its waits for the other players in frames. The introduction is
  * ended by the game's own exit. A story sequence is told by every machine at once, so it is shortened on all of
  * them from the same frame: the timed windows stop waiting (games/ss2/port/patches.json asks ss_skip_talk()),
@@ -40,6 +41,7 @@
  *        (SS_TEST_TALK_KIND=2: a timed window, then one that A dismisses, and the control back at once).
  */
 #include "shiningsource/runtime.h"
+#include "shiningsource/language.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +58,12 @@ void sub_08086860(void);        /* TaskPlayStoryIntroduction */
 void sub_08087A5C(void);        /* TaskDisplayCenteredSceneMessage */
 void sub_080887D4(void);        /* TaskPlayScriptedSpriteRouteSequence */
 void sub_0805E0C4(void);        /* TaskDialogueScriptWindow */
+void sub_0800232C(void);        /* TaskLanguageSelection, also the startup logo */
+void sub_08002694(void);        /* TaskTitleModeSelection */
+void sub_08002B70(void);        /* TaskSelectSavedCharacter, still present during character setup */
+void sub_0807A5D4(void);        /* TaskCharacterStatAndSkillAllocationMenu */
+void sub_0807B7B4(void);        /* TaskInventoryMenu */
+void sub_08082BB0(void);        /* TaskItemCollectionInteractionMenu, shared by stores */
 
 /* Is a story-telling task in the scheduler's list? Returns which kind (1 introduction, 2 message, 3 sprite sequence). (struct Task: next at +0, entry at +0x0C, see sched.c) */
 int ss_scene_active(void)
@@ -78,6 +86,48 @@ int ss_scene_active(void)
         task = *(const uint32_t *)(uintptr_t)task;
     }
     return 0;
+}
+
+int ss_frontend_picture(void)
+{
+    uint32_t task = *(const uint32_t *)(uintptr_t)0x03001240u;
+    uint16_t display = *(const uint16_t *)(uintptr_t)SS_IO;
+    int result = 0;
+    if (display & 0x80)          /* forced blank fills the whole picture already */
+        return 0;
+    /* The three drawers share this task record and the manager slot directly above it. */
+    const uint32_t *menu = (const uint32_t *)(uintptr_t)0x03006450u;
+    uint32_t manager = *(const uint32_t *)(uintptr_t)0x03006440u;
+    if (menu[1] && manager >= SS_EWRAM && manager <= SS_EWRAM + 0x40000 - sizeof(uint32_t) && !(manager & 3)) {
+        uint32_t entry = menu[3];
+        int style = 0;
+        if (entry == (uint32_t)(uintptr_t)sub_0807A5D4 || entry == (uint32_t)(uintptr_t)sub_0807B7B4)
+            style = SS_PRESENT_WIDE_MARBLE;
+        else if (entry == (uint32_t)(uintptr_t)sub_08082BB0)
+            style = SS_PRESENT_WIDE_SHOP;
+        if (style) {
+            int has_bg = (display & 0x0800) && *(const uint16_t *)(uintptr_t)(SS_IO + 0x0e) == 0x1f03;
+            return has_bg ? style : SS_PRESENT_WIDE_TRANSITION;
+        }
+    }
+    for (int guard = 0; guard < 64; guard++) {
+        if (!((task >= SS_EWRAM && task <= SS_EWRAM + 0x40000 - 0x18) ||
+              (task >= SS_IWRAM && task <= SS_IWRAM + 0x8000 - 0x18)) || (task & 3))
+            break;
+        const uint32_t *record = (const uint32_t *)(uintptr_t)task;
+        uint32_t entry = record[3];
+        if (entry == (uint32_t)(uintptr_t)sub_08086860)
+            return 0;           /* the story can run while the save menu is still waiting */
+        if (entry == (uint32_t)(uintptr_t)sub_0800232C)
+            result = display & 0x1000 ? SS_PRESENT_WIDE_MENU : SS_PRESENT_WIDE_BRAND;
+        else if (entry == (uint32_t)(uintptr_t)sub_08002B70)
+            result = SS_PRESENT_WIDE_MENU;
+        else if (!result && entry == (uint32_t)(uintptr_t)sub_08002694 && record[5] == 1 &&
+                 (display & 0x0200) && *(const uint16_t *)(uintptr_t)(SS_IO + 0x0a) == 0x1d00)
+            result = SS_PRESENT_WIDE_TITLE;    /* signal 0x14 means the title task is waiting off-screen */
+        task = record[0];
+    }
+    return result;
 }
 
 /* The introduction is running (alone or with its captions): the one scene the game itself can end at once. */
@@ -226,16 +276,6 @@ int ss_skip_talk(void)
     return hurried;
 }
 
-static int spanish(void)
-{
-    static int known = -1;
-    if (known < 0) {
-        const char *text = getenv("SS_LANG");
-        known = text && text[0] == 'e' && text[1] == 's';
-    }
-    return known;
-}
-
 static int enabled = -1;        /* not read yet */
 
 /* The platform's options menu turns the feature on and off while the game runs. Turned off in the middle of a
@@ -248,16 +288,17 @@ void ss_skip_set_enabled(int on)
 /* One frame. `held` are the buttons the player holds; the result are the buttons the game is given. */
 uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
 {
-    static int state = IDLE, timer, darkness, quiet, voted, kind, still;
+    static int state = IDLE, timer, darkness, quiet, kind, still;
     static int story;           /* a story sequence in dialogue windows is under way */
     static int gap;             /* frames of it without any window, while skipping */
     static int shown;           /* online, a sequence: the picture stays while it is hurried */
     static const char *why;     /* tests: what ended the skip */
     static unsigned long frames, test_at = ~0ul, began, ended, last_a;        /* tests: the frames run ahead, and the last press of A among them */
     static uint16_t previous;
-    static char line[48];
+    static char line[64];
     uint16_t pressed = (uint16_t)(held & ~previous), game = held;
-    int active = ss_scene_active(), online = ss_net_active(), have = 0, need = 0;
+    int active = ss_scene_active(), online = ss_net_active(), have = 0, need = 0, scope = 0, modern = 0;
+    struct ss_skip_ballot_view vote;
     struct talk talk;
 
     requested = 0;
@@ -269,40 +310,72 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         story = 0;              /* the player has the control again: the sequence is over */
     else if (talk.timed)
         story = 1;              /* the event shows a window nobody can dismiss: it tells the story */
-    if (online)
+    if (online) {
         active = intro_running();       /* online the introduction is the one scene task skipped: the game can end it itself */
+        scope = active ? active : story ? SEQUENCE : 0;   /* a question closes an offer, but it is still the same scene */
+    }
     if (!active && story && !talk.asks)
         active = SEQUENCE;      /* while a question waits there is nothing to skip: Start is the game's again */
 
     if (enabled < 0)
         enabled = !(getenv("SS_SKIP") && getenv("SS_SKIP")[0] == '0');       /* SS_SKIP=0 turns the feature off */
-    if (!enabled) {
-        view->darkness = 0; view->text = NULL; view->present = 1; view->mute = 0;
-        return held;
-    }
     if (test_at == ~0ul)
         test_at = getenv("SS_SKIP_AT") ? strtoul(getenv("SS_SKIP_AT"), NULL, 10) : 0;
-    frames++;
-    if (test_at && (frames == test_at || (frames == test_at + 2 && !online)))
-        pressed |= KEY_START;
-    previous = held;
+    if (enabled) {
+        frames++;
+        if (test_at && (frames == test_at || (frames == test_at + 2 && !online)))
+            pressed |= KEY_START;
+        previous = held;
+    }
     view->darkness = 0;
     view->text = NULL;
     view->present = 1;
     view->mute = 0;
+    if (online) {
+        int button = 0;
+        if (enabled && active && (state == IDLE || state == VOTING))
+            button = pressed & KEY_START ? 1 : pressed & KEY_B ? 2 : 0;
+        modern = ss_net_skip_ballot(scope, active, button, &vote);
+        if (modern && (state == IDLE || state == VOTING)) {
+            state = IDLE;
+            if (ss_net_skip_now() && active) {
+                state = FADE_OUT;
+                darkness = 0;
+            }
+        } else if (!enabled && state == VOTING) {
+            ss_net_vote(0);
+            state = IDLE;
+        }
+    }
+    if (!enabled && !(modern && state >= FADE_OUT))
+        return held;
     if (active)
         game &= (uint16_t)~KEY_START;           /* during a scene Start belongs to this, not to the game */
+    if (modern && vote.back_taken)
+        game &= (uint16_t)~KEY_B;
 
     switch (state) {
     case IDLE:
         if (online) {
+            if (modern) {
+                if (active && vote.have) {
+                    const char *hint = vote.committed ? ss_game_text("Accepted", "Accepté", "Angenommen", "Approvato", "Aprobado") :
+                                       vote.owns ? ss_game_text("Start: cancel", "Start: annuler", "Start: abbrechen", "Start: annulla", "Start: cancelar") :
+                                       vote.voted ? ss_game_text("B: withdraw", "B: retirer le vote", "B: Stimme zurück", "B: ritira il voto", "B: retirar voto") :
+                                                    ss_game_text("Start: vote", "Start: voter", "Start: abstimmen", "Start: vota", "Start: votar");
+                    snprintf(line, sizeof line, "%d/%d  %ds   %s", vote.have, vote.need, vote.seconds, hint);
+                    view->text = line;
+                    game &= (uint16_t)~KEY_B;
+                }
+                break;
+            }
             ss_net_votes(&have, &need);
             if (active && (pressed & KEY_START)) {
-                voted = 1;
                 ss_net_vote(1);
                 state = VOTING;
             } else if (active && have > 0) {
-                snprintf(line, sizeof line, spanish() ? "Saltar escena: %d/%d. Start = s\xC3\xAD" : "Skip scene: %d/%d. Start = yes", have, need);
+                snprintf(line, sizeof line, "%d/%d  %s", have, need,
+                         ss_game_text("Start: vote", "Start: voter", "Start: abstimmen", "Start: vota", "Start: votar"));
                 view->text = line;
             }
             if (ss_net_skip_now()) {            /* the others agreed while this player had not voted: cannot happen, but stay in step */
@@ -316,7 +389,8 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         break;
     case PROMPT:
         game &= (uint16_t)~(KEY_B | KEY_START);
-        view->text = spanish() ? "\xC2\xBFSaltar escena? Start = s\xC3\xAD  B = no" : "Skip scene? Start = yes  B = no";
+        view->text = ss_game_text("Start: skip  B: cancel", "Start: passer  B: annuler", "Start: überspringen  B: zurück",
+                                  "Start: salta  B: annulla", "Start: saltar  B: cancelar");
         if (!active) {
             state = IDLE;                       /* the scene ended, or asks something, while the player made up their mind */
         } else if (pressed & KEY_START) {
@@ -329,15 +403,14 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
     case VOTING:
         game &= (uint16_t)~(KEY_B | KEY_START);
         ss_net_votes(&have, &need);
-        snprintf(line, sizeof line, spanish() ? "Saltar: %d/%d pulsaron Start. B = no" : "Skip: %d/%d pressed Start. B = no", have, need);
+        snprintf(line, sizeof line, "%d/%d  %s", have, need,
+                 ss_game_text("B: withdraw", "B: retirer le vote", "B: Stimme zurück", "B: ritira il voto", "B: retirar voto"));
         view->text = line;
         if (ss_net_skip_now()) {
             state = FADE_OUT;
             darkness = 0;
-            voted = 0;
         } else if ((pressed & KEY_B) || !active || !online) {
             ss_net_vote(0);
-            voted = 0;
             state = IDLE;
         }
         break;
@@ -385,7 +458,7 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         view->darkness = shown ? 0 : 255;
         view->mute = !shown;
         view->present = shown || timer % 30 == 0;       /* a black frame now and then keeps the window answering */
-        view->text = spanish() ? "Saltando..." : "Skipping...";
+        view->text = ss_game_text("Skipping...", "Transition...", "Überspringen...", "Salto in corso...", "Saltando...");
         /* Online a player can reach, before the others, a point where the game waits for them (it shows that
          * itself). Nothing changes on the screen then: give the picture back instead of a dark wait. */
         if (online && !shown && (timer & 7) == 0) {
@@ -424,6 +497,5 @@ uint16_t ss_skip_update(uint16_t held, struct ss_skip_view *view)
         view->darkness = darkness;
         break;
     }
-    (void)voted;
     return game;
 }

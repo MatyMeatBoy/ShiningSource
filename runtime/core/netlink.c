@@ -24,7 +24,8 @@
  * It is raised at a frame of the timeline announced in advance; for that one frame nobody is given new blocks,
  * which the game takes as it takes a noisy cable. It is never lowered during a session: that would skip blocks.
  *
- * Environment: SS_NET=host:port (the relay), SS_NET_ROOM=name, SS_NET_DELAY=frames (fixed; automatic if unset or 0),
+ * Environment: SS_NET=host:port (the relay), SS_NET_ROOM=name for the explicit legacy path,
+ * SS_NET_DEFERRED=1 for the multiplayer room menu, SS_NET_DELAY=frames (fixed; automatic if unset or 0),
  * SS_NET_TIMEOUT=milliseconds of silence before a player is dropped (default 15000),
  * SS_NET_HOST_TIMEOUT=the same for the host (default 60000; setting SS_NET_TIMEOUT alone sets both),
  * SS_NET_AWAY=milliseconds this player waits for its own connection to come back (default 120000),
@@ -38,6 +39,7 @@
  * the session needs it, they meet in a room of their own).
  */
 #include "shiningsource/runtime.h"
+#include "skip_vote.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -75,7 +77,11 @@ struct stream {                 /* the blocks of one seat, by label */
     uint8_t block[RING][BLOCK];
     uint32_t heard;             /* time of the last packet */
     uint32_t acked;             /* next label that seat expects of my stream */
+    uint32_t roster_label;
+    struct ss_net_roster_entry roster;
     int vote;                   /* that player wants to skip the scene */
+    uint32_t vote_serial, vote_scene;  /* newer rooms: latest control for one particular ballot */
+    int vote_owner, vote_button;
     int raise, raise_seen;      /* how often it asked for a longer delay, and how much of that the host has answered */
     uint32_t skip_at;           /* the host's: label at which everybody skips, 0 if none */
     /* direct mode (see deliver_direct) */
@@ -98,6 +104,14 @@ static int configured = -1, gather, seat = -1, synced, delay = 4, timeout_ms = 1
 static uint32_t room, token, epoch, farewell_epoch, frame_label, own_first, connected, available, last_hello, last_send;
 static struct stream streams[SEATS];
 static void start_session(void);
+static void close_room(void);
+static enum ss_net_room_status room_status;
+static int room_create, room_cancel_pending;
+static uint32_t room_opened_at, room_code_serial;
+static char pending_room_code[SS_ROOM_CODE_CAPACITY];
+static struct ss_net_roster_entry own_roster = { SS_ROSTER_EMPTY, -1, -1, 1 };
+static int roster_host_start;
+enum { ROSTER_SILENT_MS = 2000, ROSTER_CLASS_MAX = 8, ROSTER_PALETTE_MAX = 30 };
 
 /* What happens to the session, in words: to the console and, with the moment it happened, to shiningsource_net.log
  * beside the program. A game started from the launcher has no console, and "a companion vanished" can only be
@@ -147,11 +161,17 @@ static int my_vote;
 static int auto_delay = 1, stall_frames, raise_request, raise_seen_own, new_delay, quiet_windows;
 static uint32_t change_at, change_done, last_target;
 static uint32_t skip_at, skip_done;
+static struct skip_ballot ballot;   /* maintained by the host, mirrored by the other seats */
+static uint32_t skip_serial, skip_seen, skip_scene_done;
+static uint32_t vote_scene;
+static int vote_owner, vote_button, skip_legacy, skip_modern, vote_seconds;
+static unsigned local_scene, skip_local_scene;
+static int local_scene_kind;
 static int session_open;                /* the game's link task has started a session that was not left */
 static uint32_t leaving_since;          /* when the game's link task ended, 0 if it runs */
 static const void *last_sendp;         /* the game's send block, while its link task runs */
 static uint32_t flushed_label;          /* the label whose block went out at the end of its frame, 0 if none */
-enum { TRAILER = 12, TRAILER_MARK = 0xA5 };
+enum { TRAILER = 12, TRAILER_MARK = 0xA5, SKIP_FOOTER = 16, SKIP_CAPABILITY = 0x80 };
 enum { DIRECT_HOLD = 30 };
 static int direct = 1;          /* the default transport; a fixed SS_NET_DELAY selects the stepped one */
 /* my stream of entries, by number. The host's is the session's one order of all messages: kept until every
@@ -216,9 +236,78 @@ static uint32_t fnv(uint32_t hash, const void *data, int size)
     return hash;
 }
 
+static const char *net_endpoint(void)
+{
+    const char *deferred = getenv("SS_NET_DEFERRED");
+    const char *endpoint = getenv("SS_NET");
+    if (endpoint)
+        return endpoint;
+    if (deferred ? deferred[0] == '1' : !getenv("SS_FRAMES"))
+        return getenv("SS_NET_DEFAULT");
+    return NULL;
+}
+
+int ss_net_room_ui_enabled(void)
+{
+    const char *deferred = getenv("SS_NET_DEFERRED");
+    const char *endpoint = net_endpoint();
+    return endpoint && *endpoint && (deferred ? deferred[0] == '1' : !getenv("SS_NET"));
+}
+
+void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY])
+{
+    static const char alphabet[] = SS_ROOM_CODE_ALPHABET;
+    const char *configured_token = getenv("SS_NET_TOKEN");
+    uint32_t seed = configured_token ? (uint32_t)strtoul(configured_token, NULL, 10) : 0;
+    uint32_t now = ss_plat_ticks_ms();
+    uint32_t first = fnv(seed ^ ++room_code_serial, &now, sizeof now);
+    uint32_t second = fnv(first, &seed, sizeof seed);
+    int i;
+    for (i = 0; i < SS_ROOM_CODE_LENGTH / 2; ++i) {
+        code[i] = alphabet[(first >> (5 * i)) & 31];
+        code[i + SS_ROOM_CODE_LENGTH / 2] = alphabet[(second >> (5 * i)) & 31];
+    }
+    code[SS_ROOM_CODE_LENGTH] = 0;
+}
+
+int ss_net_room_begin(const char *code, int create)
+{
+    int i;
+    if (!code || !ss_net_room_ui_enabled() || room_cancel_pending ||
+        (room_status != SS_ROOM_IDLE && room_status != SS_ROOM_UNAVAILABLE && room_status != SS_ROOM_ACTIVE))
+        return 0;
+    for (i = 0; i < SS_ROOM_CODE_LENGTH; ++i) {
+        const char *allowed = SS_ROOM_CODE_ALPHABET;
+        unsigned char ch = (unsigned char)code[i];
+        if (ch >= 'a' && ch <= 'z')
+            ch -= 'a' - 'A';
+        while (*allowed && *allowed != ch)
+            ++allowed;
+        if (!*allowed)
+            return 0;
+        pending_room_code[i] = (char)ch;
+    }
+    if (code[i])
+        return 0;
+    pending_room_code[i] = 0;
+    room_create = create != 0;
+    room_status = SS_ROOM_CONNECTING;
+    return 1;
+}
+
+int ss_net_room_status(void) { return room_status; }
+
+void ss_net_room_cancel(void)
+{
+    if (room_status == SS_ROOM_IDLE)
+        return;
+    room_status = SS_ROOM_IDLE;
+    room_cancel_pending = 1;
+}
+
 static int configure(void)
 {
-    const char *text = getenv("SS_NET");
+    const char *text = net_endpoint();
     char host[128];
     int port = 47900, i;
 
@@ -230,7 +319,9 @@ static int configure(void)
     host[i] = 0;
     if (text[i] == ':')
         port = (int)strtoul(text + i + 1, NULL, 10);
-    if (getenv("SS_NET_ROOM"))
+    if (room_status == SS_ROOM_CONNECTING)
+        snprintf(room_name, sizeof room_name, "%s", pending_room_code);
+    else if (getenv("SS_NET_ROOM"))
         snprintf(room_name, sizeof room_name, "%s", getenv("SS_NET_ROOM"));
     delay = getenv("SS_NET_DELAY") ? (int)strtoul(getenv("SS_NET_DELAY"), NULL, 10) : 0;
     auto_delay = delay <= 0;
@@ -268,7 +359,8 @@ static int configure(void)
          * players of such a session all have to know how, so they meet in a room of their own; without the
          * setting the room is the one it always was and nothing below is ever reached. Only with the direct
          * transport (on the stepped one a newcomer has no place on the timeline of the game in progress). */
-        join_mode = direct && getenv("SS_NET_JOIN") && getenv("SS_NET_JOIN")[0] == '1';
+        join_mode = direct && room_status != SS_ROOM_CONNECTING &&
+                    getenv("SS_NET_JOIN") && getenv("SS_NET_JOIN")[0] == '1';
         if (join_mode)
             room = fnv(room, "join", 4);
     }
@@ -290,7 +382,7 @@ static void header(uint8_t *packet, int type, int count, uint32_t first_label)
     wr32(packet, MAGIC);
     packet[4] = (uint8_t)type;
     packet[5] = (uint8_t)seat;
-    packet[6] = (uint8_t)(delay | (join_role == JR_PARKED ? JOIN_PARKED : 0));
+    packet[6] = (uint8_t)(delay | (join_role == JR_PARKED ? JOIN_PARKED : 0) | (type == T_DATA ? SKIP_CAPABILITY : 0));
     packet[7] = (uint8_t)count;
     wr32(packet + 8, room);
     wr32(packet + 12, token);
@@ -311,6 +403,37 @@ static void send_hello(void)
     memcpy(packet + HEADER, room_name, strlen(room_name));
     ss_plat_net_send(packet, sizeof packet);
     last_hello = ss_plat_ticks_ms();
+}
+
+static void reserve_room_seat(int from)
+{
+    uint8_t packet[HEADER];
+    seat = from;
+    header(packet, T_END, 0, 0);
+    ss_plat_net_farewell(packet, HEADER);
+    farewell_epoch = epoch;
+}
+
+static void room_ready(void)
+{
+    start_session();
+    reserve_room_seat(seat);
+    room_status = SS_ROOM_READY;
+    session_open = 1;
+    net_say("net: seat %d of room '%s'\n", seat + 1, room_name);
+}
+
+static int room_host_has_started(const uint8_t *packet, int size, int count)
+{
+    /* Wait for a host block, since a relay's WELCOME only leases a seat. The
+     * latest GO block also closes the small gap before the stage becomes IN_GAME. */
+    const uint8_t *end_of_blocks = packet + HEADER + count * BLOCK;
+    const uint8_t *last_block = end_of_blocks - BLOCK;
+    const uint8_t *footer = packet + size - SKIP_FOOTER;
+    if (last_block[8] == 'G' && last_block[9] == 'O')
+        return 1;
+    return (packet[6] & SKIP_CAPABILITY) && size >= HEADER + count * BLOCK + TRAILER + MSG_HEAD + SKIP_FOOTER &&
+           end_of_blocks[0] == TRAILER_MARK && (footer[14] & 7) == SS_ROSTER_IN_GAME;
 }
 
 /* The message channel's part of a packet, written at `part` (see send_data and "messages" below): for every
@@ -350,6 +473,36 @@ static int message_part(uint8_t *part, int room, uint32_t first, uint32_t stop, 
     wr32(part + 2, first);
     *next = number;
     return size;
+}
+
+/* Append the capability footer after the declared message entries. Older clients ignore those
+ * extra bytes and still read the ordinary yes/no bit and the host's commit frame. */
+static void send_data_part(uint8_t *packet, int size, uint32_t first, uint32_t stop, uint32_t *next)
+{
+    uint8_t *footer;
+    size += message_part(packet + size, PACKET_MAX - size - SKIP_FOOTER, first, stop, next);
+    footer = packet + size;
+    memset(footer, 0, SKIP_FOOTER);
+    if (seat == 0) {
+        wr32(footer, ++skip_serial);
+        wr32(footer + 4, ballot.scene);
+        footer[8] = (uint8_t)ballot.members;
+        footer[9] = (uint8_t)ballot.owner;
+        footer[10] = (uint8_t)ballot.votes;
+        footer[11] = (uint8_t)ballot.spent;
+        footer[12] = (uint8_t)vote_seconds;
+        footer[13] = (uint8_t)skip_modern;
+    } else {
+        wr32(footer, skip_serial);
+        wr32(footer + 4, vote_scene);
+        footer[9] = (uint8_t)vote_owner;
+        footer[13] = (uint8_t)vote_button;
+    }
+    /* These two bytes were zero in the first skip-footer clients. Keep the
+     * size and capability bit so those clients continue reading all messages. */
+    footer[14] = (uint8_t)(own_roster.stage | ((own_roster.palette_id + 1) << 3));
+    footer[15] = (uint8_t)(own_roster.class_id + 1);
+    ss_plat_net_send(packet, size + SKIP_FOOTER);
 }
 
 /* Everything the others have not acknowledged, up to the block of the current frame. */
@@ -413,9 +566,9 @@ static void send_data(void)
             first = out_base;
         if (kept_up < first)
             kept_up = first;
-        ss_plat_net_send(packet, size + message_part(packet + size, PACKET_MAX - size, kept_up, out_next, &next));
+        send_data_part(packet, size, kept_up, out_next, &next);
         for (extra = 0; extra < 2 && first < kept_up; extra++, first = next) {
-            ss_plat_net_send(packet, size + message_part(packet + size, PACKET_MAX - size, first, kept_up, &next));
+            send_data_part(packet, size, first, kept_up, &next);
             if (next == first)
                 break;
         }
@@ -646,8 +799,12 @@ static void connection_check(uint32_t now)
 static void revive(int who, uint32_t first, uint32_t label)
 {
     struct stream *s = &streams[who];
+    struct ss_net_roster_entry roster = s->roster;
+    uint32_t roster_label = s->roster_label;
 
     memset(s, 0, sizeof *s);
+    s->roster = roster;
+    s->roster_label = roster_label;
     s->known = 1;
     s->epoch = away[who].epoch;
     s->first = first;
@@ -1446,6 +1603,53 @@ static void receive_messages(struct stream *s, int from, const uint8_t *part, in
     }
 }
 
+/* A legacy seat stays legacy for the whole session, even while disconnected and able to return. */
+static void receive_skip_footer(struct stream *s, int from, const uint8_t *footer, uint32_t commit)
+{
+    uint32_t serial = footer ? rd32(footer) : 0;
+    if (seat == 0) {
+        if (!footer) {
+            skip_legacy = 1;
+        } else if (serial > s->vote_serial) {
+            s->vote_serial = serial;
+            s->vote_scene = rd32(footer + 4);
+            s->vote_owner = footer[9];
+            s->vote_button = footer[13];
+        }
+    } else if (from == 0 && (!footer || serial > skip_seen)) {
+        if (footer) {
+            skip_seen = serial;
+            ballot.scene = rd32(footer + 4);
+            ballot.members = footer[8] & 15;
+            ballot.owner = footer[9] <= SEATS ? footer[9] : 0;
+            ballot.votes = footer[10] & ballot.members;
+            ballot.spent = footer[11] & 15;
+            vote_seconds = footer[12] <= SKIP_VOTE_MS / 1000 ? footer[12] : SKIP_VOTE_MS / 1000;
+        }
+        skip_modern = footer && footer[13] == 1;
+        if (commit > skip_done && commit != skip_at) {
+            skip_at = commit;
+            skip_local_scene = local_scene;
+        }
+    }
+}
+
+static void receive_roster(struct stream *s, const uint8_t *footer, uint32_t label)
+{
+    enum ss_net_roster_stage stage = footer ? footer[14] & 7 : SS_ROSTER_EMPTY;
+    if (s->roster_label && (int32_t)(label - s->roster_label) <= 0)
+        return;
+    s->roster_label = label;
+    s->roster = (struct ss_net_roster_entry){ SS_ROSTER_CONNECTED, -1, -1, 0 };
+    if (stage >= SS_ROSTER_CONNECTED && stage <= SS_ROSTER_IN_GAME)
+        s->roster.stage = stage;
+    if ((stage == SS_ROSTER_READY || stage == SS_ROSTER_IN_GAME) &&
+        footer[15] > 0 && footer[15] <= ROSTER_CLASS_MAX + 1) {
+        s->roster.class_id = footer[15] - 1;
+        s->roster.palette_id = (footer[14] >> 3) - 1;
+    }
+}
+
 static void receive(void)
 {
     uint8_t packet[PACKET_MAX + 64];
@@ -1460,6 +1664,20 @@ static void receive(void)
             continue;
         relay_heard = ss_plat_ticks_ms();       /* whatever it is, the connection is there (connection_check) */
         if (type == T_WELCOME) {
+            if (room_status == SS_ROOM_CONNECTING && from < SEATS) {
+                seat = from;
+                if ((room_create && from != 0) || (!room_create && (from == 0 || !(count & 1)))) {
+                    close_room();
+                    room_status = SS_ROOM_UNAVAILABLE;
+                    return;
+                }
+                if (room_create) {
+                    room_ready();
+                    return;
+                }
+                reserve_room_seat(from);
+                continue;
+            }
             if (from < SEATS && seat != from) {
                 seat = from;
                 net_say("net: seat %d of room '%s'\n", seat + 1, room_name);
@@ -1467,7 +1685,21 @@ static void receive(void)
             }
             continue;
         }
+        if (room_status == SS_ROOM_CONNECTING) {
+            if (seat <= 0 || from != 0 || type != T_DATA || count == 0 || size < HEADER + count * BLOCK)
+                continue;
+            if (room_host_has_started(packet, size, count)) {
+                close_room();
+                room_status = SS_ROOM_ACTIVE;
+                return;
+            }
+            room_ready();
+        }
         if (from >= SEATS || from == seat || seat < 0)
+            continue;
+        /* A relay seat alone does not put a new player into the game's running session. A returning
+         * participant keeps its connected bit and still has its stream checked against away[]. */
+        if (direct && !join_mode && (lobby_done || in_play) && !(connected >> from & 1))
             continue;
         if (gone >> from & 1) {
             /* It left the game; whoever sits there now is not part of it. Unless it is the stream that seat had
@@ -1507,6 +1739,8 @@ static void receive(void)
             s->next = s->floor;
             s->cursor = 0;
             s->has_last = s->repeats = 0;
+            s->roster_label = 0;
+            s->roster = (struct ss_net_roster_entry){ SS_ROSTER_CONNECTED, -1, -1, 0 };
             s->msg_start = s->msg_acked = out_next;     /* it was not here for what I sent before */
             if (join_mode && (in_play || lobby_done) && (!(connected >> from & 1) || (gone >> from & 1))) {
                 /* a program started while the game is in progress: a candidate until the host lets it in
@@ -1537,15 +1771,22 @@ static void receive(void)
         }
         if (size >= HEADER + count * BLOCK + TRAILER && packet[HEADER + count * BLOCK] == TRAILER_MARK) {
             const uint8_t *trailer = packet + HEADER + count * BLOCK;
+            int message_size = size - (HEADER + count * BLOCK + TRAILER);
+            const uint8_t *footer = NULL;
+            if ((packet[6] & SKIP_CAPABILITY) && message_size >= MSG_HEAD + SKIP_FOOTER) {
+                message_size -= SKIP_FOOTER;
+                footer = trailer + TRAILER + message_size;
+            }
             s->vote = trailer[1] != 0;
             s->raise = trailer[2];
             if (from == 0 && trailer[3] && rd32(trailer + 8) > change_done) {
                 new_delay = trailer[3];
                 change_at = rd32(trailer + 8);
             }
-            if (from == 0 && rd32(trailer + 4) > skip_done)
-                skip_at = rd32(trailer + 4);
-            receive_messages(s, from, trailer + TRAILER, size - (HEADER + count * BLOCK + TRAILER),
+            receive_skip_footer(s, from, footer, rd32(trailer + 4));
+            if (count)
+                receive_roster(s, footer, rd32(packet + 24) + count - 1);
+            receive_messages(s, from, trailer + TRAILER, message_size,
                              rd32(packet + 44 + seat * 4) == epoch);
         }
         first = rd32(packet + 24);
@@ -1601,8 +1842,19 @@ static int due(int who, uint32_t label)
 static void start_session(void)
 {
     int i;
-    for (i = 0; i < SEATS; i++)
+    roster_host_start = 0;
+    for (i = 0; i < SEATS; i++) {
         streams[i].acked = 0;
+        streams[i].roster_label = 0;
+        streams[i].roster = (struct ss_net_roster_entry){ SS_ROSTER_CONNECTED, -1, -1, 0 };
+        streams[i].vote_serial = 0;
+        streams[i].vote_button = 0;
+    }
+    memset(&ballot, 0, sizeof ballot);
+    skip_at = skip_done = skip_serial = skip_seen = skip_scene_done = vote_scene = 0;
+    skip_legacy = skip_modern = vote_owner = vote_button = vote_seconds = my_vote = 0;
+    local_scene = skip_local_scene = 0;
+    local_scene_kind = 0;
     epoch = fnv(epoch + 1, &token, 4) | 1;
     msg_reset();
     connected = available = 0;
@@ -1612,16 +1864,117 @@ static void start_session(void)
     synced = seat == 0;
 }
 
-static void leave(void)
+static void leave(int release_reservation)
 {
     uint8_t packet[HEADER];
-    if (configured == 1 && synced) {
+    if (configured == 1 && seat >= 0 && (synced || release_reservation)) {
         header(packet, T_END, 0, 0);
         ss_plat_net_send(packet, HEADER);
         ss_plat_net_send(packet, HEADER);
     }
     synced = 0;
     ss_plat_net_farewell(NULL, 0);
+}
+
+static void close_room(void)
+{
+    if (configured == 1) {
+        leave(1);
+        ss_plat_net_open(NULL, 0);
+    }
+    configured = -1;
+    seat = -1;
+    session_open = 0;
+    last_sendp = NULL;
+    leaving_since = relay_heard = offline_since = 0;
+    memset(streams, 0, sizeof streams);
+}
+
+static void poll_room(void)
+{
+    uint32_t now;
+    if (room_cancel_pending) {
+        room_cancel_pending = 0;
+        close_room();
+    }
+    if (room_status != SS_ROOM_CONNECTING)
+        return;
+    if (configured != 1) {
+        if (!configure()) {
+            room_status = SS_ROOM_UNAVAILABLE;
+            return;
+        }
+        room_opened_at = ss_plat_ticks_ms();
+        send_hello();
+    }
+    receive();
+    if (room_status != SS_ROOM_CONNECTING)
+        return;
+    now = ss_plat_ticks_ms();
+    if (now - room_opened_at >= 5000) {
+        close_room();
+        room_status = SS_ROOM_UNAVAILABLE;
+    } else if (now - last_hello > 250) {
+        send_hello();
+    }
+}
+
+void ss_net_roster_set_stage(enum ss_net_roster_stage stage)
+{
+    own_roster.stage = stage;
+    if (stage != SS_ROSTER_READY)
+        roster_host_start = 0;
+    if (stage < SS_ROSTER_READY)
+        ss_net_roster_set_character(-1, -1);
+}
+
+void ss_net_roster_set_character(int class_id, int palette_id)
+{
+    own_roster.class_id = class_id >= 0 && class_id <= ROSTER_CLASS_MAX ? class_id : -1;
+    own_roster.palette_id = own_roster.class_id >= 0 && palette_id >= 0 && palette_id <= ROSTER_PALETTE_MAX
+                            ? palette_id : -1;
+}
+
+void ss_net_roster_set_host_start(int enabled)
+{
+    roster_host_start = enabled;
+}
+
+int ss_net_roster_lobby(void)
+{
+    return configured == 1 && own_roster.stage == SS_ROSTER_READY;
+}
+
+int ss_net_roster_can_start(void)
+{
+    return ss_net_roster_lobby() && seat == 0 && roster_host_start && !offline_since;
+}
+
+int ss_net_roster(struct ss_net_roster_entry entries[4])
+{
+    const uint32_t now = ss_plat_ticks_ms();
+    int count = 0;
+    for (int i = 0; i < SEATS; i++)
+        entries[i] = (struct ss_net_roster_entry){ SS_ROSTER_EMPTY, -1, -1, 0 };
+    if (configured != 1 || seat < 0 || own_roster.stage < SS_ROSTER_SELECTING_SAVE ||
+        own_roster.stage > SS_ROSTER_READY)
+        return 0;
+    for (int i = 0; i < SEATS; i++) {
+        const struct stream *s = &streams[i];
+        if (i == seat) {
+            entries[i] = own_roster;
+            if (offline_since)
+                entries[i].stage = SS_ROSTER_RECONNECTING;
+        } else if (s->known || ((gone >> i & 1) && away[i].epoch)) {
+            entries[i] = s->roster;
+            if (!s->known || (!offline_since && now - s->heard > ROSTER_SILENT_MS))
+                entries[i].stage = SS_ROSTER_RECONNECTING;
+        } else {
+            continue;
+        }
+        count++;
+    }
+    return count;
 }
 
 /* ---- skip scene, online: every player votes, the host names the frame ---- */
@@ -1653,20 +2006,85 @@ void ss_net_votes(int *have, int *need)
         }
 }
 
+int ss_net_skip_ballot(int kind, int open, int button, struct ss_skip_ballot_view *view)
+{
+    unsigned members, bit;
+    uint32_t now;
+    int back_taken = open && button == SKIP_BACK && ballot.owner;
+    if (!ss_net_active())
+        return 0;
+    if (kind != local_scene_kind) {
+        local_scene_kind = kind;
+        local_scene++;
+    }
+    bit = 1u << seat;
+    if (seat == 0) {
+        int i;
+        skip_modern = !skip_legacy;
+        if (!skip_modern)
+            return 0;
+        my_vote = 0;             /* the legacy yes/no bit cannot carry any strict-room control */
+        members = bit;
+        for (i = 1; i < SEATS; ++i)
+            if (streams[i].known && !(candidate >> i & 1))
+                members |= 1u << i;
+        now = ss_plat_ticks_ms();
+        skip_ballot_update(&ballot, kind, open, members, now);
+        if (button && !skip_at && skip_scene_done != ballot.scene)
+            skip_ballot_press(&ballot, ballot.scene, ballot.owner, 0, button, now);
+        for (i = 1; i < SEATS; ++i) {
+            struct stream *s = &streams[i];
+            if ((s->vote_button == SKIP_START || s->vote_button == SKIP_BACK) &&
+                !skip_at && skip_scene_done != ballot.scene)
+                skip_ballot_press(&ballot, s->vote_scene, (unsigned)s->vote_owner, i, s->vote_button, now);
+            s->vote_button = 0;
+        }
+        vote_seconds = ballot.owner ? (int)((ballot.expires - now + 999u) / 1000u) : 0;
+    } else if (skip_modern) {
+        my_vote = 0;
+        if (open && !skip_at && ballot.scene && (ballot.members & bit) &&
+            ((ballot.owner && button) || (button == SKIP_START && !(ballot.spent & bit)))) {
+            vote_scene = ballot.scene;
+            vote_owner = (int)ballot.owner;
+            vote_button = button;
+            ++skip_serial;
+        }
+    } else {
+        return 0;
+    }
+    *view = (struct ss_skip_ballot_view){ .seconds = vote_seconds, .owns = ballot.owner == (unsigned)(seat + 1),
+        .voted = (ballot.votes & bit) != 0, .committed = skip_at != 0, .back_taken = back_taken };
+    for (unsigned i = 1; i < (1u << SEATS); i <<= 1) {
+        view->have += (ballot.votes & i) != 0;
+        view->need += (ballot.members & i) != 0;
+    }
+    return 1;
+}
+
 /* 1 once, on the frame everybody starts skipping. The host picks a frame far enough ahead for all to learn it. */
 int ss_net_skip_now(void)
 {
-    int have, need;
+    int ready;
     if (!ss_net_active())
         return 0;
-    ss_net_votes(&have, &need);
-    if (seat == 0 && !skip_at && need > 1 && have == need)
+    if (skip_modern) {
+        ready = skip_scene_done != ballot.scene && skip_ballot_ready(&ballot);
+    } else {
+        int have, need;
+        ss_net_votes(&have, &need);
+        ready = need > 1 && have == need;
+    }
+    if (seat == 0 && !skip_at && ready) {
         skip_at = frame_label + 2u * (uint32_t)delay + 30;
+        skip_local_scene = local_scene;
+        if (skip_modern)
+            skip_scene_done = ballot.scene;
+    }
     if (skip_at && frame_label >= skip_at) {
         skip_done = skip_at;
         skip_at = 0;
         my_vote = 0;
-        return 1;
+        return !skip_modern || skip_local_scene == local_scene;
     }
     return 0;
 }
@@ -1675,9 +2093,9 @@ int ss_net_skip_now(void)
 void __wrap_sub_0800170C(void)
 {
     __real_sub_0800170C();
-    if (configured < 0)
+    if (configured < 0 && !ss_net_room_ui_enabled())
         configure();
-    if (configured != 1)
+    if (configured != 1 || room_status == SS_ROOM_CONNECTING)
         return;
     if (session_open) {
         /* The game starts its link task again without ever having left the others (it does on some changes of
@@ -1688,7 +2106,7 @@ void __wrap_sub_0800170C(void)
         leaving_since = 0;
         return;
     }
-    leave();
+    leave(0);
     start_session();
     send_hello();
     session_open = 1;
@@ -1711,11 +2129,12 @@ void ss_net_leave(void)
  * and off every message handed over during the frame. The next MultiSioMain call finds its block already sent. */
 void ss_net_flush(void)
 {
+    poll_room();
     if (leaving_since && ss_plat_ticks_ms() - leaving_since > 2000) {
         net_say("net: the game's link task ended; leaving the session\n");
         leaving_since = 0;
         session_open = 0;
-        leave();
+        leave(0);
     }
     if (configured != 1 || !synced || !last_sendp || flushed_label == frame_label)
         return;
@@ -1773,9 +2192,10 @@ static uint32_t deliver_direct(void *sendp, void *recvp)
             if (!offline_since && now - s->heard > patience(i))
                 drop(i, "timed out", 1);
         }
-        if (join_mode && i == 0 && block && !lobby_done && block[8] == 'G' && block[9] == 'O') {
-            lobby_done = 1;     /* from here on a program that turns up is one that joins a game in progress */
-            net_say("net: the lobby is over; whoever comes now joins a game in progress\n");
+        if (i == 0 && block && !lobby_done && block[8] == 'G' && block[9] == 'O') {
+            lobby_done = 1;
+            if (join_mode)
+                net_say("net: the lobby is over; whoever comes now joins a game in progress\n");
         }
         if ((candidate | grow_pending) >> i & 1)
             block = NULL;       /* it wants to join the game in progress: the game does not know it yet */
@@ -1892,7 +2312,7 @@ static uint32_t multi_sio_main(void *sendp, void *recvp)
     uint32_t now, target, received = 0, waited_since, hash = 2166136261u;
     int i, told = 0, waited = 0;
 
-    if (configured != 1)
+    if (configured != 1 || room_status == SS_ROOM_CONNECTING)
         return __real_sub_08001804(sendp, recvp);
     now = ss_plat_ticks_ms();
     {

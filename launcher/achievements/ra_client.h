@@ -2,6 +2,7 @@
 #define KH_RA_CLIENT_H
 
 #include "rc_client.h"
+#include <SDL3/SDL_surface.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -14,6 +15,9 @@ typedef void (*KhRaTransport)(const rc_api_request_t*, rc_client_server_callback
 typedef void (*KhRaImageCallback)(const uint8_t* bytes, size_t size, int status, void* userdata);
 /* Public badge images use the same bounded HTTPS queue; no account token. */
 int KhRaFetchImage(KhRa* ra, const char* url, KhRaImageCallback callback, void* userdata);
+/* Old desktop installs cached images alongside the executable. */
+void KhRaMigrateBadges(const char* directory);
+SDL_Surface* KhRaLoadBadge(const char* directory, const char* badge_name);
 
 KhRa* KhRaCreate(const char* directory, KhRaRead read, void* userdata, KhRaTransport transport);
 void KhRaDestroy(KhRa* ra);

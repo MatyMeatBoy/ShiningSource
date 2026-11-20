@@ -12,4 +12,5 @@ shiningsource.ini
 *.png
 !docs/img/*.png
 
-!assets/achievements/*.png
+!assets/achievements/badges/*.png
+!assets/launcher/*.png

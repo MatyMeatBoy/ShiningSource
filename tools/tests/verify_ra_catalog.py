@@ -102,6 +102,12 @@ def main():
                 f.write(struct.pack('<I',len(memory)))
                 for address,value in sorted(memory.items()): f.write(struct.pack('<IB',address,value))
     shutil.copy2(catalog,out/catalog.name)
+    badges = out/'achievements'/'badges'
+    badges.mkdir(parents=True, exist_ok=True)
+    for source_dir in (catalog.parent/'badges', catalog.parent/'achievements'/'badges'):
+        if source_dir.resolve() != badges.resolve():
+            for image in source_dir.glob('badge_*.png'):
+                shutil.copy2(image, badges/image.name)
     source=out/'verify.c';source.write_text(HARNESS)
     sdl=next(Path(h)/'x86_64-w64-mingw32' for h in link.SDL_HINTS if h and (Path(h)/'x86_64-w64-mingw32/lib').is_dir())
     objects=sorted((ROOT/'build/launcher').glob('rc_*.o'))
