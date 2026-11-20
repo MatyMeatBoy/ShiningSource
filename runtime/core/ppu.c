@@ -852,7 +852,7 @@ static void prepare_edge_fade(void)
     int left = view.hud_left, right = view.hud_right;
     int left_extension = (view.width - W) / 2, right_extension = view.width - W - left_extension;
     memset(edge_darkness, 0, sizeof edge_darkness);
-    if (!view.world || view.width <= W || left < 0 || right > view.width || right - left < W)
+    if (!view.world || view.width <= W || left < 0 || left > view.width - W || right < left + W || right > view.width)
         return;
     int left_fade = left > 0 || left_extension >= EDGE_FADE ? EDGE_FADE : left_extension;
     int right_fade = right < view.width || right_extension >= EDGE_FADE ? EDGE_FADE : right_extension;
