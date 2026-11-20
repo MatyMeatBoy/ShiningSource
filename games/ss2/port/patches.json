@@ -200,6 +200,11 @@
    "replace": "if ((s16)arg0->f60++ > 20) {"
   },
   {
+   "why": "Online: full-HP damage (0x89 or 0xB0) can reach an active enemy while its task is still waiting for a palette. Initialization overwrites the received state and pending damage, but the receiver's flag 0x80 survives. Reapply the requested hit after setting the actual starting HP.",
+   "find": "    arg0->f5E = arg0->f1D4 = ((sp118->f4 << 1) * 4 + (sp118->f4 << 1)) * 2;\n    local124 = 1;",
+   "replace": "    arg0->f5E = arg0->f1D4 = ((sp118->f4 << 1) * 4 + (sp118->f4 << 1)) * 2;\n    if (T015L_F7A & 0x80) {\n        extern int ss_net_msg_online(void);\n        if ((gUnk_030027D0 & 2) && ss_net_msg_online()) {\n            arg0->fC = 10;\n            arg0->f4A = arg0->f5C;\n            arg0->f4C = (u16)arg0->f4A;\n        }\n    }\n    local124 = 1;"
+  },
+  {
    "why": "Fix text row span traversal: keep the requested row index stable, queue each newly marked contiguous span from its first row, and restrict flags to 20 rows. The old mixed-flag traversal reached flag[20], overwriting the adjacent glyph upload cursor and shifting item-description glyph bytes.",
    "find": "static inline void FlushRows16(u32 index, u32 count)\n{\n    u32 pending = 0;\n    u32 i;\n    u32 value;\n    void *destination;\n\n    for (i = 0; i < count; i++) {\n        value = gUnk_03005C40[index + i];\n        if (value == 0) {\n            gUnk_03005C40[index + i] = 1;\n            pending++;\n        } else {\n            if (pending != 0) {\n                destination = (void *)(0x0600E000 + index * 0x40);\n                sub_08001348(gUnk_03005740 + index * 0x40, destination, pending * 0x40);\n                index += pending;\n                pending = 0;\n            }\n            index++;\n        }\n    }\n    if (pending != 0) {\n        destination = (void *)(0x0600E000 + index * 0x40);\n        sub_08001348(gUnk_03005740 + index * 0x40, destination, pending * 0x40);\n    }\n}",
    "replace": "static inline void FlushRows16(u32 index, u32 count)\n{\n    u32 pending = 0;\n    u32 first = 0;\n    u32 i;\n    if (index >= 20)\n        count = 0;\n    else if (count > 20 - index)\n        count = 20 - index;\n    for (i = 0; i < count; i++) {\n        u32 row = index + i;\n        if (gUnk_03005C40[row] == 0) {\n            gUnk_03005C40[row] = 1;\n            if (pending == 0)\n                first = row;\n            pending++;\n        } else if (pending != 0) {\n            sub_08001348(gUnk_03005740 + first * 0x40,\n                        (void *)(0x0600E000 + first * 0x40), pending * 0x40);\n            pending = 0;\n        }\n    }\n    if (pending != 0)\n        sub_08001348(gUnk_03005740 + first * 0x40,\n                    (void *)(0x0600E000 + first * 0x40), pending * 0x40);\n}"
@@ -385,6 +390,11 @@
   }
  ],
  "code_08073E2C.c": [
+  {
+   "why": "Cancel a pending Archer arrow on the same death and scene conditions that terminate an arrow in flight. It must release its pool slot even when the attack animation never reaches the launch frame.",
+   "find": "static inline s32 wait5778(struct Ply5778 *p, u32 n)\n{\n    while (p->ready < n) {\n        if (p->state == 10)",
+   "replace": "static inline s32 wait5778(struct Ply5778 *p, u32 n)\n{\n    while (p->ready < n) {\n        if (p->state == 10 || p->state == 11 || p->state == 12 || sub_08056E90() || sub_0800D11C())"
+  },
   {
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): declarations for audio-only policy; gameplay state/ownership checks stay unchanged.",
    "find": "#include \"global.h\"",
