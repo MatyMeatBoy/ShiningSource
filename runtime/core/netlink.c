@@ -115,8 +115,8 @@ static uint32_t room_opened_at, room_code_serial;
 static char pending_room_code[SS_ROOM_CODE_CAPACITY];
 static char requested_room_title[SS_LOBBY_TITLE_MAX + 1], confirmed_room_title[SS_LOBBY_TITLE_MAX + 1];
 static struct {
-    int browsing, opened, count, named, sent;
-    uint32_t cursor, next, scope, nonce, sent_at, heard_at;
+    int browsing, opened, count, named, sent, ping_seen;
+    uint32_t cursor, next, scope, nonce, sent_at, heard_at, ping_at;
     struct ss_lobby_room rooms[SS_LOBBY_PAGE_SIZE];
 } directory;
 
@@ -1950,7 +1950,7 @@ void ss_net_lobby_page(uint32_t cursor)
     directory.browsing = 1;
     directory.cursor = cursor;
     directory.next = 0;
-    directory.named = directory.sent = 0;
+    directory.named = directory.sent = directory.ping_seen = 0;
     directory.heard_at = ss_plat_ticks_ms();
     directory.nonce++;
     directory.count = -1;
@@ -2025,8 +2025,13 @@ static void poll_directory(void)
         wr32(packet + 16, directory.cursor);
         wr32(packet + 20, CLIENT_BUILD);
         ss_plat_net_send(packet, LIST_NAMED);
-        if (directory.sent && !directory.named)
+        if (directory.sent && !directory.named) {
             ss_plat_net_send(packet, HEADER);
+            if (directory.count < 0) {
+                packet[4] = T_PING;
+                ss_plat_net_send(packet, HEADER);
+            }
+        }
         directory.sent = 1;
         directory.sent_at = now;
     }
@@ -2035,6 +2040,11 @@ static void poll_directory(void)
         if (received <= 0)
             break;
         int named = received == LIST_NAMED;
+        if (received == HEADER && rd32(packet) == MAGIC && packet[4] == T_PING &&
+            rd32(packet + 12) == directory.nonce) {
+            directory.ping_seen = 1;
+            directory.ping_at = now;
+        }
         if (!named && (received != HEADER || directory.named))
             continue;
         if (rd32(packet) != MAGIC || packet[4] != T_LIST_REPLY || packet[7] > SS_LOBBY_PAGE_SIZE ||
@@ -2073,7 +2083,7 @@ static void poll_directory(void)
         directory.count = count;
     }
     if (now - directory.heard_at >= 4500) {
-        directory.count = -2;
+        directory.count = directory.ping_seen && now - directory.ping_at < 1500 && !directory.named ? -4 : -2;
         directory.next = 0;
     }
 }
@@ -2136,6 +2146,16 @@ int ss_net_roster_lobby(void)
 int ss_net_roster_can_start(void)
 {
     return ss_net_roster_lobby() && seat == 0 && roster_host_start && !offline_since;
+}
+
+int ss_net_couch_can_add(void)
+{
+    if (lobby_done || in_play || own_roster.stage == SS_ROSTER_IN_GAME)
+        return 0;
+    for (int i = 0; i < SEATS; ++i)
+        if (streams[i].known && streams[i].roster.stage == SS_ROSTER_IN_GAME)
+            return 0;
+    return 1;
 }
 
 int ss_net_roster(struct ss_net_roster_entry entries[4])

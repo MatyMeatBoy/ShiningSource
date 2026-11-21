@@ -32,6 +32,15 @@ int main(void) {
     CHECK(compose(120, 80, &obj, &moved) == 0); /* player, priority zero */
     obj.colour[119] = 2;
     CHECK(compose(119, 80, &obj, &moved) == 0); /* no sprite leaks into black */
+    CHECK(!(moved & COMPOSE_TRANSPARENT)); /* ordinary renderer keeps the black margin */
+    view.transparent_outside = 1;
+    CHECK(compose(119, 80, &obj, &moved) == 0 && (moved & COMPOSE_TRANSPARENT));
+    CHECK(compose(118, 80, &obj, &moved) == 0 && (moved & COMPOSE_TRANSPARENT));
+    CHECK(compose(120, 80, &obj, &moved) == 0 && !(moved & COMPOSE_TRANSPARENT)); /* inside the field */
+    obj.flags[119] = 8;
+    CHECK(compose(119, 4, &obj, &moved) == 0x7FFF && !(moved & COMPOSE_TRANSPARENT)); /* HUD outside the map */
+    obj.flags[119] = 0;
+    view.transparent_outside = 0;
     obj.colour[359] = 2;
     CHECK(compose(359, 80, &obj, &moved) == 0); /* right edge */
     obj.colour[128] = 2; obj.prio[128] = 1;

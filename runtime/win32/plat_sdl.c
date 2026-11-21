@@ -6,6 +6,8 @@
 #include "shiningsource/ini.h"
 #include "shiningsource/language_file.h"
 #include "shiningsource/window_mode.h"
+#include "soul_field.h"
+#include "wide_art.h"
 
 #include <SDL3/SDL.h>
 #include <stdio.h>
@@ -279,10 +281,14 @@ static void open_available_pad(void)
  * others are made again where they are used: the typeface from the ROM, a notice's icon from its pixels. */
 static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture, *wide_texture;
 static int wide_picture, wide_drawn_width, wide_dirty;
+static bool wide_native_menu;
+static bool wide_ultrawide;
+static unsigned wide_light;
 static uint32_t wide_edges[2][SS_SCREEN_H];
-enum { WIDE_FIELD_HOLD = 8, WIDE_MENU_BLACKOUT = 30, WIDE_SIDE_PIXELS = (SS_MAX_VIEW_W - SS_SCREEN_W) * SS_SCREEN_H };
+enum { WIDE_FIELD_HOLD = 8, WIDE_FRONTEND_BLACKOUT = 30, WIDE_SIDE_PIXELS = (SS_MAX_VIEW_W - SS_SCREEN_W) * SS_SCREEN_H };
+enum { WIDE_16_9_SIDES = SS_WIDE_16_9_W - SS_SCREEN_W };
 static uint32_t wide_field[WIDE_SIDE_PIXELS];
-static int wide_field_extra, wide_field_age, wide_menu_blackout;
+static int wide_field_extra, wide_field_age, wide_frontend_blackout;
 static unsigned wide_field_light, wide_transition_light;
 static int font_state, texture_remade;
 
@@ -662,19 +668,7 @@ static void draw_field(int w, int h, int box_left, int box_top, int box_right, i
             SDL_DestroyTexture(field_texture);
         field_texture = pixels ? SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h) : NULL;
         if (field_texture) {
-            for (y = 0; y < h; y++) {
-                int t = y * 255 / (h > 1 ? h - 1 : 1);
-                uint32_t colour = 0xFF000000u | (uint32_t)(20 - t * 10 / 255) << 16 | (uint32_t)(62 - t * 34 / 255) << 8 | (uint32_t)(74 - t * 36 / 255);
-                for (x = 0; x < w; x++)
-                    pixels[y * w + x] = colour;
-            }
-            for (y = 3; y < h; y += 7)
-                for (x = 3 + (y * 5) % 11; x < w; x += 13) {
-                    if (x >= box_left && x < box_right && y >= box_top && y < box_bottom)
-                        continue;
-                    k = (x * 31 + y * 17) % 5;
-                    pixels[y * w + x] = 0xFF000000u | (uint32_t)(60 + k * 22) << 16 | (uint32_t)(120 + k * 20) << 8 | (uint32_t)(130 + k * 20);
-                }
+            ss_soul_field_pixels(pixels, w, h, box_left, box_top, box_right, box_bottom);
             if (SDL_UpdateTexture(field_texture, NULL, pixels, w * 4)) {
                 SDL_SetTextureBlendMode(field_texture, SDL_BLENDMODE_NONE);
                 SDL_SetTextureScaleMode(field_texture, SDL_SCALEMODE_NEAREST);
@@ -783,6 +777,9 @@ int ss_plat_view_width(void)
         return SS_SCREEN_W;
     if (!window || !SDL_GetWindowSizeInPixels(window, &w, &h) || h < SS_SCREEN_H)
         return SS_SCREEN_W;
+    const int64_t difference = (int64_t)w * 9 - (int64_t)h * 16;
+    if (difference >= -8 && difference <= 8)
+        return SS_WIDE_16_9_W;
     scale = h / SS_SCREEN_H;
     width = (w / scale) & ~1;
     if (width < SS_SCREEN_W) width = SS_SCREEN_W;
@@ -2307,30 +2304,69 @@ static uint32_t wide_mix(uint32_t from, uint32_t to, unsigned part)
 
 /* The images are optional, with the left and right strips joined at column 128.
  * Crop from that join as the window changes width, with one artwork pixel per game pixel. */
-static const SDL_Surface *wide_art(void)
+static SDL_Surface *load_wide_art(const char *name)
 {
-    static struct { int scene; const char *name; bool loaded; SDL_Surface *surface; } files[] = {
-        { SS_PRESENT_WIDE_TITLE, "title-sides.png", false, NULL },
-        { SS_PRESENT_WIDE_MARBLE, "menu-sides.png", false, NULL },
-        { SS_PRESENT_WIDE_SHOP, "shop-sides.png", false, NULL },
+    const char *base = SDL_GetBasePath();
+    char relative[64], *path = NULL;
+    SDL_Surface *image = NULL, *converted = NULL;
+    SDL_snprintf(relative, sizeof relative, "assets/launcher/%s", name);
+    if (base && SDL_asprintf(&path, "%s%s", base, relative) >= 0) {
+        image = SDL_LoadPNG(path);
+        SDL_free(path);
+    }
+    if (!image)
+        image = SDL_LoadPNG(relative);
+    if (image && (image->w == 256 || image->w == WIDE_16_9_SIDES) && image->h == SS_SCREEN_H)
+        converted = SDL_ConvertSurface(image, SDL_PIXELFORMAT_ARGB8888);
+    SDL_DestroySurface(image);
+    return converted;
+}
+
+static int wide_scene_for_output(int scene, bool ultrawide)
+{
+    if (ultrawide)
+        return scene == SS_PRESENT_WIDE_SHOP_INSPECT ? SS_PRESENT_WIDE_INSPECT : scene;
+    switch (scene) {
+    case SS_PRESENT_WIDE_FOREST:
+    case SS_PRESENT_WIDE_LANGUAGE:
+        return SS_PRESENT_WIDE_MENU;
+    case SS_PRESENT_WIDE_INSPECT:
+        return SS_PRESENT_WIDE_MARBLE;
+    case SS_PRESENT_WIDE_SHOP_INSPECT:
+        return SS_PRESENT_WIDE_SHOP;
+    case SS_PRESENT_WIDE_SOUND:
+    case SS_PRESENT_WIDE_CATALOG:
+        return 0;
+    default:
+        return scene;
+    }
+}
+
+static const SDL_Surface *wide_art(int scene, bool ultrawide)
+{
+    static struct { int scene; const char *name[2]; bool loaded[2]; SDL_Surface *surface[2]; } files[] = {
+        { SS_PRESENT_WIDE_BRAND, { NULL, "brand-sides.png" } },
+        { SS_PRESENT_WIDE_LANGUAGE, { NULL, "language-sides.png" } },
+        { SS_PRESENT_WIDE_TITLE, { "title-sides.png", "title-pro-sides.png" } },
+        { SS_PRESENT_WIDE_MARBLE, { "menu-sides.png", "inventory-sides.png" } },
+        { SS_PRESENT_WIDE_SHOP, { "shop-sides.png", "merchant-sides.png" } },
+        { SS_PRESENT_WIDE_SAVE, { "save-native-sides.png", "save-sides.png" } },
+        { SS_PRESENT_WIDE_FOREST, { NULL, "forest-sides.png" } },
+        { SS_PRESENT_WIDE_INSPECT, { NULL, "inspect-sides.png" } },
     };
     for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
-        if (files[i].scene != wide_picture)
+        if (files[i].scene != scene)
             continue;
-        if (!files[i].loaded) {
-            const char *base = SDL_GetBasePath();
-            char *path = NULL;
-            files[i].loaded = true;
-            if (base && SDL_asprintf(&path, "%sassets/launcher/%s", base, files[i].name) >= 0) {
-                SDL_Surface *image = SDL_LoadPNG(path);
-                if (image && image->w == 256 && image->h == SS_SCREEN_H)
-                    files[i].surface = SDL_ConvertSurface(image, SDL_PIXELFORMAT_ARGB8888);
-                if (image)
-                    SDL_DestroySurface(image);
-                SDL_free(path);
+        for (int variant = ultrawide; variant >= 0; variant--) {
+            if (!files[i].loaded[variant]) {
+                files[i].loaded[variant] = true;
+                if (files[i].name[variant])
+                    files[i].surface[variant] = load_wide_art(files[i].name[variant]);
             }
+            if (files[i].surface[variant])
+                return files[i].surface[variant];
         }
-        return files[i].surface;
+        break;
     }
     return NULL;
 }
@@ -2344,13 +2380,107 @@ static unsigned wide_center_light(const uint32_t *pixels, int width, int left)
     return sum;
 }
 
+static bool wide_field_menu(int scene)
+{
+    return scene == SS_PRESENT_WIDE_MARBLE || scene == SS_PRESENT_WIDE_SHOP ||
+           scene == SS_PRESENT_WIDE_INSPECT || scene == SS_PRESENT_WIDE_CATALOG;
+}
+
+static unsigned wide_sample_edges(const uint32_t *pixels, int width, int scene, uint32_t edges[2][SS_SCREEN_H])
+{
+    int left = (width - SS_SCREEN_W) / 2, right = left + SS_SCREEN_W - 1;
+    unsigned daylight, light = 0;
+    /* Sample the detail panel past its dark outer frame. The seam itself keeps
+     * the border colour so the panel and its frame remain legible. */
+    int inset = scene == SS_PRESENT_WIDE_INSPECT ? 7 : 0;
+    switch (scene) {
+    case SS_PRESENT_WIDE_BRAND:   daylight = 255; break;
+    case SS_PRESENT_WIDE_TITLE:   daylight = 160; break;
+    case SS_PRESENT_WIDE_LANGUAGE: daylight = 140; break;
+    case SS_PRESENT_WIDE_SHOP:    daylight = 122; break;
+    case SS_PRESENT_WIDE_SAVE:    daylight = 133; break;
+    case SS_PRESENT_WIDE_INSPECT: daylight = 132; break;
+    default:                     daylight = 80; break;
+    }
+    for (int y = 0; y < SS_SCREEN_H; y++) {
+        const uint32_t *row = pixels + y * width;
+        edges[0][y] = row[left] | 0xff000000u;
+        edges[1][y] = row[right] | 0xff000000u;
+        light += ((row[left + inset] >> 8) & 255) + ((row[right - inset] >> 8) & 255);
+    }
+    light = light * 256 / (SS_SCREEN_H * 2 * daylight);
+    return light > 256 ? 256 : light;
+}
+
+/* center_gap is zero for the two packed SDL strips and 240 when drawing into a
+ * seat's frame. Neither path writes any of the original console's columns. */
+static void fill_wide_strips(uint32_t *pixels, int extra, int center_gap, int scene,
+                             const SDL_Surface *art, const uint32_t edges[2][SS_SCREEN_H], unsigned light)
+{
+    int left = extra / 2, seam = wide_field_menu(scene) ? 6 : 10;
+    int art_half = art ? art->w / 2 : 0;
+    bool native_art = art_half == WIDE_16_9_SIDES / 2;
+    bool panel_fallback = scene == SS_PRESENT_WIDE_MENU || scene == SS_PRESENT_WIDE_MARBLE ||
+                          scene == SS_PRESENT_WIDE_SHOP || scene == SS_PRESENT_WIDE_SAVE;
+    for (int y = 0; y < SS_SCREEN_H; y++) {
+        uint32_t *out = pixels + (extra + center_gap) * y;
+        const uint32_t *art_row = art ? (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch) : NULL;
+        uint32_t panel = wide_mix(0xff000000u, wide_mix(0xff142f34u, 0xff0c171eu, y * 256 / SS_SCREEN_H), light);
+        for (int side = 0; side < 2; side++) {
+            uint32_t edge = edges[side][y], smoothed = edge;
+            int count = side ? extra - left : left;
+            if (wide_field_menu(scene) && y > 0 && y + 1 < SS_SCREEN_H)
+                smoothed = wide_mix(edge, wide_mix(edges[side][y - 1], edges[side][y + 1], 128), 128);
+            for (int d = 0; d < count; d++) {
+                int x = side ? left + center_gap + d : left - 1 - d;
+                if (native_art) {
+                    if (d < art_half)
+                        out[x] = wide_mix(0xff000000u, art_row[side ? art_half + d : art_half - 1 - d], light);
+                    else if (!center_gap)
+                        out[x] = 0;         /* Leave the renderer's backdrop beyond the authored area. */
+                } else if (!d || (!art_row && !panel_fallback)) {
+                    out[x] = edge;
+                } else {
+                    uint32_t outer = art_row ? wide_mix(0xff000000u, art_row[side ? art_half + d : art_half - 1 - d], light) : panel;
+                    out[x] = wide_mix(smoothed, outer, d < seam ? (unsigned)d * 256 / seam : 256);
+                }
+            }
+        }
+    }
+}
+
+int ss_wide_art_fill(uint32_t *pixels, int width, int scene, int allow_ultrawide)
+{
+    if (width <= SS_SCREEN_W || width > SS_MAX_VIEW_W || !option_wide_pro || !sides_field)
+        return 0;
+    const bool ultrawide = allow_ultrawide && width * 10 >= SS_SCREEN_H * 22;
+    if (scene == SS_PRESENT_WIDE_MARBLE && width <= SS_WIDE_16_9_W)
+        return 0;               /* the game renders the animated background itself */
+    scene = wide_scene_for_output(scene, ultrawide);
+    const SDL_Surface *art = wide_art(scene, ultrawide);
+    if (!art)
+        return 0;
+    uint32_t edges[2][SS_SCREEN_H];
+    unsigned light = wide_sample_edges(pixels, width, scene, edges);
+    if (!light)
+        return 0;
+    fill_wide_strips(pixels, width - SS_SCREEN_W, SS_SCREEN_W, scene, art, edges, light);
+    return 1;
+}
+
 static void take_wide_picture(const uint32_t *pixels, int width, int scene)
 {
     int extra = width - SS_SCREEN_W, left = extra / 2;
+    int output_width, output_height;
+    wide_native_menu = scene == SS_PRESENT_WIDE_MARBLE && width <= SS_WIDE_16_9_W;
+    wide_ultrawide = width * 10 >= SS_SCREEN_H * 22 &&
+                      SDL_GetRenderOutputSize(renderer, &output_width, &output_height) &&
+                      output_width * 10 >= output_height * 22;
+    scene = wide_scene_for_output(scene, wide_ultrawide);
     if (wide_field_age <= WIDE_FIELD_HOLD)
         wide_field_age++;
     if (scene == SS_PRESENT_WIDE_FIELD) {
-        wide_menu_blackout = 0;
+        wide_frontend_blackout = 0;
         if (option_wide_pro && sides_field && extra > 0) {
             for (int y = 0; y < SS_SCREEN_H; y++) {
                 const uint32_t *row = pixels + y * width;
@@ -2365,23 +2495,22 @@ static void take_wide_picture(const uint32_t *pixels, int width, int scene)
         wide_picture = 0;      /* let the live world render without any added layer */
         return;
     }
-    if (scene == SS_PRESENT_WIDE_MARBLE || scene == SS_PRESENT_WIDE_SHOP) {
-        wide_menu_blackout = WIDE_MENU_BLACKOUT;
-    } else if (wide_menu_blackout > 0) {
-        wide_menu_blackout--;
-        /* The drawer can finish before the next picture is ready. Keep its black fade over the sides. */
+    if (wide_field_menu(scene) || scene == SS_PRESENT_WIDE_SAVE ||
+        (wide_ultrawide && scene && scene != SS_PRESENT_WIDE_TRANSITION)) {
+        wide_frontend_blackout = WIDE_FRONTEND_BLACKOUT;
+    } else if (wide_frontend_blackout > 0) {
+        wide_frontend_blackout--;
+        /* A title or drawer task can finish before the next backdrop is ready.
+         * Keep its black fade over the sides during that handoff. */
         if (!scene && extra > 0 &&
-            (wide_picture == SS_PRESENT_WIDE_MARBLE || wide_picture == SS_PRESENT_WIDE_SHOP ||
+            (wide_field_menu(wide_picture) ||
              wide_center_light(pixels, width, left) == 0))
             scene = SS_PRESENT_WIDE_TRANSITION;
     }
     wide_picture = scene;
     if (!scene || extra <= 0)
         return;
-    for (int y = 0; y < SS_SCREEN_H; y++) {
-        wide_edges[0][y] = pixels[y * width + left] | 0xff000000u;
-        wide_edges[1][y] = pixels[y * width + left + SS_SCREEN_W - 1] | 0xff000000u;
-    }
+    wide_light = wide_sample_edges(pixels, width, scene, wide_edges);
     if (scene == SS_PRESENT_WIDE_TRANSITION)
         wide_transition_light = wide_center_light(pixels, width, left);
     wide_dirty = 1;
@@ -2390,46 +2519,15 @@ static void take_wide_picture(const uint32_t *pixels, int width, int scene)
 static void update_wide_strips(int extra)
 {
     static uint32_t stripes[WIDE_SIDE_PIXELS];
-    int left = extra / 2, transition = wide_picture == SS_PRESENT_WIDE_TRANSITION;
-    int menu = wide_picture == SS_PRESENT_WIDE_MARBLE || wide_picture == SS_PRESENT_WIDE_SHOP;
-    int seam = menu ? 6 : 10;
-    const SDL_Surface *art = wide_art();
-    bool keep_field = transition && wide_field_extra == extra && wide_field_age <= WIDE_FIELD_HOLD && wide_field_light != 0;
-    unsigned field_light = keep_field ? wide_transition_light * 256 / wide_field_light : 0;
-    unsigned light = 0;
-    for (int y = 0; y < SS_SCREEN_H; y++)
-        for (int side = 0; side < 2; side++)
-            light += (wide_edges[side][y] >> 8) & 255;    /* G estimates the brightness of both seams */
-    int daylight = wide_picture == SS_PRESENT_WIDE_TITLE ? 160 : wide_picture == SS_PRESENT_WIDE_SHOP ? 122 : 80;
-    light = light * 256 / (SS_SCREEN_H * 2 * daylight);
-    if (light > 256)
-        light = 256;
-    if (field_light > 256)
-        field_light = 256;
-
-    for (int y = 0; y < SS_SCREEN_H; y++) {
-        uint32_t *out = stripes + extra * y;
-        const uint32_t *art_row = art ? (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch) : NULL;
-        /* Colour-matched sides for the other menus. The lightweight background falls to black with their fade. */
-        uint32_t panel = wide_mix(0xff000000u, wide_mix(0xff142f34u, 0xff0c171eu, y * 256 / SS_SCREEN_H), light);
-        for (int side = 0; side < 2; side++) {
-            uint32_t edge = wide_edges[side][y];
-            uint32_t smoothed = edge;
-            int count = side ? extra - left : left;
-            if (menu && y > 0 && y + 1 < SS_SCREEN_H)
-                smoothed = wide_mix(edge, wide_mix(wide_edges[side][y - 1], wide_edges[side][y + 1], 128), 128);
-            for (int d = 0; d < count; d++) {
-                int x = side ? left + d : left - 1 - d;
-                if (keep_field) {
-                    out[x] = wide_mix(0xff000000u, wide_field[y * extra + x], field_light);
-                } else if (!d || transition || wide_picture == SS_PRESENT_WIDE_BRAND || (!art_row && wide_picture == SS_PRESENT_WIDE_TITLE)) {
-                    out[x] = edge;
-                } else {
-                    uint32_t outer = art_row ? wide_mix(0xff000000u, art_row[side ? 128 + d : 127 - d], light) : panel;
-                    out[x] = wide_mix(smoothed, outer, d < seam ? (unsigned)d * 256 / seam : 256);
-                }
-            }
-        }
+    if (wide_picture == SS_PRESENT_WIDE_TRANSITION &&
+        wide_field_extra == extra && wide_field_age <= WIDE_FIELD_HOLD && wide_field_light != 0) {
+        unsigned light = wide_transition_light * 256 / wide_field_light;
+        if (light > 256)
+            light = 256;
+        for (int i = 0; i < extra * SS_SCREEN_H; i++)
+            stripes[i] = wide_mix(0xff000000u, wide_field[i], light);
+    } else {
+        fill_wide_strips(stripes, extra, 0, wide_picture, wide_art(wide_picture, wide_ultrawide), wide_edges, wide_light);
     }
     SDL_Rect update = { 0, 0, extra, SS_SCREEN_H };
     if (SDL_UpdateTexture(wide_texture, &update, stripes, extra * 4)) {
@@ -2441,7 +2539,7 @@ static void update_wide_strips(int extra)
 static void draw_wide_strips(int view)
 {
     int extra = view - SS_SCREEN_W, left = extra / 2, right = extra - left;
-    if (extra <= 0 || !option_wide_pro || !sides_field || !wide_picture)
+    if (extra <= 0 || !option_wide_pro || !sides_field || !wide_picture || wide_native_menu)
         return;
     if (!wide_texture) {
         wide_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
@@ -2449,7 +2547,7 @@ static void draw_wide_strips(int view)
         if (!wide_texture)
             return;
         SDL_SetTextureScaleMode(wide_texture, SDL_SCALEMODE_NEAREST);
-        SDL_SetTextureBlendMode(wide_texture, SDL_BLENDMODE_NONE);
+        SDL_SetTextureBlendMode(wide_texture, SDL_BLENDMODE_BLEND);
     }
     if (wide_dirty || wide_drawn_width != extra)
         update_wide_strips(extra);
@@ -2474,6 +2572,8 @@ static uint16_t show_picture(int width)
 {
     int view = classic ? SS_SCREEN_W : menu_open ? (view_forced ? view_forced : ss_plat_view_width()) : width;
     int shown = width < view ? width : view, w = classic ? view + 2 * border : view, h = classic ? SS_SCREEN_H + 2 * border : SS_SCREEN_H;
+    if (wide_native_menu && (!option_wide_pro || !sides_field))
+        shown = SS_SCREEN_W;
     SDL_FRect source = { (float)((width - shown) / 2), 0, (float)shown, SS_SCREEN_H };
     SDL_FRect inside = { (float)((classic ? border : 0) + (view - shown) / 2), (float)(classic ? border : 0), (float)shown, SS_SCREEN_H };
     uint16_t held;

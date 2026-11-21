@@ -76,6 +76,7 @@ public class MainActivity extends Activity {
     private static final ExecutorService REPORT_WORKER = Executors.newSingleThreadExecutor();
     private static final java.util.concurrent.atomic.AtomicBoolean REPORT_SCHEDULED = new java.util.concurrent.atomic.AtomicBoolean();
     private CrashUpload crashUpload;
+    private AppUpdate appUpdate;
     private TextView romStatus, romNote, romHelp, playHint, gameNote, gameLanguage;
     private Button choose, play;
     private LauncherTheme theme;
@@ -239,6 +240,14 @@ public class MainActivity extends Activity {
         report.setOnClickListener(view -> shareReport());
         theme.button(report, false);
         settings.addView(report);
+        Button updates = new Button(this);
+        updates.setText(text("Check for updates", "Buscar actualizaciones"));
+        updates.setOnClickListener(view -> {
+            if (appUpdate == null) appUpdate = new AppUpdate(this, updates, spanish);
+            appUpdate.check();
+        });
+        theme.button(updates, false);
+        settings.addView(updates);
 
         ScrollView scroll = new ScrollView(this);
         scroll.addView(page);
@@ -256,6 +265,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (appUpdate != null) appUpdate.resume();
         look(true);             // also after the user went to copy the file and came back
         AndroidExitInfo.capture(this, folder());
         captureCrashReport();
@@ -265,6 +275,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onPause() {
+        if (appUpdate != null) appUpdate.pause();
         super.onPause();
         saveSettings();
     }
@@ -272,6 +283,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         alive = false;
+        if (appUpdate != null) appUpdate.close();
         worker.shutdown();
         super.onDestroy();
     }
@@ -745,6 +757,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == AppUpdate.INSTALL_PERMISSION) {
+            if (appUpdate != null) appUpdate.permissionResult();
+            return;
+        }
         if (request != PICK_ROM || result != RESULT_OK || data == null || data.getData() == null || folder() == null)
             return;
         final Uri source = data.getData();

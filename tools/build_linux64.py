@@ -17,6 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build
+from launcher_art import SIDE_ART
 
 ROOT = build.ROOT
 
@@ -46,7 +47,7 @@ def main():
     shutil.copy2(image, out / image.name)
     artwork = Path("assets/launcher")
     (out / artwork).mkdir(parents=True, exist_ok=True)
-    for name in ("title-sides.png", "menu-sides.png", "shop-sides.png"):
+    for name in SIDE_ART:
         shutil.copy2(ROOT / artwork / name, out / artwork / name)
     for library in (base / "sdl/lib").glob("libSDL3.so.0*"):
         if not library.is_symlink():

@@ -8,6 +8,7 @@
     <uses-feature android:name="android.hardware.gamepad" android:required="false" />
     <!-- online play -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Android 10 and older only: lets the first screen find a ROM the user left in Download. Later versions give
          an app nothing of the kind, so there the ROM comes from the file picker or from the app's own folders. -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
@@ -18,6 +19,7 @@
         android:requestLegacyExternalStorage="true"
         android:theme="@android:style/Theme.DeviceDefault.NoActionBar"
         android:hardwareAccelerated="true">
+        <receiver android:name=".UpdateInstallReceiver" android:exported="false" />
         <!-- The Java launcher recreates for locale, density and font changes to rebuild its text and spacing. -->
         <activity android:name="com.shiningsource.android.MainActivity"
             android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboard|keyboardHidden|navigation|uiMode"

@@ -49,7 +49,8 @@ enum {
     SS_OPTION_SKIP,         /* ss_skip_set_enabled(value) */
     SS_OPTION_ONLINE,       /* returns ss_net_active() */
     SS_OPTION_HUD,          /* ss_frame_set_hud(value) */
-    SS_OPTION_REMOTE_SFX    /* ss_remote_sfx_set_enabled(value) */
+    SS_OPTION_REMOTE_SFX,   /* ss_remote_sfx_set_enabled(value) */
+    SS_OPTION_COUCH_CAN_ADD /* ss_net_couch_can_add() */
 };
 
 extern const uint32_t *ss_bridge;

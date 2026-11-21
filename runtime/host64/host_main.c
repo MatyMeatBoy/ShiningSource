@@ -9,6 +9,7 @@
  */
 #include "../guest/bridge.h"
 #include "../achievements/ach_host.h"
+#include "../win32/couch.h"
 #include "shiningsource/runtime.h"
 
 #include <math.h>
@@ -25,6 +26,8 @@
 
 static uint32_t image_low, image_high;
 static wchar_t launcher_rom[32768];
+typedef SYSV int option_function(int which, int value);
+static option_function *guest_option;
 
 /* ---- low memory ---- */
 
@@ -163,7 +166,7 @@ static SYSV void b_exit(int code)
     exit(code);
 }
 static SYSV uint32_t b_version(void) { return SS_BRIDGE_VERSION; }
-static SYSV int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
+static SYSV int b_video_init(uint32_t title) { return ss_couch_worker() ? 0 : ss_plat_video_init(PTR(title)); }
 static void sign_of_life(void);
 static volatile LONG alive;
 /* Tests of the reports themselves: SS_TEST_FAULT=crash or hang, three seconds into the session; thread: a crash
@@ -197,32 +200,51 @@ static void test_fault(void)
 
 static SYSV uint32_t b_present(uint32_t pixels, int width)
 {
+    if (ss_couch_worker()) {
+        ss_couch_worker_admission(guest_option && guest_option(SS_OPTION_COUCH_CAN_ADD, 0));
+        return ss_couch_worker_present(PTR(pixels), width);
+    }
     sign_of_life();
     test_fault();
     return ss_plat_present(PTR(pixels), width);
 }
-static SYSV int b_view_width(void) { return ss_plat_view_width(); }
-static SYSV void b_audio(uint32_t samples, int frames) { ss_plat_audio(PTR(samples), frames); }
+static SYSV int b_view_width(void) { return ss_couch_worker() ? ss_couch_worker_width() : ss_plat_view_width(); }
+static SYSV void b_audio(uint32_t samples, int frames)
+{
+    if (ss_couch_worker()) ss_couch_worker_audio(PTR(samples), frames);
+    else ss_plat_audio(PTR(samples), frames);
+}
 static SYSV double b_pow(double a, double b) { return pow(a, b); }
 static SYSV double b_sin(double a) { return sin(a); }
 static SYSV double b_cos(double a) { return cos(a); }
 static SYSV double b_fmod(double a, double b) { return fmod(a, b); }
-static SYSV void b_pump(void) { ss_plat_pump(); }
-static SYSV void b_overlay(int darkness, uint32_t text) { ss_plat_overlay(darkness, text ? PTR(text) : NULL); }
-static SYSV void b_status(uint32_t text) { ss_plat_status(text ? PTR(text) : NULL); }
+static SYSV void b_pump(void)
+{
+    if (ss_couch_worker()) ss_couch_worker_pump();
+    else ss_plat_pump();
+}
+static SYSV void b_overlay(int darkness, uint32_t text)
+{
+    if (ss_couch_worker()) ss_couch_worker_overlay(darkness, text ? PTR(text) : NULL);
+    else ss_plat_overlay(darkness, text ? PTR(text) : NULL);
+}
+static SYSV void b_status(uint32_t text) { if (!ss_couch_worker()) ss_plat_status(text ? PTR(text) : NULL); }
 static SYSV int b_net_open(uint32_t host, int port) { return ss_plat_net_open(PTR(host), port); }
 static SYSV int b_net_send(uint32_t data, int size) { return ss_plat_net_send(PTR(data), size); }
 static SYSV int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR(data), capacity); }
-static SYSV void b_net_wait(int milliseconds) { InterlockedIncrement(&alive); ss_plat_net_wait(milliseconds); }
+static SYSV void b_net_wait(int milliseconds)
+{
+    if (ss_couch_worker()) ss_couch_worker_pump();
+    else InterlockedIncrement(&alive);
+    ss_plat_net_wait(milliseconds);
+}
 static SYSV void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static SYSV uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
-static SYSV void b_achievements(int run_flags) { ss_ach_frame(run_flags); }
+static SYSV void b_achievements(int run_flags) { if (!ss_couch_worker()) ss_ach_frame(run_flags); }
 
 /* The options menu (plat_sdl.c) is part of this program; what it switches is in the game image, which handed
  * over one function for it (bridge.h). These are the core's names for the same things, so the platform file is
  * the same whether it is linked with the core or with a host. */
-typedef SYSV int option_function(int which, int value);
-static option_function *guest_option;
 static SYSV void b_option_hook(uint32_t function) { guest_option = (option_function *)(uintptr_t)function; }
 void ss_frame_set_smooth(int on) { if (guest_option) guest_option(SS_OPTION_SMOOTH, on); }
 void ss_frame_set_view(int width) { if (guest_option) guest_option(SS_OPTION_VIEW, width); }
@@ -553,6 +575,15 @@ int main(int argc, char **argv)
         if (!rom)
             return 2;
     }
+    int couch = ss_couch_worker_init();
+    if (couch < 0)
+        return fail(2, "The local multiplayer window is unavailable.");
+    const char *local = getenv("SS_COUCH");
+    if (!couch && local && !strcmp(local, "1")) {
+        if (!launcher_rom_len && !MultiByteToWideChar(CP_ACP, 0, rom, -1, launcher_rom, ARRAYSIZE(launcher_rom)))
+            return fail(2, "The ROM path could not be read.");
+        return ss_couch_parent(launcher_rom);
+    }
     AddVectoredExceptionHandler(1, on_fault);
     for (i = 0; i < sizeof regions / sizeof regions[0]; i++) {
         if (!low_alloc(regions[i].base, regions[i].size, PAGE_READWRITE)) {
@@ -586,7 +617,8 @@ int main(int argc, char **argv)
         return fail(4, "The host was not linked below 4 GiB.");
 
     /* achievements start here, on the program's own stack: reading the remembered sign-in asks the system */
-    ss_ach_start(PTR(SS_ROM), (size_t)rom_size);
+    if (!couch)
+        ss_ach_start(PTR(SS_ROM), (size_t)rom_size);
 
     stack = main_stack;
     if (!low_alloc(main_stack, 0x400000, PAGE_READWRITE))

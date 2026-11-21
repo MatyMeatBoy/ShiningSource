@@ -843,6 +843,8 @@ static void dump_video(void)
             memset(&view, 0, sizeof view);
             view.width = width;
         }
+        view.menu_background = !view.world && width > SS_SCREEN_W && width <= SS_WIDE_16_9_W &&
+                               ss_frontend_picture() == SS_PRESENT_WIDE_MARBLE;
         ss_ppu_render(shot, width, &view);
         fwrite(shot, 4, (size_t)width * SS_SCREEN_H, file);
         fclose(file);
@@ -929,6 +931,8 @@ void ss_frame_set_hud(int on)
 
 const uint8_t *ss_ppu_still(void);       /* core/ppu.c: per pixel of the last picture drawn, 1 where what it shows did not move */
 
+static int couch_picture;
+
 static void finish_picture(uint32_t *pixels, int width)
 {
     /* The last four pictures, as they were drawn. They are kept in a ring: the newest takes the place of the
@@ -988,7 +992,7 @@ static void finish_picture(uint32_t *pixels, int width)
     }
     if (wanted > shade) shade = wanted - shade > 8 ? shade + 8 : wanted;
     else shade = shade - wanted > 8 ? shade - 8 : wanted;
-    if (shade)
+    if (shade && !couch_picture)
         for (i = 0; i < count; i++)
             pixels[i] = (pixels[i] >> 24) ? pixels[i] : (uint32_t)shade << 24;  /* black, as strong as the picture is dark */
 }
@@ -1167,6 +1171,7 @@ void VBlankIntrWait(void)
         if (forced_width > SS_MAX_VIEW_W) forced_width = SS_MAX_VIEW_W;
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
+        couch_picture = getenv("SS_COUCH_SEAT") != NULL;
         text = getenv("SS_TEST_RENDER");
         test_render = text && frame_limit ? (int)strtoul(text, NULL, 10) : 0;
         if (test_render) {
@@ -1271,6 +1276,7 @@ void VBlankIntrWait(void)
             memset(&view, 0, sizeof view);
             view.width = width;
         }
+        view.transparent_outside = couch_picture;
         {
             static uint16_t held;
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
@@ -1288,6 +1294,9 @@ void VBlankIntrWait(void)
                 held &= (uint16_t)~SS_PRESENT_LATE;
             } else if (skip.present) {
                 int present_width = width | language;
+                int frontend = width <= SS_SCREEN_W ? 0 :
+                               view.world ? SS_PRESENT_WIDE_FIELD : ss_frontend_picture();
+                view.menu_background = width <= SS_WIDE_16_9_W && frontend == SS_PRESENT_WIDE_MARBLE;
                 left_out = 0;
                 ss_prof(SS_PROF_RENDER, 1);
                 ss_ppu_render(pixels, width, &view);
@@ -1299,7 +1308,7 @@ void VBlankIntrWait(void)
                 ss_plat_overlay(skip.darkness, skip.text);
                 ss_prof(SS_PROF_PRESENT, 1);
                 if (width > SS_SCREEN_W && !link_screen)
-                    present_width |= view.world ? SS_PRESENT_WIDE_FIELD : ss_frontend_picture();
+                    present_width |= frontend;
                 if (!link_screen && ss_ppu_hud()) {     /* the status display goes with the picture as a layer of its own */
                     memcpy(pixels + width * SS_SCREEN_H, ss_ppu_hud(), SS_SCREEN_W * SS_HUD_ROWS * sizeof *pixels);
                     held = ss_plat_present(pixels, present_width | SS_PRESENT_HUD);

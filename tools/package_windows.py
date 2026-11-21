@@ -5,6 +5,7 @@ import hashlib,json,re,sys,zipfile
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).resolve().parent))
 import build_gamecube_sdl, link
+from launcher_art import LAUNCHER_ART
 ROOT=Path(__file__).resolve().parents[1]
 def main():
     version=sys.argv[1]
@@ -12,12 +13,12 @@ def main():
     out=ROOT/'build/releases'/version;out.mkdir(parents=True,exist_ok=True)
     game=ROOT/'build/win64/ss2'
     sdk=next(Path(h) for h in link.SDL_HINTS if h and (Path(h)/'x86_64-w64-mingw32/lib').is_dir())
-    files={name:game/name for name in ('ShiningSource.exe','ss2_win64.exe','ss2_game.elf')}
+    files={name:game/name for name in ('ShiningSource.exe','ss2_win64.exe','ss2_game.elf','ShiningSource-update.ps1')}
     files.update(build_gamecube_sdl.runtime_files(sdk/'x86_64-w64-mingw32'))
     files.update({'ss_relay.exe':ROOT/'build/relay/ss_relay.exe','LICENSE.txt':ROOT/'LICENSE','DearImGui-LICENSE.txt':ROOT/'third_party/imgui/LICENSE.txt','rcheevos-LICENSE.txt':ROOT/'third_party/rcheevos/LICENSE','SDL3-LICENSE.txt':sdk/'LICENSE.txt','README.md':ROOT/'README.md',f'docs/RELEASE_{version}.md':ROOT/f'docs/RELEASE_{version}.md','docs/ACHIEVEMENTS_VERIFICATION.md':ROOT/'docs/ACHIEVEMENTS_VERIFICATION.md','docs/RETROACHIEVEMENTS_SOURCE.md':ROOT/'assets/achievements/SOURCE.md'})
     files['docs/MULTIPLAYER_AUDIO_AUDIT.md']=ROOT/'docs/MULTIPLAYER_AUDIO_AUDIT.md'
     files['recomplauncher.json']=ROOT/'recomplauncher.json'
-    for name in ('cover.png','title-sides.png','menu-sides.png','shop-sides.png'):
+    for name in LAUNCHER_ART:
         files['assets/launcher/'+name]=ROOT/'assets/launcher'/name
     for image in ('launcher-achievements.png','achievement-popup.png'):
         files['docs/img/'+image]=ROOT/'docs/img'/image
@@ -36,9 +37,12 @@ def main():
     forbidden=('.gba','.sav','.auth','.ini','.log','.raw','.bmp')
     assert not any(name.endswith(forbidden) for name in files)
     manifest={name:hashlib.sha256(path.read_bytes()).hexdigest() for name,path in files.items()}
+    version_marker=(version+'\n').encode('ascii')
+    manifest['ShiningSource-version.txt']=hashlib.sha256(version_marker).hexdigest()
     archive=out/f'ShiningSource-{version}-windows-x64.zip';prefix=f'ShiningSource-{version}/'
     with zipfile.ZipFile(archive,'w',zipfile.ZIP_DEFLATED,compresslevel=9) as z:
         for name,path in sorted(files.items()):z.write(path,prefix+name)
+        z.writestr(prefix+'ShiningSource-version.txt',version_marker)
         z.writestr(prefix+'MANIFEST-SHA256.json',json.dumps(manifest,indent=2)+'\n')
     with zipfile.ZipFile(archive) as z:
         assert z.testzip() is None

@@ -363,15 +363,15 @@ static void draw_room_menu(const struct canvas *screen)
         text(screen, middle, 42, room_menu.title_length ? room_menu.title : "ShiningSource-01",
              room_menu.title_length ? white : gold);
         for (int i = 0; i < (int)sizeof room_keys - 1; ++i) {
-            int x = middle - 92 + i % 8 * 23, y = 56 + i / 8 * 15;
+            int x = middle - 92 + i % 8 * 23, y = 55 + i / 8 * 14;
             int current = room_menu.key == i;
-            panel(screen, x, y, 22, 14, current ? gold : copper, current ? 0xff35534eu : 0xff213a40u);
+            panel(screen, x, y, 22, 13, current ? gold : copper, current ? 0xff35534eu : 0xff213a40u);
             char letter[2] = { room_keys[i], '\0' };
             text(screen, x + 11, y + 6, room_keys[i] == ' ' ? wording(screen, "Sp", "Esp") : letter,
                  current ? gold : white);
         }
-        text(screen, middle, 137, wording(screen, "A Letter    L Erase", "A Letra    L Borrar"), white);
-        text(screen, middle, 150, wording(screen, "Start Create    B Back", "Start Crear    B Atrás"), white);
+        text(screen, middle, 132, wording(screen, "A Letter    L Erase", "A Letra    L Borrar"), white);
+        text(screen, middle, 146, wording(screen, "Start Create    B Back", "Start Crear    B Atrás"), white);
         return;
     }
     if (room_menu.page == ROOM_LIST) {
@@ -394,6 +394,7 @@ static void draw_room_menu(const struct canvas *screen)
             const char *status = room_menu.count == 0 ? wording(screen, "No open rooms", "No hay salas abiertas") :
                 room_menu.count == -1 ? wording(screen, "Looking for rooms", "Buscando salas") :
                 room_menu.count == -3 ? wording(screen, "Update from the launcher", "Actualiza desde el launcher") :
+                room_menu.count == -4 ? wording(screen, "Lobby server needs an update", "El servidor del lobby necesita actualizarse") :
                     wording(screen, "Lobby server unavailable", "Servidor del lobby no disponible");
             text(screen, middle, 83, status, white);
         }

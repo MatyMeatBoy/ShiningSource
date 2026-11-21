@@ -25,6 +25,8 @@
 #define VRAM     ((const uint8_t *)(uintptr_t)SS_VRAM)
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
 
+#include "menu_marble_sides.inc"
+
 /* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
 enum { HUD_BAND = SS_HUD_ROWS, HUD_SPLIT = SS_HUD_SPLIT, EDGE_FADE = 8 };
 enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
@@ -179,6 +181,26 @@ static void text_background(int n, int y)
     uint16_t *dst = line_bg[n];
     int X, split;
 
+    if (view.menu_background && n == 3 && cnt == 0x1f03 && scroll_x == 0) {
+        enum { painted_left = (SS_WIDE_16_9_W - W) / 2, map_right = 256 - W, palette_base = 8 * 16 + 1 };
+        int left = (view.width - W) / 2;
+        int right = view.width - left - W;
+        int native_right = right > map_right ? map_right : right;
+        int py = (y + scroll_y) & 255;
+        /* The original map is 256 pixels wide, with 16 columns hidden on the
+         * right. The painted columns use its live palette and vertical phase. */
+        const uint8_t *strip = menu_marble_sides[py < 128 ? py : 255 - py];
+        hardware_span(dst + left, W + native_right, 0, py, chars, map, width, height, colour256);
+        for (X = 0; X < left; X++) {
+            unsigned pixel = painted_left - left + X;
+            dst[X] = palette_base + ((strip[pixel / 2] >> (4 * (pixel & 1))) & 15);
+        }
+        for (X = native_right; X < right; X++) {
+            unsigned pixel = painted_left + X - map_right;
+            dst[left + W + X] = palette_base + ((strip[pixel / 2] >> (4 * (pixel & 1))) & 15);
+        }
+        return;
+    }
     if (source->map) {
         /* The console's own 240 columns are drawn from what the game put in the hardware (a menu or a window
          * drawn over the field is then always whole); the columns beside them come from the full source map:
@@ -886,6 +908,8 @@ static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_
 
 /* One pixel of the picture with the sprites of `obj`: the layers in their order, the windows, the blending and
  * the fades. `moved` tells whether what is shown in front moved since the last frame. */
+enum { COMPOSE_TRANSPARENT = 0x100 };
+
 static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
 {
     int mask = 0x3F, top = LAYER_BACKDROP, second = LAYER_BACKDROP, p, n;
@@ -893,7 +917,8 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
     uint16_t top_colour = PAL[0], second_colour = PAL[0];
     int obj_visible, semi = 0, edge_blended = 0;
 
-    if (view.world && (X < view.hud_left || X >= view.hud_right))
+    int outside = view.world && (X < view.hud_left || X >= view.hud_right);
+    if (outside)
         top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
     if (line.windows) {
         /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
@@ -943,6 +968,13 @@ static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
     if (!edge_blended)
         top_colour = edge_colour(top_colour, top, X, obj);
     *moved = top == LAYER_OBJ ? obj->flags[X] & 4 : top < 4 ? line.moved[top] : 0;
+    if (view.transparent_outside && outside && !top_colour) {
+        /* Field graphics already fade to black outside the map. Keep UI over
+         * the platform background, but omit the resulting world silhouettes. */
+        int world_pixel = top == LAYER_BACKDROP || (top == LAYER_OBJ ? !(obj->flags[X] & 8) : view.bg[top].map != NULL);
+        if (world_pixel)
+            *moved |= COMPOSE_TRANSPARENT;
+    }
     return top_colour;
 }
 
@@ -1124,16 +1156,19 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
         for (X = 0; X < view.width; X++) {
             int moved, moved_other;
             uint32_t colour;
-            if (!view.world && view.width > W && native_x(X, y) < 0 && y >= view.hud_rows) {
+            if (!view.world && !view.menu_background && view.width > W && native_x(X, y) < 0 && y >= view.hud_rows) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 calm[X] = 0;
                 continue;
             }
-            colour = to_rgb(compose(X, y, &obj_now, &moved));
+            uint16_t pixel = compose(X, y, &obj_now, &moved);
+            colour = (moved & COMPOSE_TRANSPARENT) ? 0 : to_rgb(pixel);
             if (two && (obj_now.colour[X] != obj_other.colour[X] || obj_now.prio[X] != obj_other.prio[X] || obj_now.flags[X] != obj_other.flags[X])) {
                 /* something alternates here: half of this frame's picture, half of the other frame's */
-                uint32_t other = to_rgb(compose(X, y, &obj_other, &moved_other));
-                colour = 0xFF000000u | (((colour >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + ((colour | other) & 0x010101));
+                uint16_t other_pixel = compose(X, y, &obj_other, &moved_other);
+                uint32_t other = (moved_other & COMPOSE_TRANSPARENT) ? 0 : to_rgb(other_pixel);
+                if (colour && other)
+                    colour = 0xFF000000u | (((colour >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + ((colour | other) & 0x010101));
                 moved |= moved_other;
             }
             out[X] = colour;

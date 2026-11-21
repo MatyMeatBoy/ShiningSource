@@ -61,9 +61,12 @@ void sub_0805E0C4(void);        /* TaskDialogueScriptWindow */
 void sub_0800232C(void);        /* TaskLanguageSelection, also the startup logo */
 void sub_08002694(void);        /* TaskTitleModeSelection */
 void sub_08002B70(void);        /* TaskSelectSavedCharacter, still present during character setup */
+void sub_08003984(void);        /* character class, color and name */
+void sub_080904A4(void);        /* TaskSongAndSoundTestMenu */
 void sub_0807A5D4(void);        /* TaskCharacterStatAndSkillAllocationMenu */
 void sub_0807B7B4(void);        /* TaskInventoryMenu */
 void sub_08082BB0(void);        /* TaskItemCollectionInteractionMenu, shared by stores */
+void sub_080855D4(void);        /* TaskMonsterCardCatalogAndBagTransfer */
 
 /* Is a story-telling task in the scheduler's list? Returns which kind (1 introduction, 2 message, 3 sprite sequence). (struct Task: next at +0, entry at +0x0C, see sched.c) */
 int ss_scene_active(void)
@@ -91,14 +94,15 @@ int ss_scene_active(void)
 int ss_frontend_picture(void)
 {
     uint32_t task = *(const uint32_t *)(uintptr_t)0x03001240u;
-    uint16_t display = *(const uint16_t *)(uintptr_t)SS_IO;
-    int result = 0;
+    const uint16_t *io = (const uint16_t *)(uintptr_t)SS_IO;
+    uint16_t display = io[0];
+    int result = 0, character_creation = 0, sound_test = 0;
     if (display & 0x80)          /* forced blank fills the whole picture already */
         return 0;
-    /* The three drawers share this task record and the manager slot directly above it. */
+    /* Objects, Status and the collection drawers share this task record and manager slot. */
     const uint32_t *menu = (const uint32_t *)(uintptr_t)0x03006450u;
     uint32_t manager = *(const uint32_t *)(uintptr_t)0x03006440u;
-    if (menu[1] && manager >= SS_EWRAM && manager <= SS_EWRAM + 0x40000 - sizeof(uint32_t) && !(manager & 3)) {
+    if (menu[1] && manager >= SS_EWRAM && manager <= SS_EWRAM + 0x40000 - 0x2c && !(manager & 3)) {
         uint32_t entry = menu[3];
         int style = 0;
         if (entry == (uint32_t)(uintptr_t)sub_0807A5D4 || entry == (uint32_t)(uintptr_t)sub_0807B7B4)
@@ -106,10 +110,18 @@ int ss_frontend_picture(void)
         else if (entry == (uint32_t)(uintptr_t)sub_08082BB0)
             style = SS_PRESENT_WIDE_SHOP;
         if (style) {
-            int has_bg = (display & 0x0800) && *(const uint16_t *)(uintptr_t)(SS_IO + 0x0e) == 0x1f03;
+            int has_bg = (display & 0x0800) && io[7] == 0x1f03;
+            /* Both drawers leave the same BG configuration on screen after
+             * closing the detail panel. The manager flag selects the panel. */
+            uint32_t details = *(const uint32_t *)(uintptr_t)(manager + 0x28);
+            if (has_bg && (details & 1) && (display & 0x1f00) == 0x1d00 && io[5] == 0x1d03 && io[6] == 0x9a01)
+                return style == SS_PRESENT_WIDE_SHOP ? SS_PRESENT_WIDE_SHOP_INSPECT : SS_PRESENT_WIDE_INSPECT;
             return has_bg ? style : SS_PRESENT_WIDE_TRANSITION;
         }
     }
+    if (menu[1] && menu[3] == (uint32_t)(uintptr_t)sub_080855D4 &&
+        (display & 0x0800) && io[7] == 0x1e00)
+        return SS_PRESENT_WIDE_CATALOG;
     for (int guard = 0; guard < 64; guard++) {
         if (!((task >= SS_EWRAM && task <= SS_EWRAM + 0x40000 - 0x18) ||
               (task >= SS_IWRAM && task <= SS_IWRAM + 0x8000 - 0x18)) || (task & 3))
@@ -118,15 +130,23 @@ int ss_frontend_picture(void)
         uint32_t entry = record[3];
         if (entry == (uint32_t)(uintptr_t)sub_08086860)
             return 0;           /* the story can run while the save menu is still waiting */
-        if (entry == (uint32_t)(uintptr_t)sub_0800232C)
-            result = display & 0x1000 ? SS_PRESENT_WIDE_MENU : SS_PRESENT_WIDE_BRAND;
+        if (entry == (uint32_t)(uintptr_t)sub_08003984)
+            character_creation = 1;
+        else if (entry == (uint32_t)(uintptr_t)sub_080904A4 && (display & 0x0100) && io[4] == 0x1801)
+            sound_test = 1;
+        else if (entry == (uint32_t)(uintptr_t)sub_0800232C)
+            result = display & 0x1000 ? SS_PRESENT_WIDE_LANGUAGE : SS_PRESENT_WIDE_BRAND;
         else if (entry == (uint32_t)(uintptr_t)sub_08002B70)
-            result = SS_PRESENT_WIDE_MENU;
+            result = SS_PRESENT_WIDE_SAVE;
         else if (!result && entry == (uint32_t)(uintptr_t)sub_08002694 && record[5] == 1 &&
-                 (display & 0x0200) && *(const uint16_t *)(uintptr_t)(SS_IO + 0x0a) == 0x1d00)
+                 (display & 0x0200) && io[5] == 0x1d00)
             result = SS_PRESENT_WIDE_TITLE;    /* signal 0x14 means the title task is waiting off-screen */
         task = record[0];
     }
+    if (character_creation)
+        return SS_PRESENT_WIDE_FOREST;
+    if (sound_test)
+        return SS_PRESENT_WIDE_SOUND;
     return result;
 }
 

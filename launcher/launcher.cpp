@@ -48,6 +48,9 @@
 #include "theme.h"
 #include "rom_browser.h"
 #include "test_pad.h"
+#include "updater.h"
+
+static LauncherUpdater launcher_updater;
 
 /* ---- games ---- */
 
@@ -960,10 +963,10 @@ static std::string launch_error;
 
 static bool launched;            /* the game was started: the launcher's work is done and it closes */
 
-static int play(const Game &game, const std::string &rom, const wchar_t *explicit_rom = nullptr)
+static int play(const Game &game, const std::string &rom, const wchar_t *explicit_rom = nullptr, bool couch = false)
 {
     const std::string endpoint = server_address();
-    if (endpoint.empty()) {
+    if (!couch && endpoint.empty()) {
         launch_error = text("Enter a valid host name or IPv4 address in Online settings.",
                             "Escribe un nombre de host o una direcci\xC3\xB3n IPv4 v\xC3\xA1lida en los ajustes en l\xC3\xADnea.");
         return 1;
@@ -989,8 +992,16 @@ static int play(const Game &game, const std::string &rom, const wchar_t *explici
     SetEnvironmentVariableA("SS_KEYS", setting("keys").empty() ? nullptr : setting("keys").c_str());
     SetEnvironmentVariableA("SS_PAD", setting("pad").empty() ? nullptr : setting("pad").c_str());
     qol_environment();          /* the experimental quality-of-life options (qol.h) */
+    SetEnvironmentVariableA("SS_COUCH", couch ? "1" : nullptr);
+    if (couch) {
+        SetEnvironmentVariableA("SS_PAD_PROFILE", setting("pad_profile", "auto").c_str());
+        SetEnvironmentVariableA("SS_PAD_GAMECUBE", setting("pad_gamecube").empty() ? nullptr : setting("pad_gamecube").c_str());
+        SetEnvironmentVariableA("SS_WIDE_PRO", setting("wide_pro", "1").c_str());
+        SetEnvironmentVariableA("SS_COUCH_WINDOW", ss_window_mode_name(ss_window_mode_from_settings(
+            setting("window_mode").c_str(), setting("fullscreen").c_str())));
+    }
     const std::string room = setting("direct_room", "0") == "1" ? setting("room") : "";
-    if (setting("connection", "official") == "host")
+    if (!couch && setting("connection", "official") == "host")
         start_relay();          /* hosting: the server must be there before the game looks for it */
     SetEnvironmentVariableA("SS_NET", endpoint.c_str());
     SetEnvironmentVariableA("SS_NET_DEFERRED", room.empty() ? "1" : nullptr);
@@ -1134,6 +1145,12 @@ static void interface_frame(SDL_Window *window, bool &running)
             if (playable && !cheat_list().empty())
                 ImGui::TextColored(gold, "%s", text("Rebel mode is active. It uses a separate save.", "El modo rebelde usa una partida aparte."));
             if (!launch_error.empty()) ImGui::TextColored(red, "%s", launch_error.c_str());
+            ImGui::BeginDisabled(!playable);
+            if (soul_ui::button(text("Local multiplayer", "Multijugador local"), ImVec2(0, 39))) {
+                play(game, rom, nullptr, true);
+                if (launched) running = false;
+            }
+            ImGui::EndDisabled();
             if (playable && ImGui::CollapsingHeader(text("Cartridge preview", "Vista previa del cartucho"))) {
                 make_title(game);
                 if (title_texture)
@@ -1431,7 +1448,42 @@ static void interface_frame(SDL_Window *window, bool &running)
         ImGui::TextColored(gold, "ShiningSource");
         ImGui::TextWrapped("%s", text("The original game logic, compiled from its matching decompilation, running natively. No ROM or game data is included: you supply your own cartridge dump.",
                                       "La l\xC3\xB3gica original del juego, compilada desde su decompilaci\xC3\xB3n exacta, corriendo de forma nativa. No incluye ROM ni datos del juego: t\xC3\xBA aportas el volcado de tu cartucho."));
-        ImGui::TextColored(gold, "%s", text("Version 0.9.3", "Versi\xC3\xB3n 0.9.3"));
+        static const std::string installed_version = LauncherUpdater::installed_version();
+        ImGui::TextColored(gold, text("Version %s", "Versi\xC3\xB3n %s"), installed_version.c_str());
+        using UpdateState = LauncherUpdater::State;
+        switch (launcher_updater.state) {
+        case UpdateState::Idle:
+        case UpdateState::Current:
+        case UpdateState::Error:
+            if (launcher_updater.state == UpdateState::Current)
+                ImGui::TextWrapped("%s", text("ShiningSource is up to date.", "ShiningSource est\xC3\xA1 actualizado."));
+            if (launcher_updater.state == UpdateState::Error)
+                ImGui::TextWrapped("%s", text("The update could not be prepared. You can retry or open the releases page.",
+                                             "No se pudo preparar la actualizaci\xC3\xB3n. Puedes reintentar o abrir la p\xC3\xA1gina de versiones."));
+            if (soul_ui::button(text("Check for updates", "Buscar actualizaciones")))
+                launcher_updater.check();
+            break;
+        case UpdateState::Checking:
+            ImGui::TextWrapped("%s", text("Checking for updates...", "Buscando actualizaciones..."));
+            break;
+        case UpdateState::Available:
+            ImGui::TextWrapped(text("Version %s is available.", "La versi\xC3\xB3n %s est\xC3\xA1 disponible."), launcher_updater.version.c_str());
+            if (soul_ui::button(text("Download update", "Descargar actualizaci\xC3\xB3n")))
+                launcher_updater.download();
+            break;
+        case UpdateState::Downloading:
+            ImGui::TextWrapped("%s", text("Downloading and verifying the update...", "Descargando y verificando la actualizaci\xC3\xB3n..."));
+            break;
+        case UpdateState::Ready:
+            ImGui::TextWrapped(text("Version %s is verified and ready to install.", "La versi\xC3\xB3n %s est\xC3\xA1 verificada y lista para instalar."),
+                               launcher_updater.version.c_str());
+            if (soul_ui::button(text("Install and restart", "Instalar y reiniciar")) && launcher_updater.apply())
+                running = false;
+            break;
+        }
+        if (soul_ui::button(text("Open releases page", "Abrir p\xC3\xA1gina de versiones")) &&
+            !SDL_OpenURL("https://github.com/MatyMeatBoy/ShiningSource/releases/latest"))
+            launch_error = text("Could not open the release page.", "No se pudo abrir la p\xC3\xA1gina de versiones.");
         ImGui::TextColored(dim, "Dear ImGui %s, SDL %d.%d.%d", IMGUI_VERSION, SDL_MAJOR_VERSION, SDL_MINOR_VERSION, SDL_MICRO_VERSION);
         if (soul_ui::button(text("Exit launcher", "Cerrar launcher"))) running = false;
     }
@@ -1538,6 +1590,7 @@ int wmain(int argc, wchar_t **argv)
             ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
         else
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+        launcher_updater.poll();
         KhRaPump(ra, 0);                 /* answers from the site; nothing is evaluated in the launcher */
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -1565,6 +1618,7 @@ int wmain(int argc, wchar_t **argv)
         if (remaining > 0)
             remaining--;
     }
+    launcher_updater.finish();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
     test_pad.close();

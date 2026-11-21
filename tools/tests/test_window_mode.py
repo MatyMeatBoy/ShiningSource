@@ -63,10 +63,13 @@ int main(void) {
 void sub_0800232C(void) {}
 void sub_08002694(void) {}
 void sub_08002B70(void) {}
+void sub_08003984(void) {}
+void sub_080904A4(void) {}
 void sub_08086860(void) {}
 void sub_0807A5D4(void) {}
 void sub_0807B7B4(void) {}
 void sub_08082BB0(void) {}
+void sub_080855D4(void) {}
 ''' + classifier + '''
 
 static uint32_t *task(unsigned index) { return (uint32_t *)(0x03001300 + (uintptr_t)index * 0x28); }
@@ -79,6 +82,7 @@ static void link(unsigned index, void (*entry)(void), uint32_t signal) {
 }
 
 int main(void) {
+    assert(VirtualAlloc((void *)(uintptr_t)SS_EWRAM, 0x40000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     assert(VirtualAlloc((void *)(uintptr_t)SS_IWRAM, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     assert(VirtualAlloc((void *)(uintptr_t)SS_IO, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
     uint16_t *io = (uint16_t *)(uintptr_t)SS_IO;
@@ -95,11 +99,20 @@ int main(void) {
     io[0] = 0x0240;
     assert(ss_frontend_picture() == SS_PRESENT_WIDE_BRAND);
     io[0] = 0x1240;
-    assert(ss_frontend_picture() == SS_PRESENT_WIDE_MENU);
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_LANGUAGE);
     link(1, sub_08002B70, 0x5A112EBF); /* Suspended during character setup. */
-    assert(ss_frontend_picture() == SS_PRESENT_WIDE_MENU);
-    link(2, sub_08086860, 1);
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_SAVE);
+    link(2, sub_08003984, 1);
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_FOREST);
+    link(3, sub_08086860, 1);
     assert(ss_frontend_picture() == 0); /* Story/gameplay takes over. */
+    task(2)[0] = 0;
+    link(2, sub_080904A4, 1);
+    io[0] = 0x1100;
+    io[4] = 0x1801;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_SOUND);
+    io[4] = 0x1c08;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_SAVE); /* Do not use the sound-test backdrop before it owns BG0. */
     task(1)[0] = 0;
     link(0, sub_08002694, 0x14);
     uint32_t *menu = (uint32_t *)(uintptr_t)0x03006450;
@@ -118,10 +131,26 @@ int main(void) {
     assert(ss_frontend_picture() == SS_PRESENT_WIDE_MARBLE);
     menu[3] = (uint32_t)(uintptr_t)sub_08082BB0;
     assert(ss_frontend_picture() == SS_PRESENT_WIDE_SHOP);
+    io[0] = 0x1d40;
+    io[5] = 0x1d03;
+    io[6] = 0x9a01;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_SHOP); /* The same BG layout can still show the ordinary lists. */
+    *(uint32_t *)(uintptr_t)(*manager_slot + 0x28) = 1;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_SHOP_INSPECT);
+    menu[3] = (uint32_t)(uintptr_t)sub_0807B7B4;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_INSPECT);
+    io[0] |= 0x0080;
+    assert(ss_frontend_picture() == 0); /* Forced blank applies to the entire display. */
+    io[0] = 0x1f40;
     io[7] = 0x1E03;
     assert(ss_frontend_picture() == SS_PRESENT_WIDE_TRANSITION); /* BG3 owned by old field. */
     menu[1] = 0;
     assert(ss_frontend_picture() == 0); /* Retained callback after teardown. */
+    menu[1] = 4;
+    menu[3] = (uint32_t)(uintptr_t)sub_080855D4;
+    io[7] = 0x1e00;
+    assert(ss_frontend_picture() == SS_PRESENT_WIDE_CATALOG);
+    assert((SS_PRESENT_WIDE_MASK & (SS_PRESENT_LANG_MASK | SS_PRESENT_HUD | 0xffff)) == 0);
     return 0;
 }
 ''', encoding='utf-8')

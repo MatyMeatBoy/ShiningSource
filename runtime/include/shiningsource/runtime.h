@@ -21,6 +21,7 @@ int ss_memory_init(const char *rom_path, const char **error);
 #define SS_SCREEN_H 160
 
 #define SS_MAX_VIEW_W 480
+#define SS_WIDE_16_9_W (SS_SCREEN_H * 16 / 9)
 
 /* How a picture wider than the console's 240 pixels is composed (see core/ppu.c). */
 struct ss_bg_source {
@@ -34,6 +35,8 @@ struct ss_view {
     int shift;                  /* view column where native x = 0 lands */
     int hud_rows;               /* top lines whose halves go to the edges of the visible picture */
     int hud_left, hud_right;    /* those edges, as view columns */
+    int transparent_outside;   /* the host supplies the backdrop outside the map */
+    int menu_background;       /* continue the shared Items and Status texture outside the native view */
     struct ss_bg_source bg[4];
 };
 
@@ -106,6 +109,7 @@ void ss_net_room_generate(char code[SS_ROOM_CODE_CAPACITY]);
 int ss_net_room_begin(const char *code, int create);
 int ss_net_room_status(void);
 void ss_net_room_cancel(void);
+int ss_net_couch_can_add(void);
 void ss_net_vote(int wants);
 void ss_net_votes(int *have, int *need);
 int ss_net_skip_now(void);
@@ -179,11 +183,16 @@ void ss_remote_sfx_boss_receive(uint32_t cue, uint32_t area);
  * there). The platform draws each group at its edge of the picture, as large as it likes. Frames without the
  * flag are whole as they are (pages, messages, scenes that keep the console's composition). Off by default. */
 enum { SS_HUD_ROWS = 56, SS_HUD_SPLIT = 176, SS_PRESENT_HUD = 0x10000 };
-/* Front-end decoration is drawn in the unused columns by the host. */
+/* Front-end decoration is drawn in the unused columns by the host.
+ * The higher scene bit leaves the existing language bits intact. */
 enum { SS_PRESENT_WIDE_BRAND = 0x20000, SS_PRESENT_WIDE_MENU = 0x40000,
        SS_PRESENT_WIDE_TITLE = 0x60000, SS_PRESENT_WIDE_MARBLE = 0x80000,
        SS_PRESENT_WIDE_SHOP = 0xa0000, SS_PRESENT_WIDE_TRANSITION = 0xc0000,
-       SS_PRESENT_WIDE_FIELD = 0xe0000, SS_PRESENT_WIDE_MASK = 0xe0000 };
+       SS_PRESENT_WIDE_FIELD = 0xe0000, SS_PRESENT_WIDE_SAVE = 0x800000,
+       SS_PRESENT_WIDE_FOREST = 0x820000, SS_PRESENT_WIDE_INSPECT = 0x840000,
+       SS_PRESENT_WIDE_LANGUAGE = 0x860000, SS_PRESENT_WIDE_SOUND = 0x880000,
+       SS_PRESENT_WIDE_CATALOG = 0x8a0000, SS_PRESENT_WIDE_SHOP_INSPECT = 0x8c0000,
+       SS_PRESENT_WIDE_MASK = 0x8e0000 };
 /* Presentation metadata in the existing width argument. Zero denotes English
  * and remains compatible with images built before language metadata. */
 enum { SS_PRESENT_LANG_SHIFT = 20, SS_PRESENT_LANG_MASK = 7 << SS_PRESENT_LANG_SHIFT };

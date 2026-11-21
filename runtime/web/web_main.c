@@ -127,6 +127,7 @@ int ss_net_room_status(void) { return SS_ROOM_IDLE; }
 void ss_net_room_cancel(void) {}
 int ss_net_roster(struct ss_net_roster_entry entries[4]) { (void)entries; return 0; }
 int ss_net_roster_lobby(void) { return 0; }
+int ss_net_couch_can_add(void) { return 0; }
 int ss_net_roster_can_start(void) { return 0; }
 void ss_net_roster_set_stage(enum ss_net_roster_stage stage) { (void)stage; }
 void ss_net_roster_set_character(int class_id, int palette_id) { (void)class_id; (void)palette_id; }

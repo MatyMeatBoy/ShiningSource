@@ -16,11 +16,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build
+from launcher_art import LAUNCHER_ART
 
 ROOT = build.ROOT
 IMAGES = {"armeabi-v7a": None, "arm64-v8a": "build/android/images/arm64-v8a/%s/%s_game.macho",
           "x86_64": "build/android/images/x86_64/%s/%s_game.elf"}
-LAUNCHER_ASSETS = ("cover.png", "title-sides.png", "menu-sides.png", "shop-sides.png")
 
 
 def main():
@@ -64,7 +64,7 @@ def main():
     # AssetManager and SDL's relative asset fallback both see this path as assets/launcher.
     artwork = main_dir / "assets/assets/launcher"
     artwork.mkdir(parents=True, exist_ok=True)
-    for name in LAUNCHER_ASSETS:
+    for name in LAUNCHER_ART:
         shutil.copy2(ROOT / "assets/launcher" / name, artwork / name)
     if args.test:
         manifest = main_dir / "AndroidManifest.xml"
@@ -133,7 +133,7 @@ android {
     with zipfile.ZipFile(apk) as z:
         names = z.namelist()
         assert not any(Path(n).suffix.lower() in (".gba", ".sav") for n in names), "a ROM or a save must never be packaged"
-        for name in LAUNCHER_ASSETS:
+        for name in LAUNCHER_ART:
             assert "assets/assets/launcher/" + name in names, "launcher artwork missing: " + name
         for abi in args.abi:
             assert "lib/%s/libmain.so" % abi in names, "host library missing for " + abi

@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build, build_gamecube_sdl, link
+from launcher_art import LAUNCHER_ART
 
 ROOT = build.ROOT
 
@@ -59,15 +60,16 @@ def main():
     exe = out / "ShiningSource.exe"
     objects += [o for o in [build.icon_object(out)] if o]
     done = subprocess.run([cxx, "--target=x86_64-w64-mingw32", "-municode", *objects, "-o", str(exe), "-static-libstdc++", "-static-libgcc",
-                           "-L", str(sdl / "lib"), "-lSDL3", "-lopengl32", "-lcomdlg32", "-lws2_32", "-lwinhttp", "-lcrypt32", "-mwindows",
+                           "-L", str(sdl / "lib"), "-lSDL3", "-lopengl32", "-lcomdlg32", "-lws2_32", "-lwinhttp", "-lcrypt32", "-lbcrypt", "-mwindows",
                            "-Wl,-Bstatic", "-lc++", "-lunwind", "-lwinpthread", "-Wl,-Bdynamic"], capture_output=True, text=True)
     if done.returncode:
         print(done.stderr[-3000:])
         sys.exit("launcher link failed")
     build_gamecube_sdl.copy_runtime(sdl, out)
+    shutil.copy2(ROOT / "launcher/update.ps1", out / "ShiningSource-update.ps1")
     artwork = Path("assets/launcher")
     (out / artwork).mkdir(parents=True, exist_ok=True)
-    for name in ("cover.png", "title-sides.png", "menu-sides.png", "shop-sides.png"):
+    for name in LAUNCHER_ART:
         shutil.copy2(ROOT / artwork / name, out / artwork / name)
     # Preserve a newer catalog or a cached badge already in the installation.
     achievements = ROOT / "assets/achievements"
