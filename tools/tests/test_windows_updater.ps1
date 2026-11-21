@@ -39,7 +39,8 @@ try {
     catch { if ($_.Exception.Message -eq 'accepted traversal') { throw } }
     Assert-True ((Get-Content -LiteralPath (Join-Path $install 'ss2_win64.exe') -Raw) -eq 'old') 'Invalid packages changed the host'
 
-    Write-Package @('shiningsource.ini', 'game.gba', 'game.sav', 'assets/launcher/forest-sides.png')
+    $wideArt = @('forest-sides.png', 'language-native-sides.png', 'title-native-sides.png', 'shop-native-sides.png')
+    Write-Package (@('shiningsource.ini', 'game.gba', 'game.sav') + @($wideArt | ForEach-Object { "assets/launcher/$_" }))
     $digest = (Get-FileHash -LiteralPath $package).Hash
     $locked = [IO.File]::Open((Join-Path $install 'ShiningSource.exe'), 'Open', 'Read', 'None')
     try {
@@ -51,7 +52,9 @@ try {
 
     Install-Update $install $work $version $digest
     Assert-True ((Get-Content -LiteralPath (Join-Path $install 'ShiningSource.exe') -Raw) -eq 'new ShiningSource.exe') 'Launcher was not replaced'
-    Assert-True (Test-Path -LiteralPath (Join-Path $install 'assets/launcher/forest-sides.png')) 'Wide artwork was not installed'
+    foreach ($name in $wideArt) {
+        Assert-True (Test-Path -LiteralPath (Join-Path $install "assets/launcher/$name")) "Wide artwork was not installed ($name)"
+    }
     foreach ($name in @('shiningsource.ini', 'game.gba', 'game.sav')) {
         Assert-True ((Get-Content -LiteralPath (Join-Path $install $name) -Raw) -eq 'old') "Installation changed $name"
     }
