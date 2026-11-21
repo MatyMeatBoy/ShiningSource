@@ -41,6 +41,7 @@ typedef socklen_t socklen_t_;
 #endif
 
 enum { SEATS = 4, ROOMS = 512, HEADER = 60, MAX_PACKET = 1200, SILENCE = 30 };
+enum { INPUT_BLOCK_BYTES = 24, INPUT_MESSAGE_OFFSET = 8 };
 enum { T_HELLO = 1, T_WELCOME, T_DATA, T_END, T_PING, T_LIST, T_LIST_REPLY, T_PUBLIC_HELLO, T_UPDATE_REQUIRED };
 enum { LIST_ROWS = 4, ROOM_NAME_BYTES = 8, TITLE_BYTES = 16, LIST_NAMED = 124,
        PUBLIC_CREATE = 1, PUBLIC_JOIN = 2, PUBLIC_STARTED = 128 };
@@ -466,11 +467,16 @@ int main(int argc, char **argv)
         if (seat < 0 || !same_address(&room->seat[seat].address, &from) || (packet[4] != T_DATA && packet[4] != T_END))
             continue;
         room->seat[seat].heard = now;
-        if (room->listed && seat == 0 && packet[4] == T_DATA && packet[7] > 0 &&
-            size >= HEADER + 24 * packet[7]) {
-            const uint8_t *latest = packet + HEADER + 24 * (packet[7] - 1);
-            if (latest[8] == 'G' && latest[9] == 'O')
-                room->started = 1;
+        if (room->listed && !room->started && seat == 0 && packet[4] == T_DATA &&
+            size >= HEADER + INPUT_BLOCK_BYTES * packet[7]) {
+            /* Retransmissions can carry the lobby's GO before newer input blocks. */
+            for (int i = 0; i < packet[7]; ++i) {
+                const uint8_t *message = packet + HEADER + INPUT_BLOCK_BYTES * i + INPUT_MESSAGE_OFFSET;
+                if (message[0] == 'G' && message[1] == 'O') {
+                    room->started = 1;
+                    break;
+                }
+            }
         }
         packet[5] = (uint8_t)seat;
         for (j = 0; j < SEATS; j++)

@@ -86,7 +86,9 @@ class PublicLobbyTests(unittest.TestCase):
             self.assertEqual(query(), [])
             guests[2].send(packet(4, room, 4))
             self.assertEqual(query(), [(code, 3)])
-            game = packet(3, room, 1, flags=1) + bytes(8) + b"GO" + bytes(14)
+            # Input datagrams also carry unacknowledged frames. The start frame
+            # can be followed by ordinary game input in the same packet.
+            game = packet(3, room, 1, flags=2) + bytes(8) + b"GO" + bytes(14 + 24)
             host.send(game)
             self.assertEqual(query(), [])
             with self.assertRaises(socket.timeout):
