@@ -13,6 +13,7 @@ SIDE_ART = (
     "title-native-sides.png",
     "shop-native-sides.png",
     "forest-sides.png",
+    "forest-native-sides.png",
     "inventory-sides.png",
     "merchant-sides.png",
     "inspect-sides.png",

@@ -2327,8 +2327,6 @@ static int wide_scene_for_output(int scene, bool ultrawide)
     if (ultrawide)
         return scene == SS_PRESENT_WIDE_SHOP_INSPECT ? SS_PRESENT_WIDE_INSPECT : scene;
     switch (scene) {
-    case SS_PRESENT_WIDE_FOREST:
-        return SS_PRESENT_WIDE_MENU;
     case SS_PRESENT_WIDE_INSPECT:
         return SS_PRESENT_WIDE_MARBLE;
     case SS_PRESENT_WIDE_SOUND:
@@ -2349,7 +2347,7 @@ static const SDL_Surface *wide_art(int scene, bool ultrawide)
         { SS_PRESENT_WIDE_SHOP, { "shop-native-sides.png", "merchant-sides.png" } },
         { SS_PRESENT_WIDE_SHOP_INSPECT, { "shop-sides.png", NULL } },
         { SS_PRESENT_WIDE_SAVE, { "save-native-sides.png", "save-sides.png" } },
-        { SS_PRESENT_WIDE_FOREST, { NULL, "forest-sides.png" } },
+        { SS_PRESENT_WIDE_FOREST, { "forest-native-sides.png", "forest-sides.png" } },
         { SS_PRESENT_WIDE_INSPECT, { NULL, "inspect-sides.png" } },
     };
     for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
@@ -2399,6 +2397,7 @@ static unsigned wide_sample_edges(const uint32_t *pixels, int width, int scene, 
     case SS_PRESENT_WIDE_SHOP:    daylight = ultrawide ? 122 : 126; break;
     case SS_PRESENT_WIDE_SHOP_INSPECT: daylight = 122; break;
     case SS_PRESENT_WIDE_SAVE:    daylight = 133; break;
+    case SS_PRESENT_WIDE_FOREST:  daylight = ultrawide ? 80 : 126; break;
     case SS_PRESENT_WIDE_INSPECT: daylight = 132; break;
     default:                     daylight = 80; break;
     }
@@ -2421,7 +2420,8 @@ static void fill_wide_strips(uint32_t *pixels, int extra, int center_gap, int sc
     int art_half = art ? art->w / 2 : 0;
     bool native_art = art_half == WIDE_16_9_SIDES / 2;
     bool panel_fallback = scene == SS_PRESENT_WIDE_MENU || scene == SS_PRESENT_WIDE_MARBLE ||
-                          scene == SS_PRESENT_WIDE_SHOP || scene == SS_PRESENT_WIDE_SHOP_INSPECT || scene == SS_PRESENT_WIDE_SAVE;
+                          scene == SS_PRESENT_WIDE_SHOP || scene == SS_PRESENT_WIDE_SHOP_INSPECT ||
+                          scene == SS_PRESENT_WIDE_SAVE || scene == SS_PRESENT_WIDE_FOREST;
     for (int y = 0; y < SS_SCREEN_H; y++) {
         uint32_t *out = pixels + (extra + center_gap) * y;
         const uint32_t *art_row = art ? (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch) : NULL;
@@ -2496,7 +2496,7 @@ static void take_wide_picture(const uint32_t *pixels, int width, int scene)
         return;
     }
     if (wide_field_menu(scene) || scene == SS_PRESENT_WIDE_SAVE || scene == SS_PRESENT_WIDE_LANGUAGE ||
-        scene == SS_PRESENT_WIDE_TITLE ||
+        scene == SS_PRESENT_WIDE_TITLE || scene == SS_PRESENT_WIDE_FOREST ||
         (wide_ultrawide && scene && scene != SS_PRESENT_WIDE_TRANSITION)) {
         wide_frontend_blackout = WIDE_FRONTEND_BLACKOUT;
     } else if (wide_frontend_blackout > 0) {

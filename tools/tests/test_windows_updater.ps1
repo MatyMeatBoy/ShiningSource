@@ -39,7 +39,7 @@ try {
     catch { if ($_.Exception.Message -eq 'accepted traversal') { throw } }
     Assert-True ((Get-Content -LiteralPath (Join-Path $install 'ss2_win64.exe') -Raw) -eq 'old') 'Invalid packages changed the host'
 
-    $wideArt = @('forest-sides.png', 'language-native-sides.png', 'title-native-sides.png', 'shop-native-sides.png')
+    $wideArt = @('forest-sides.png', 'forest-native-sides.png', 'language-native-sides.png', 'title-native-sides.png', 'shop-native-sides.png')
     Write-Package (@('shiningsource.ini', 'game.gba', 'game.sav') + @($wideArt | ForEach-Object { "assets/launcher/$_" }))
     $digest = (Get-FileHash -LiteralPath $package).Hash
     $locked = [IO.File]::Open((Join-Path $install 'ShiningSource.exe'), 'Open', 'Read', 'None')

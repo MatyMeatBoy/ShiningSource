@@ -1,7 +1,7 @@
 # ShiningSource 0.9.3
 
 - **Wide Pro.** Enhanced mode adds matching 16:9 side art to language selection,
-  the title screen, save selection, and shops.
+  the title screen, save selection, character creation, and shops.
   Items and Status share an extended background that scrolls and fades with the
   original menu texture. At
   ultrawide ratios the publisher screen, language selection, title, save

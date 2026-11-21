@@ -127,7 +127,7 @@ function Open-VerifiedPackage($StagePath, $ExpectedDigest) {
 function Expand-UpdatePackage($Archive, $Destination, $Number) {
     $prefix = "ShiningSource-$Number/"
     $required = @('ShiningSource.exe', 'ss2_win64.exe', 'ss2_game.elf', 'SDL3.dll')
-    $allowed = '^(ShiningSource\.exe|ss2_win64\.exe|ss2_game\.elf|SDL3\.dll|libusb-1\.0\.dll|ss_relay\.exe|ShiningSource-update\.ps1|assets/launcher/(cover|(title|title-pro|title-native|menu|shop|shop-native|brand|language|language-native|save|save-native|forest|inventory|merchant|inspect)-sides)\.png|ra_set_[a-f0-9]{32}\.json|achievements/badges/badge_[0-9]+\.png)$'
+    $allowed = '^(ShiningSource\.exe|ss2_win64\.exe|ss2_game\.elf|SDL3\.dll|libusb-1\.0\.dll|ss_relay\.exe|ShiningSource-update\.ps1|assets/launcher/(cover|(title|title-pro|title-native|menu|shop|shop-native|brand|language|language-native|save|save-native|forest|forest-native|inventory|merchant|inspect)-sides)\.png|ra_set_[a-f0-9]{32}\.json|achievements/badges/badge_[0-9]+\.png)$'
     $seen = @{}
     $files = [Collections.Generic.List[string]]::new()
     $total = 0L
