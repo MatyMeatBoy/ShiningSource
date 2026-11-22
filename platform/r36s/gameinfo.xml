@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./ShiningSource.sh</path>
+    <name>ShiningSource</name>
+    <genre>Action RPG</genre>
+    <desc>Native ARM64 runtime for Shining Soul II. Requires the European cartridge dump.</desc>
+  </game>
+</gameList>

@@ -1,0 +1,17 @@
+{
+  "version": 4,
+  "name": "shiningsource.zip",
+  "items": ["ShiningSource.sh", "shiningsource/"],
+  "items_opt": [],
+  "attr": {
+    "title": "ShiningSource",
+    "porter": ["MatyMeatBoy"],
+    "desc": "Native ARM64 recompiled runtime for Shining Soul II.",
+    "inst": "Place your unmodified European AU2P cartridge dump in shiningsource/roms/rom.gba.",
+    "genres": ["rpg"],
+    "readytorun": false,
+    "runtime": [],
+    "reqs": [],
+    "arch": ["aarch64"]
+  }
+}
