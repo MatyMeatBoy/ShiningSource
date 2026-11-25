@@ -14,6 +14,16 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* SS_FBDEV=1 builds (Linux handhelds without a usable GPU, runtime/plat/fbdev_linux.c): with the SS_FBDEV variable
+ * set, SDL runs offscreen and every frame goes to the Linux framebuffer, see "framebuffer". */
+#if defined(SS_FBDEV) && defined(__linux__) && !defined(__ANDROID__)
+#define SS_FB_HOST 1
+#include "shiningsource/fbdev.h"
+static int fb_on, fb_stale, evdev_on;  /* the framebuffer is used; the texture has not seen the frame; evdev is read */
+static SDL_Surface *fb_surface;         /* what the software renderer composes into, the panel's size */
+static uint64_t evdev_decide_ns;        /* when to look whether SDL found anything to play with */
+#endif
+
 static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
@@ -395,6 +405,17 @@ int ss_plat_video_init(const char *title)
     stat_start_ms[0] = process_age_ms();
     read_bindings(getenv("SS_KEYS"), (int *)keys, 1, SDL_SCANCODE_COUNT);
     ss_pad_enable_gamecube();
+#ifdef SS_FB_HOST
+    fb_on = ss_fb_open();
+    if (fb_on)
+        SDL_SetHint(SDL_HINT_VIDEO_DRIVER, "offscreen");    /* SDL_VIDEO_DRIVER in the environment still wins */
+#endif
+    {
+        /* Without a window that has the focus (the offscreen driver) SDL drops controller presses unless told not to. */
+        const char *driver = getenv("SDL_VIDEO_DRIVER");
+        if (getenv("SS_FBDEV") || (driver && !strcmp(driver, "offscreen")))
+            SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    }
 #ifdef __ANDROID__
     /* A missing/broken optional audio driver must not prevent video and input. */
     if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) {
@@ -438,11 +459,32 @@ int ss_plat_video_init(const char *title)
     else
         fprintf(stderr, "no audio device: %s\n", SDL_GetError());
     stat_start_ms[2] = process_age_ms();
+#ifdef SS_FB_HOST
+    if (fb_on) {
+        /* An offscreen window for SDL's events, and a software renderer drawing into a surface of the panel's
+         * size: the composed frame is read from there, nothing is copied back from a window. */
+        window = SDL_CreateWindow(title, ss_fb_width(), ss_fb_height(), 0);
+        fb_surface = window ? SDL_CreateSurface(ss_fb_width(), ss_fb_height(), SDL_PIXELFORMAT_XRGB8888) : NULL;
+        renderer = fb_surface ? SDL_CreateSoftwareRenderer(fb_surface) : NULL;
+        if (!renderer) {
+            fprintf(stderr, "window: %s\n", SDL_GetError());
+            return -1;
+        }
+        evdev_decide_ns = SDL_GetTicksNS() + 1000000000u;
+    } else
+#endif
     if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
     }
+#ifdef SS_FB_HOST
+    else
+        evdev_decide_ns = SDL_GetTicksNS() + 1000000000u;
+#endif
 #ifndef __ANDROID__
+#ifdef SS_FB_HOST
+    if (!fb_on)
+#endif
     {
         enum ss_window_mode requested = startup_window_mode();
         if (!apply_window_mode(requested) && requested == SS_WINDOW_FULLSCREEN)
@@ -531,6 +573,18 @@ static void set_vsync(int wanted)
     every = (int)(refresh / 60.0f + 0.5f);
     display_paced = 0;
     vsync_refused = 0;
+#ifdef SS_FB_HOST
+    if (fb_on) {                        /* the framebuffer has no present to wait in: the game keeps its own clock */
+        audio_ratio = 1.0f;
+        audio_trim = 0;
+        if (audio)
+            SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio);
+        next_frame_ns = SDL_GetTicksNS();
+        fprintf(stderr, "video: framebuffer, own pacing\n");
+        (void)said; (void)every; (void)wanted;
+        return;
+    }
+#endif
     if (wanted == 2) {
         said = "variable refresh, own pacing";
         if (!SDL_SetRenderVSync(renderer, SDL_RENDERER_VSYNC_ADAPTIVE)) {
@@ -775,6 +829,10 @@ int ss_plat_view_width(void)
         read_mode();
     if (classic)
         return SS_SCREEN_W;
+#ifdef SS_FB_HOST
+    if (fb_on)
+        return ss_fb_view();            /* SS_FB_VIEW: 320 by default, the panel's width at 2x */
+#endif
     if (!window || !SDL_GetWindowSizeInPixels(window, &w, &h) || h < SS_SCREEN_H)
         return SS_SCREEN_W;
     const int64_t difference = (int64_t)w * 9 - (int64_t)h * 16;
@@ -787,8 +845,78 @@ int ss_plat_view_width(void)
     return width;
 }
 
+/* SS_INPUT_LOG=1: every input device SDL finds and every press, axis, hat and key with SDL's raw numbers, on
+ * stderr (learning a console's controls). Every joystick is opened then, so that its raw events arrive. */
+static void log_input(const SDL_Event *event)
+{
+    static int wanted = -1, axis_step[2][32];
+    char guid[40];
+    if (wanted < 0)
+        wanted = getenv("SS_INPUT_LOG") && getenv("SS_INPUT_LOG")[0] == '1';
+    if (!wanted)
+        return;
+    switch (event->type) {
+    case SDL_EVENT_JOYSTICK_ADDED: {
+        SDL_JoystickID id = event->jdevice.which;
+        SDL_Joystick *stick = SDL_GetJoystickFromID(id);
+        char *mapping = SDL_GetGamepadMappingForID(id);
+        if (!stick)
+            stick = SDL_OpenJoystick(id);
+        SDL_GUIDToString(SDL_GetJoystickGUIDForID(id), guid, sizeof guid);
+        fprintf(stderr, "input: joystick %u added: \"%s\" vendor %04x product %04x, %d buttons %d axes %d hats, gamepad %s, mapping %s, guid %s\n",
+                (unsigned)id, SDL_GetJoystickNameForID(id) ? SDL_GetJoystickNameForID(id) : "?", SDL_GetJoystickVendorForID(id),
+                SDL_GetJoystickProductForID(id), stick ? SDL_GetNumJoystickButtons(stick) : -1, stick ? SDL_GetNumJoystickAxes(stick) : -1,
+                stick ? SDL_GetNumJoystickHats(stick) : -1, SDL_IsGamepad(id) ? "yes" : "no", mapping ? mapping : "none", guid);
+        SDL_free(mapping);
+        break;
+    }
+    case SDL_EVENT_JOYSTICK_REMOVED:
+        fprintf(stderr, "input: joystick %u removed\n", (unsigned)event->jdevice.which);
+        break;
+    case SDL_EVENT_KEYBOARD_ADDED:
+        fprintf(stderr, "input: keyboard %u added: \"%s\"\n", (unsigned)event->kdevice.which,
+                SDL_GetKeyboardNameForID(event->kdevice.which) ? SDL_GetKeyboardNameForID(event->kdevice.which) : "?");
+        break;
+    case SDL_EVENT_JOYSTICK_BUTTON_DOWN:
+    case SDL_EVENT_JOYSTICK_BUTTON_UP:
+        fprintf(stderr, "input: joystick %u button %u %s\n", (unsigned)event->jbutton.which, event->jbutton.button,
+                event->jbutton.down ? "down" : "up");
+        break;
+    case SDL_EVENT_JOYSTICK_AXIS_MOTION:
+    case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
+        int pad = event->type == SDL_EVENT_GAMEPAD_AXIS_MOTION, axis = (pad ? event->gaxis.axis : event->jaxis.axis) & 31;
+        int value = pad ? event->gaxis.value : event->jaxis.value, step = value / 8192 + 8;
+        if (step != axis_step[pad][axis]) {         /* only when it moves by an eighth of its range */
+            axis_step[pad][axis] = step;
+            fprintf(stderr, "input: %s %u axis %d value %d\n", pad ? "gamepad" : "joystick",
+                    (unsigned)(pad ? event->gaxis.which : event->jaxis.which), axis, value);
+        }
+        break;
+    }
+    case SDL_EVENT_JOYSTICK_HAT_MOTION:
+        fprintf(stderr, "input: joystick %u hat %u value %u\n", (unsigned)event->jhat.which, event->jhat.hat, event->jhat.value);
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        fprintf(stderr, "input: gamepad %u button %u (%s) %s\n", (unsigned)event->gbutton.which, event->gbutton.button,
+                SDL_GetGamepadStringForButton((SDL_GamepadButton)event->gbutton.button) ? SDL_GetGamepadStringForButton((SDL_GamepadButton)event->gbutton.button) : "?",
+                event->gbutton.down ? "down" : "up");
+        break;
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        if (!event->key.repeat)
+            fprintf(stderr, "input: keyboard %u key scancode %d keycode 0x%x raw %u (%s) %s\n", (unsigned)event->key.which,
+                    (int)event->key.scancode, (unsigned)event->key.key, (unsigned)event->key.raw, SDL_GetScancodeName(event->key.scancode),
+                    event->key.down ? "down" : "up");
+        break;
+    default:
+        break;
+    }
+}
+
 static void handle_event(const SDL_Event *event)
 {
+    log_input(event);
 #ifdef __ANDROID__
     /* SDL's Android EGL context is restored between WILL and DID foreground. */
     if (event->type == SDL_EVENT_WILL_ENTER_FOREGROUND)
@@ -2221,6 +2349,26 @@ static uint16_t read_buttons(void)
         stick_buttons = ss_pad_stick(gamepad, pad_uses_gamecube, stick_buttons);
         pad |= stick_buttons;
     }
+#ifdef SS_FB_HOST
+    /* A second after the start, with neither a controller nor a keyboard from SDL (or SS_EVDEV=1), the input
+     * devices are read directly. Their buttons count as the controller's: Select+Start opens the menu. */
+    if (evdev_decide_ns && SDL_GetTicksNS() >= evdev_decide_ns) {
+        const char *force = getenv("SS_EVDEV");
+        evdev_decide_ns = 0;
+        if ((force && force[0] == '1') || (!gamepad && !SDL_HasKeyboard() && !(force && force[0] == '0'))) {
+            fprintf(stderr, "input: %s: reading the input devices directly\n", force && force[0] == '1' ? "SS_EVDEV=1" : "no controller and no keyboard from SDL");
+            evdev_on = ss_evdev_start() > 0;
+        }
+    }
+    if (evdev_on) {
+        static unsigned before;
+        unsigned now = ss_evdev_poll();
+        if ((now & ~before) & SS_EVDEV_MENU)
+            menu_command(MENU_TOGGLE);
+        before = now;
+        pad |= (uint16_t)(now & 0x3FF);
+    }
+#endif
 #ifdef __ANDROID__
     if (android_background)
         return 0;
@@ -2660,6 +2808,52 @@ static uint16_t qol_buttons(const bool *state)
     return held;
 }
 
+#ifdef SS_FB_HOST
+/* ---- framebuffer ----
+ * When nothing goes over the game's picture (no menu, fade, notice, scaled status display, touch buttons, side art
+ * or classic border) it goes to the framebuffer directly at the largest whole scale, centred, as the renderer's
+ * whole-number logical presentation would place it; transparent pixels show the Soul field or black, as there.
+ * Otherwise the software renderer composes the frame in fb_surface and that goes to the framebuffer. */
+static int fb_direct(const uint32_t *pixels, int width)
+{
+    static uint32_t *field;
+    static int field_width, touch = -1;
+    const uint32_t *under = NULL;
+    if (touch < 0)
+        touch = getenv("SS_TOUCH") && atoi(getenv("SS_TOUCH")) != 0;
+    if (classic || menu_open || overlay_darkness || overlay_text[0] || notice_count || option_hud || hud_asked || hud_have || touch)
+        return 0;
+    if (width > SS_SCREEN_W && wide_native_menu && (!option_wide_pro || !sides_field))
+        return 0;                       /* only the middle is shown then */
+    if (width > SS_SCREEN_W && option_wide_pro && sides_field && wide_picture && !wide_native_menu)
+        return 0;                       /* side art */
+    if (width > SS_SCREEN_W && sides_field) {
+        if (field_width != width) {
+            free(field);
+            field = malloc((size_t)width * SS_SCREEN_H * 4);
+            field_width = field ? width : 0;
+            if (field)
+                ss_soul_field_pixels(field, width, SS_SCREEN_H, 0, 0, 0, 0);
+        }
+        if (!field)
+            return 0;
+        under = field;
+    }
+    return ss_fb_present_picture(pixels, width, width, under);
+}
+
+/* The composed frame (the renderer's surface) to the framebuffer. */
+static void fb_composed(void)
+{
+    SDL_FlushRenderer(renderer);
+    if (SDL_MUSTLOCK(fb_surface))
+        SDL_LockSurface(fb_surface);
+    ss_fb_present_full(fb_surface->pixels, fb_surface->pitch, fb_surface->w, fb_surface->h);
+    if (SDL_MUSTLOCK(fb_surface))
+        SDL_UnlockSurface(fb_surface);
+}
+#endif
+
 /* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
 uint16_t ss_plat_present(const uint32_t *pixels, int width)
 {
@@ -2715,6 +2909,11 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         SDL_DelayPrecise((uint64_t)test_slow_ms * 1000000u);
     if (part)
         part_from = SDL_GetTicksNS();
+#ifdef SS_FB_HOST
+    if (fb_on)
+        fb_stale = 1;                   /* uploaded only if the frame is composed */
+    else
+#endif
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
     take_wide_picture(pixels, width, frontend);
     hud_have = hud != 0;
@@ -2744,7 +2943,19 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
             if (hud && hud_texture)
                 SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4);
         }
+#ifdef SS_FB_HOST
+        int fb_shown = 0;
+        if (fb_on && fb_direct(pixels, width)) {
+            fb_shown = 1;
+        } else {
+            if (fb_on && fb_stale && !texture_remade)
+                SDL_UpdateTexture(texture, &update, pixels, width * 4);
+            fb_stale = 0;
+            held |= show_picture(width);
+        }
+#else
         held |= show_picture(width);
+#endif
         texture_remade = 0;
         if (part) {
             part_to = SDL_GetTicksNS();
@@ -2777,6 +2988,12 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         }
         if (part)
             part_from = SDL_GetTicksNS();
+#ifdef SS_FB_HOST
+        if (fb_on) {
+            if (!fb_shown)
+                fb_composed();
+        } else
+#endif
         SDL_RenderPresent(renderer);
         if (part) {
             part_to = SDL_GetTicksNS();
