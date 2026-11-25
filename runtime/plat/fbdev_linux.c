@@ -80,6 +80,12 @@ static void console_graphics(void)
     fprintf(stderr, "fbdev: no console to put in graphics mode\n");
 }
 
+/* For the host's crash report (runtime/android32/host.c), which owns the fault signals: async-signal-safe. */
+void ss_fb_console_restore(void)
+{
+    console_restore();
+}
+
 static void fatal_signal(int sig)
 {
     console_restore();
@@ -215,8 +221,14 @@ int ss_fb_open(void)
     if (!fb_is_file) {
         static const int signals[] = { SIGINT, SIGTERM, SIGHUP, SIGQUIT, SIGSEGV, SIGBUS, SIGILL, SIGFPE, SIGABRT };
         console_graphics();
-        for (unsigned i = 0; i < sizeof signals / sizeof signals[0]; i++)
+        for (unsigned i = 0; i < sizeof signals / sizeof signals[0]; i++) {
+            struct sigaction old;
+            /* a handler already there (the host's crash report) stays: it restores the console itself */
+            if (sigaction(signals[i], NULL, &old) == 0 && (old.sa_flags & SA_SIGINFO ? old.sa_sigaction != NULL
+                                                                                      : old.sa_handler != SIG_DFL))
+                continue;
             signal(signals[i], fatal_signal);
+        }
     }
     atexit(ss_fb_close);
     return 1;

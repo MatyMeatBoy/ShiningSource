@@ -133,6 +133,7 @@ int ss_fb_present_picture(const uint32_t *pixels, int width, int stride, const u
 /* A composed XRGB8888 frame (normally the panel's size), centred. */
 void ss_fb_present_full(const void *pixels, int pitch, int w, int h);
 void ss_fb_close(void);                 /* registered with atexit by ss_fb_open; logs the frame counts */
+void ss_fb_console_restore(void);       /* text mode and cursor again (async-signal-safe, for a crash handler) */
 
 enum { SS_EVDEV_MENU = 1 << 10 };       /* the GBA buttons are bits 0..9, as KEYINPUT */
 int ss_evdev_start(void);               /* opens /dev/input/event*: the number of devices kept */

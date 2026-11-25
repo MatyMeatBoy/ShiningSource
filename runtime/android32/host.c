@@ -19,6 +19,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <fcntl.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <ucontext.h>
 #ifdef __ANDROID__
@@ -127,7 +129,19 @@ static SERVICE uint32_t b_stack_alloc(uint32_t size)
 static SERVICE void b_stack_free(uint32_t base, uint32_t size) { (void)size; free(PTR(base)); }
 static SERVICE void b_stack_bounds(uint32_t low, uint32_t high) { (void)low; (void)high; }
 static SERVICE int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
-static SERVICE uint32_t b_present(uint32_t pixels, int width) { return ss_plat_present(PTR(pixels), width); }
+static volatile uint32_t presented, presented_width;
+static volatile uintptr_t crash_address;   /* 0: SS_TEST_CRASH writes there */ /* host-side frame count for crash reports (ss_frame_number is the guest's) */
+static SERVICE uint32_t b_present(uint32_t pixels, int width)
+{
+    static long crash_at = -1;          /* SS_TEST_CRASH=N: a write to address 0 at present N (tests the report) */
+    if (crash_at < 0)
+        crash_at = getenv("SS_TEST_CRASH") ? atol(getenv("SS_TEST_CRASH")) : 0;
+    presented++;
+    presented_width = (uint32_t)width;
+    if (crash_at && presented == (uint32_t)crash_at)
+        *(volatile uint32_t *)crash_address = presented;
+    return ss_plat_present(PTR(pixels), width);
+}
 static SERVICE int b_view_width(void) { return ss_plat_view_width(); }
 static SERVICE void b_audio(uint32_t samples, int frames) { ss_plat_audio(PTR(samples), frames); }
 static SERVICE double b_pow(double a, double b) { return pow(a, b); }
@@ -231,34 +245,229 @@ static void read_settings(const char *path)
     fclose(file);
 }
 #endif
-static char *fault_hex(char *out, uint32_t value)
+/* ---- crash report ----
+ * On SIGSEGV/SIGBUS/SIGILL/SIGFPE (on the alternate stack, so an exhausted guest or coroutine stack is reported
+ * too): the signal, the fault address, every register of the ucontext, the mapping each code address belongs to
+ * ("image+0xOFFSET", OFFSET relative to the image's first mapping: the ELF address of a PIE), the host's present
+ * count, and the words of the stack that point into executable mappings. Written to stderr and, on Linux, to
+ * shiningsource_crash.log in the current folder (the launcher's user/). tools/crash_names.py --ga36 turns it into
+ * function names. Only fixed static storage, bounded formatting and async-signal-safe calls (open/read/write). */
+#if !defined(__ANDROID__) && !defined(SS_ANDROID32_HEADLESS)
+extern void ss_fb_console_restore(void) __attribute__((weak));   /* runtime/plat/fbdev_linux.c */
+#endif
+static uint32_t fault_stack_low, fault_stack_high;
+static char fault_maps[96 * 1024];
+static int fault_maps_size;
+static char fault_report[8 * 1024];
+static int fault_report_size;
+static void fault_put(const char *text)
+{
+    while (*text && fault_report_size < (int)sizeof fault_report - 1) fault_report[fault_report_size++] = *text++;
+}
+static void fault_hex(uint32_t value)
 {
     static const char digits[] = "0123456789abcdef";
-    int shift;
-    for (shift = 28; shift >= 0; shift -= 4) *out++ = digits[(value >> shift) & 15];
-    return out;
+    char text[11] = "0x";
+    int shift, i = 2;
+    for (shift = 28; shift >= 0; shift -= 4) text[i++] = digits[(value >> shift) & 15];
+    text[i] = 0;
+    fault_put(text);
 }
-static char *fault_text(char *out, const char *text)
+static void fault_decimal(uint32_t value)
 {
-    while (*text) *out++ = *text++;
-    return out;
+    char text[12], *p = text + sizeof text - 1;
+    *p = 0;
+    do *--p = (char)('0' + value % 10); while (value /= 10);
+    fault_put(p);
+}
+static uint32_t fault_parse_hex(const char **text)
+{
+    uint32_t value = 0;
+    for (;; (*text)++) {
+        char c = **text;
+        if (c >= '0' && c <= '9') value = value * 16 + (uint32_t)(c - '0');
+        else if (c >= 'a' && c <= 'f') value = value * 16 + (uint32_t)(c - 'a' + 10);
+        else return value;
+    }
+}
+static void fault_read_maps(void)
+{
+    int fd = open("/proc/self/maps", O_RDONLY | O_CLOEXEC);
+    fault_maps_size = 0;
+    if (fd < 0) return;
+    for (;;) {
+        ssize_t got = read(fd, fault_maps + fault_maps_size, sizeof fault_maps - 1 - (size_t)fault_maps_size);
+        if (got <= 0) break;
+        fault_maps_size += (int)got;
+    }
+    fault_maps[fault_maps_size] = 0;
+    close(fd);
+}
+/* The /proc/self/maps line holding `address`: its range, whether it is executable, and the base of its image
+ * (the lowest mapping of the same file). 0 when no line holds it. */
+struct fault_map { uint32_t low, high, base; int exec; const char *name; int name_length; };
+static int fault_find(uint32_t address, struct fault_map *map)
+{
+    const char *line = fault_maps;
+    while (line < fault_maps + fault_maps_size) {
+        const char *p = line, *end = line, *name;
+        uint32_t low, high;
+        int exec;
+        while (*end && *end != '\n') end++;
+        low = fault_parse_hex(&p);
+        if (*p == '-') p++;
+        high = fault_parse_hex(&p);
+        exec = p[0] == ' ' && p[3] == 'x';
+        name = p;
+        {
+            int fields = 0;                    /* perms offset dev inode, then the name */
+            while (name < end && fields < 4) { while (name < end && *name == ' ') name++; while (name < end && *name != ' ') name++; fields++; }
+            while (name < end && *name == ' ') name++;
+        }
+        if (address >= low && address < high) {
+            const char *other = fault_maps;
+            map->low = low; map->high = high; map->exec = exec; map->name = name; map->name_length = (int)(end - name);
+            map->base = low;
+            while (map->name_length && other < fault_maps + fault_maps_size) {
+                const char *q = other, *stop = other;
+                uint32_t start;
+                while (*stop && *stop != '\n') stop++;
+                start = fault_parse_hex(&q);
+                if (start < map->base && stop - map->name_length >= other
+                    && !memcmp(stop - map->name_length, name, (size_t)map->name_length)
+                    && (stop - map->name_length == other || stop[-map->name_length - 1] == ' '))
+                    map->base = start;
+                other = *stop ? stop + 1 : stop;
+            }
+            return 1;
+        }
+        line = *end ? end + 1 : end;
+    }
+    return 0;
+}
+static void fault_where(uint32_t address)
+{
+    struct fault_map map;
+    if (!fault_find(address, &map)) { fault_put(" (unmapped)"); return; }
+    fault_put(" (");
+    if (map.name_length) {
+        char name[256];
+        int length = map.name_length < (int)sizeof name - 1 ? map.name_length : (int)sizeof name - 1;
+        memcpy(name, map.name + map.name_length - length, (size_t)length);
+        name[length] = 0;
+        fault_put(name);
+    } else {
+        fault_put(address >= fault_stack_low && address < fault_stack_high ? "guest stack" : "anonymous");
+    }
+    fault_put("+");
+    fault_hex(address - (map.name_length ? map.base : map.low));
+    fault_put(map.exec ? ", code)" : ")");
 }
 static void on_fault(int number, siginfo_t *info, void *raw)
 {
+    static const char *const names[] = { "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "fp", "ip" };
     const ucontext_t *context = raw;
-    char message[128], *end = message;
-    /* Only fixed local storage, bounded formatting and async-signal-safe write.
-     * The alternate stack also reports exhausted guest/coroutine stacks. */
-    end = fault_text(end, "crash: signal 0x");
-    end = fault_hex(end, (uint32_t)number);
-    end = fault_text(end, " at pc 0x");
-    end = fault_hex(end, context ? (uint32_t)context->uc_mcontext.arm_pc : 0);
-    end = fault_text(end, ", sp 0x");
-    end = fault_hex(end, context ? (uint32_t)context->uc_mcontext.arm_sp : 0);
-    end = fault_text(end, ", address 0x");
-    end = fault_hex(end, info ? (uint32_t)(uintptr_t)info->si_addr : 0);
-    *end++ = '\n';
-    (void)write(STDERR_FILENO, message, (size_t)(end - message));
+    uint32_t regs[13], sp = 0, pc = 0, lr = 0, cpsr = 0;
+    int i, fd;
+    if (context) {
+        const uint32_t *r = (const uint32_t *)&context->uc_mcontext.arm_r0;   /* arm_r0..arm_ip are consecutive */
+        for (i = 0; i < 13; i++) regs[i] = r[i];
+        sp = (uint32_t)context->uc_mcontext.arm_sp;
+        lr = (uint32_t)context->uc_mcontext.arm_lr;
+        pc = (uint32_t)context->uc_mcontext.arm_pc;
+        cpsr = (uint32_t)context->uc_mcontext.arm_cpsr;
+    } else {
+        memset(regs, 0, sizeof regs);
+    }
+    fault_read_maps();
+    fault_report_size = 0;
+    fault_put("crash: signal ");
+    fault_decimal((uint32_t)number);
+    fault_put(number == SIGSEGV ? " (SIGSEGV)" : number == SIGBUS ? " (SIGBUS)" : number == SIGILL ? " (SIGILL)" : number == SIGFPE ? " (SIGFPE)" : "");
+    fault_put(" code ");
+    fault_decimal(info ? (uint32_t)info->si_code : 0);
+    fault_put(", address ");
+    fault_hex(info ? (uint32_t)(uintptr_t)info->si_addr : 0);
+    fault_where(info ? (uint32_t)(uintptr_t)info->si_addr : 0);
+    fault_put("\ncrash: host " SS_HOST_VERSION ", thread ");
+    fault_decimal((uint32_t)getpid() == (uint32_t)syscall(SYS_gettid) ? 0 : (uint32_t)syscall(SYS_gettid));
+    fault_put(" (0: the main thread), present ");
+    fault_decimal(presented);
+    fault_put(" (width ");
+    fault_hex(presented_width);
+    fault_put(")\ncrash: pc ");
+    fault_hex(pc);
+    fault_where(pc);
+    fault_put(cpsr & 0x20 ? " thumb" : " arm");
+    fault_put("\ncrash: lr ");
+    fault_hex(lr);
+    fault_where(lr);
+    fault_put("\ncrash: sp ");
+    fault_hex(sp);
+    fault_where(sp);
+    fault_put(" cpsr ");
+    fault_hex(cpsr);
+    for (i = 0; i < 13; i++) {
+        fault_put(i % 4 == 0 ? "\ncrash:" : "");
+        fault_put(" ");
+        fault_put(names[i]);
+        fault_put(" ");
+        fault_hex(regs[i]);
+    }
+    fault_put("\n");
+    {
+        /* Return addresses on the stack: words pointing into executable mappings, up to the stack mapping's end. */
+        struct fault_map stack;
+        int found = 0;
+        if (sp && !(sp & 3) && fault_find(sp, &stack)) {
+            uint32_t at, stop = stack.high - sp > 8192 ? sp + 8192 : stack.high;
+            for (at = sp; at < stop && found < 48; at += 4) {
+                uint32_t word = *(const volatile uint32_t *)(uintptr_t)at;
+                struct fault_map code;
+                if (word > 0x10000 && fault_find(word, &code) && code.exec) {
+                    fault_put("crash: stack sp+");
+                    fault_hex(at - sp);
+                    fault_put(" ");
+                    fault_hex(word);
+                    fault_where(word);
+                    fault_put("\n");
+                    found++;
+                }
+            }
+        }
+    }
+    {
+        /* The executable mappings, for the tool and for addresses in other libraries. */
+        const char *line = fault_maps;
+        while (line < fault_maps + fault_maps_size) {
+            const char *end = line, *p = line;
+            while (*end && *end != '\n') end++;
+            fault_parse_hex(&p);
+            if (*p == '-') { p++; fault_parse_hex(&p); }
+            if (p[0] == ' ' && p[3] == 'x' && fault_report_size + (end - line) + 16 < (int)sizeof fault_report) {
+                fault_put("crash: map ");
+                memcpy(fault_report + fault_report_size, line, (size_t)(end - line));
+                fault_report_size += (int)(end - line);
+                fault_put("\n");
+            }
+            line = *end ? end + 1 : end;
+        }
+    }
+    fault_put("crash: end\n");
+    (void)write(STDERR_FILENO, fault_report, (size_t)fault_report_size);
+#if !defined(__ANDROID__)
+    fd = open("shiningsource_crash.log", O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+    if (fd >= 0) {
+        (void)write(fd, fault_report, (size_t)fault_report_size);
+        close(fd);
+    }
+#else
+    (void)fd;
+#endif
+#if !defined(__ANDROID__) && !defined(SS_ANDROID32_HEADLESS)
+    if (ss_fb_console_restore)
+        ss_fb_console_restore();       /* text mode and the cursor again, as fbdev's own handler did */
+#endif
     _exit(128 + number);
 }
 static void install_fault_log(void)
@@ -330,6 +539,8 @@ int main(int argc, char **argv)
     }
     stack_base = b_stack_alloc(4 * 1024 * 1024);
     fprintf(stderr, "host32: guest stack %08X-%08X; native-thread bridge services\n", stack_base, stack_base + 4 * 1024 * 1024);
+    fault_stack_low = stack_base;
+    fault_stack_high = stack_base + 4 * 1024 * 1024;
     install_fault_log();
     setup_bridge();
     ss_guest_rom = rom;

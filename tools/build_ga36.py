@@ -139,7 +139,7 @@ def host(cc, sysroot, sdl, out, name, guest_o, bundled, headless):
     if not gcc:
         sys.exit('the sysroot needs the armhf GCC startup objects (usr/lib/gcc/%s/*/crtbegin.o)' % TRIPLE)
     flags = ['--target=' + TRIPLE, '--sysroot=' + sysroot.as_posix(), '--gcc-install-dir=' + gcc[-1].as_posix(),
-             *CPU, '-fuse-ld=lld', '-O2', '-Wall', '-DSS_REBASED_HOST=1', '-DSS_HOST_VERSION="%s"' % VERSION,
+             *CPU, '-fuse-ld=lld', '-O2', '-g', '-Wall', '-DSS_REBASED_HOST=1', '-DSS_HOST_VERSION="%s"' % VERSION,
              '-I', str(ROOT / 'runtime/include')]
     plat = sorted((ROOT / 'runtime/plat').glob('*.c'))
     if headless:
