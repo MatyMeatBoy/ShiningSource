@@ -361,27 +361,69 @@ static int kms_open(void)
         goto refused;
     kms_shown = 0;
     hz = kms_measure();
-    fprintf(stderr, "kms: %s, %ux%u \"%s\", panel %.2f Hz (clock %u kHz)\n", path, kms_mode.hdisplay, kms_mode.vdisplay,
-            kms_mode.name, hz, kms_mode.clock);
+    fprintf(stderr, "kms: %s, %ux%u \"%s\", panel %.2f Hz (clock %u kHz, h %u %u %u %u, v %u %u %u %u)\n", path,
+            kms_mode.hdisplay, kms_mode.vdisplay, kms_mode.name, hz, kms_mode.clock, kms_mode.hdisplay, kms_mode.hsync_start,
+            kms_mode.hsync_end, kms_mode.htotal, kms_mode.vdisplay, kms_mode.vsync_start, kms_mode.vsync_end, kms_mode.vtotal);
     if (text && *text)
         wanted = atof(text);
     if (hz > 1.0 && wanted > 1.0 && (hz < 58.5 || hz > 61.5)) {
-        struct drm_mode_modeinfo faster = kms_mode;
-        double got;
-        faster.clock = (uint32_t)((double)kms_mode.clock * wanted / hz + 0.5);
-        faster.vrefresh = (uint32_t)(wanted + 0.5);
-        snprintf(faster.name, sizeof faster.name, "%ux%u@%.0f", faster.hdisplay, faster.vdisplay, wanted);
-        if (!kms_set(&faster, kms_shown)) {
-            fprintf(stderr, "kms: the %u kHz mode for %.2f Hz was refused (%s): the panel stays at %.2f Hz\n", faster.clock,
-                    wanted, strerror(errno), hz);
-        } else if ((got = kms_measure()) >= 58.5 && got <= 61.5) {
-            fprintf(stderr, "kms: the panel now refreshes at %.2f Hz (clock %u kHz)\n", got, faster.clock);
-            kms_mode = faster;
-            hz = got;
-        } else {
-            fprintf(stderr, "kms: asked %.2f Hz at %u kHz, measured %.2f Hz: back to the panel's mode\n", wanted, faster.clock, got);
+        /* Three ways to the console's rate, gentlest first: fewer blank lines (the pixel clock and every visible
+         * timing stay), fewer blank columns, then a faster pixel clock (the display engine may round it to a rate
+         * of its own: on the GA36 a clock asked for 59.73 Hz gave 124.6 Hz). Each is kept only if it measures right. */
+        int tried = 0;
+        for (int way = 0; way < 3; way++) {
+            struct drm_mode_modeinfo faster = kms_mode;
+            double got;
+            const char *how = way == 0 ? "blank lines" : way == 1 ? "blank columns" : "pixel clock";
+            if (way == 0) {
+                uint32_t total = (uint32_t)((double)kms_mode.vtotal * hz / wanted + 0.5), cut = kms_mode.vtotal - total;
+                uint32_t front = kms_mode.vsync_start - kms_mode.vdisplay, back = kms_mode.vtotal - kms_mode.vsync_end;
+                if (total >= kms_mode.vtotal || cut + 2 > front + back)
+                    continue;
+                if (cut + 1 <= front) {                 /* from the front porch, else from both porches */
+                    faster.vsync_start -= cut; faster.vsync_end -= cut;
+                } else {
+                    uint32_t from_front = front - 1;
+                    faster.vsync_start -= from_front; faster.vsync_end -= from_front;
+                }
+                faster.vtotal = total;
+            } else if (way == 1) {
+                uint32_t total = (uint32_t)((double)kms_mode.htotal * hz / wanted + 0.5), cut = kms_mode.htotal - total;
+                uint32_t front = kms_mode.hsync_start - kms_mode.hdisplay, back = kms_mode.htotal - kms_mode.hsync_end;
+                if (total >= kms_mode.htotal || cut + 2 > front + back)
+                    continue;
+                if (cut + 1 <= front) {
+                    faster.hsync_start -= cut; faster.hsync_end -= cut;
+                } else {
+                    uint32_t from_front = front - 1;
+                    faster.hsync_start -= from_front; faster.hsync_end -= from_front;
+                }
+                faster.htotal = total;
+            } else {
+                faster.clock = (uint32_t)((double)kms_mode.clock * wanted / hz + 0.5);
+            }
+            faster.vrefresh = (uint32_t)(wanted + 0.5);
+            snprintf(faster.name, sizeof faster.name, "%ux%u@%.0f", faster.hdisplay, faster.vdisplay, wanted);
+            tried++;
+            if (!kms_set(&faster, kms_shown)) {
+                fprintf(stderr, "kms: %.2f Hz by %s refused (%s)\n", wanted, how, strerror(errno));
+                continue;
+            }
+            got = kms_measure();
+            if (got >= 58.5 && got <= 61.5) {
+                fprintf(stderr, "kms: the panel now refreshes at %.2f Hz by %s (clock %u kHz, htotal %u, vtotal %u)\n", got,
+                        how, faster.clock, faster.htotal, faster.vtotal);
+                kms_mode = faster;
+                hz = got;
+                break;
+            }
+            fprintf(stderr, "kms: %.2f Hz by %s (clock %u kHz, htotal %u, vtotal %u) measured %.2f Hz: not kept\n", wanted, how,
+                    faster.clock, faster.htotal, faster.vtotal, got);
             kms_set(&kms_mode, kms_shown);
+        }
+        if (tried && (hz < 58.5 || hz > 61.5)) {
             hz = kms_measure();
+            fprintf(stderr, "kms: back to the panel's own mode, %.2f Hz\n", hz);
         }
     }
     if (hz <= 1.0)
