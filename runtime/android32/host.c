@@ -22,6 +22,7 @@
 #include <fcntl.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <sys/mman.h>
 #include <ucontext.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
@@ -116,17 +117,38 @@ static SERVICE void b_exit(int code)
     ss_plat_net_send_farewell();
     _exit(code);                         /* SDL/Java threads still own process resources */
 }
+/* Guest stacks must lie above 0x10000000. The rebased guest reads every address whose top byte is 0x00..0x0F
+ * as a GBA address: 0x00/0x01 are stray cartridge accesses (writes dropped, reads zero) and 0x02..0x0E are
+ * translated to GBA memory. glibc's heap starts right after a low, non-PIE program (0x01xxxxxx on the GA36),
+ * so posix_memalign gave coroutine stacks the guest could not use: the first coroutine keeping a pointer on
+ * its stack (the save screen) decompressed into address 0. Anonymous mappings are placed high by the kernel;
+ * a low one is refused and asked for again above 0x40000000. */
 static SERVICE uint32_t b_stack_alloc(uint32_t size)
 {
-    void *memory = NULL;
-    if (!size || posix_memalign(&memory, 16, size) != 0) {
-        fprintf(stderr, "coroutines: could not allocate %u bytes\n", size);
+    size_t length = ((size_t)size + 0xFFF) & ~(size_t)0xFFF;
+    void *memory = MAP_FAILED;
+    if (size) {
+        memory = mmap(NULL, length, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (memory != MAP_FAILED && (uintptr_t)memory < 0x10000000u) {
+            munmap(memory, length);
+            memory = mmap((void *)(uintptr_t)0x40000000u, length, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+            if (memory != MAP_FAILED && (uintptr_t)memory < 0x10000000u) {
+                munmap(memory, length);
+                memory = MAP_FAILED;
+            }
+        }
+    }
+    if (memory == MAP_FAILED) {
+        fprintf(stderr, "coroutines: could not map %u bytes above 0x10000000\n", size);
         b_exit(1);
     }
-    memset(memory, 0, size);
-    return (uint32_t)(uintptr_t)memory;
+    return (uint32_t)(uintptr_t)memory;     /* anonymous mappings are already zero */
 }
-static SERVICE void b_stack_free(uint32_t base, uint32_t size) { (void)size; free(PTR(base)); }
+static SERVICE void b_stack_free(uint32_t base, uint32_t size)
+{
+    munmap(PTR(base), ((size_t)size + 0xFFF) & ~(size_t)0xFFF);
+}
 static SERVICE void b_stack_bounds(uint32_t low, uint32_t high) { (void)low; (void)high; }
 static SERVICE int b_video_init(uint32_t title) { return ss_plat_video_init(PTR(title)); }
 static volatile uint32_t presented, presented_width;
