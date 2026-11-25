@@ -1,0 +1,12 @@
+Escena shop, arte Flat 4:3 (PixelBuddy).
+
+base.png (320x240) tiene el cuadro original de la consola en el centro (240x160 en 40,40) y, a cada lado,
+las 22 columnas del arte 16:9 aprobado (shop-native-sides.png). El magenta es lo que falta: 18 columnas por lado junto a
+ellas y las franjas de 40 filas arriba y abajo. mascara.png: blanco = pintar, negro = conservar.
+
+Pedir: continuar el fondo de la escena en las zonas magenta, siguiendo el arte aprobado de los lados y el
+fondo original (misma paleta, grano, luz y escala de pixel nativa), sin repetir ni prolongar personajes,
+texto ni interfaz, y sin tocar un pixel fuera del magenta.
+
+Resultado: assets/launcher/shop-flat.png de 320x240 exactos (en la GA36 se ve a 2x = 640x480). El port
+usa solo lo que queda fuera del cuadro de la consola. Revisar a escala entera antes de aprobar.
