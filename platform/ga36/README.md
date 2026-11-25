@@ -25,9 +25,9 @@ Los controles de la consola se usan como un mando. **Start + Select** abre las o
 
 ### Imagen 4:3
 
-La pantalla de 640x480 se usa entera: un lienzo de 320×240 píxeles del juego a 2× exactos, sin filtrado. En los mapas el campo se ve más allá del encuadre de la GBA por los cuatro lados. Los menús, la pantalla de título, las tiendas y las cinemáticas conservan su encuadre propio de 240×160 (480×320 en la pantalla), centrado y rodeado por el decorado del port: el campo «Soul», las ilustraciones laterales de cada escena extendidas arriba y abajo, o los bordes de la imagen prolongados. Las opciones (**Start + Select**), el aviso para saltar escenas y los fundidos ocupan el lienzo completo y se leen a 2×.
+La pantalla de 640x480 se usa entera: un lienzo de 320×240 píxeles del juego a 2× exactos, sin filtrado. En los mapas el campo se ve más allá del encuadre de la GBA por los cuatro lados. Los menús, la pantalla de título, las tiendas y las cinemáticas conservan su encuadre propio de 240×160 (480×320 en la pantalla), centrado; alrededor queda negro hasta que exista arte hecho para 4:3 (los mapas muestran su propio contenido). Las opciones (**Start + Select**), el aviso para saltar escenas y los fundidos ocupan el lienzo completo y se leen a 2×.
 
-`SS_CANVAS` elige el lienzo: `320x240` por defecto; `240x160` muestra sólo la imagen original de la GBA a 480×320 en el centro; vacía (`SS_CANVAS=`) vuelve a la imagen panorámica de 320×160 de RC1. En **Opciones**, «Lados: Negro» quita el decorado y «Wide Pro: No» deja sólo el campo «Soul».
+`SS_CANVAS` elige el lienzo: `320x240` por defecto; `240x160` muestra sólo la imagen original de la GBA a 480×320 en el centro; vacía (`SS_CANVAS=`) vuelve a la imagen panorámica de 320×160 de RC1.
 
 ### Partidas y registros
 
@@ -60,9 +60,9 @@ The handheld's buttons act as a gamepad. **Start + Select** opens the game's opt
 
 ### 4:3 picture
 
-The whole 640x480 screen is used: a canvas of 320×240 game pixels at an exact 2×, unfiltered. On the maps the field is shown beyond the GBA's frame on all four sides. Menus, the title screen, shops and cut-scenes keep their own 240×160 framing (480×320 on the screen), centred and surrounded by the port's decor: the "Soul" field, each scene's side artwork extended above and below, or the picture's edges drawn out. The options (**Start + Select**), the skip-scene prompt and fades cover the whole canvas and read at 2×.
+The whole 640x480 screen is used: a canvas of 320×240 game pixels at an exact 2×, unfiltered. On the maps the field is shown beyond the GBA's frame on all four sides. Menus, the title screen, shops and cut-scenes keep their own 240×160 framing (480×320 on the screen), centred, with black around it until art made for 4:3 exists (the maps show their own content). The options (**Start + Select**), the skip-scene prompt and fades cover the whole canvas and read at 2×.
 
-`SS_CANVAS` chooses the canvas: `320x240` by default; `240x160` shows only the original GBA picture at 480×320 in the middle; empty (`SS_CANVAS=`) brings back RC1's 320×160 wide picture. In **Options**, "Sides: Black" removes the decor and "Wide Pro: Off" leaves only the "Soul" field.
+`SS_CANVAS` chooses the canvas: `320x240` by default; `240x160` shows only the original GBA picture at 480×320 in the middle; empty (`SS_CANVAS=`) brings back RC1's 320×160 wide picture.
 
 ### Saves and logs
 

@@ -2818,10 +2818,9 @@ static void draw_wide_strips(int view)
  * when it changed. It is computed from what the wide view uses beside a picture (wide_picture, wide_edges,
  * wide_light, the side art) plus the picture's top and bottom rows (wide_rows):
  *   always the Soul field (SS_SIDES=0: black), which shows wherever the game's frame is transparent;
- *   a scene with side art (menus, title, shops...): the art beside the console's 160 rows at one art pixel per
- *     game pixel; above and below, the same art mirrored upwards and downwards, and over and under the picture
- *     the art mirrored from both sides inwards (cross-faded in the middle). Never scaled, never the picture's
- *     edges drawn out: a scene without art, or past the art's width, gets black. Only the console's 240 x 160 rectangle of the
+ *   a framed scene (menus, title, shops...): black around the console's picture. The code can place art made for
+ *     the canvas (key.art, at one art pixel per game pixel, mirrored above and below) but none is approved yet:
+ *     the 16:9 side art is not used here. Never scaled, never the picture's edges drawn out. Only the console's 240 x 160 rectangle of the
  *     frame is shown then; the rest of the frame is covered, as the wide view covers it with the strips;
  *   the fade after a field scene: the last field frame darkened, as the wide view keeps the field's sides.
  * Nothing but the shipped art and the game's own pixels is drawn. canvas_rect is the part of the frame shown. */
@@ -2989,7 +2988,10 @@ static void canvas_decor_update(int width, int height)
             key.scene = wide_picture;
             key.light = (int)wide_light;
             key.ultrawide = wide_ultrawide;
-            key.art = wide_art(wide_picture, wide_ultrawide);
+            /* The side art in assets/launcher was made and approved for the 16:9 view only: it is not used on the
+             * canvas (not cropped, tiled or mirrored into the 4:3 bands). Framed scenes get black around them until
+             * art made for 4:3 exists (inputs: assets/launcher/43-masks). */
+            key.art = NULL;
             memcpy(key.edges, wide_edges, sizeof key.edges);
             memcpy(key.rows, wide_rows, sizeof key.rows);
         }
