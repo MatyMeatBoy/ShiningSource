@@ -233,6 +233,22 @@ else
     log "CLOCK ms"
 fi
 run boot 45 sdl SS_QUIT=600 SS_INPUT_LOG=1 SS_STATS=1 SS_FB_SHOT=300
+if [ "$(cat "$out/02-boot/exit.txt" 2>/dev/null)" != 0 ]; then
+    log "ABORT the game did not start: see 02-boot"
+    say "-" "ABORTADO: el juego no arranco"
+    DIAG_SET=aborted
+fi
+if [ "${DIAG_SET:-}" = fps ]; then
+    # ---- frame rate in Flat (320x240), stage by stage: what the 80-frames-a-second goal needs ----
+    TOTAL=8
+    F=SS_CANVAS=320x240
+    run fps-logic 150 sdl "$F" SS_PICTURE=0 SS_QUIT=3000 SS_PROF=1 SS_STATS=1 "$P"
+    run fps-render 200 sdl "$F" SS_PICTURE=2 SS_QUIT=3000 SS_PROF=1 "$P"
+    run fps-show 150 sdl "$F" SS_TEST_SLOW=17 SS_FRAMESKIP=0 SS_QUIT=1500 SS_PROF=1 SS_STATS=1 "$P"
+    run fps-play 120 sdl "$F" SS_QUIT=3000 SS_PROF=1 SS_STATS=1 SS_FB_SHOT=2500 "$P"
+    run fps-render-cpu 200 headless SS_FRAMES=3000 SS_TEST_RENDER=320 SS_VIEW=320 SS_VIEW_H=240 SS_PROF=1 "$P"
+    [ -n "$town" ] && run fps-town 150 sdl "$F" "SS_INPUT_FILE=$town" SS_PICTURE=0:9000 SS_TEST_WARP=9000:0:0 SS_QUIT=9900 SS_PROF=9000:9900 SS_STATS=1
+elif [ "${DIAG_SET:-}" != aborted ]; then
 run play-paced-320 80 sdl SS_FB_VIEW=320 SS_QUIT=2400 SS_FB_SHOT=1500 SS_STATS=1 SS_PROF=1 "$P"
 run hash-headless 100 headless SS_FRAMES=3000 SS_HASH_ALL=1 "$P"
 run cap-headless 100 headless SS_FRAMES=4000 SS_PROF=1 "$P"
@@ -272,6 +288,7 @@ run cap-show-240 90 sdl SS_FB_VIEW=240 SS_TEST_SLOW=17 SS_FRAMESKIP=0 SS_QUIT=12
 run cap-render-480 130 headless SS_FRAMES=4000 SS_TEST_RENDER=480 SS_VIEW=480 SS_PROF=1 "$P"
 run play-paced-320-noskip 60 sdl SS_FB_VIEW=320 SS_FRAMESKIP=0 SS_QUIT=1800 SS_STATS=1 "$P"
 [ -n "$town" ] && run town-320 150 sdl SS_FB_VIEW=320 "SS_INPUT_FILE=$town" SS_PICTURE=0:9000 SS_TEST_WARP=9000:0:0 SS_QUIT=9900 SS_PROF=9000:9900 SS_STATS=1
+fi
 
 # ---- end ----
 dmesg 2>/dev/null | tail -n 200 > "$out/dmesg-end.txt"

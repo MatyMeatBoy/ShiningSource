@@ -2571,15 +2571,15 @@ static int wide_scene_for_output(int scene, bool ultrawide)
 static const SDL_Surface *wide_art(int scene, bool ultrawide)
 {
     static struct { int scene; const char *name[2]; bool loaded[2]; SDL_Surface *surface[2]; } files[] = {
-        { SS_PRESENT_WIDE_BRAND, { NULL, "brand-sides.png" } },
-        { SS_PRESENT_WIDE_LANGUAGE, { "language-native-sides.png", "language-sides.png" } },
-        { SS_PRESENT_WIDE_TITLE, { "title-native-sides.png", "title-pro-sides.png" } },
-        { SS_PRESENT_WIDE_MARBLE, { "menu-sides.png", "inventory-sides.png" } },
-        { SS_PRESENT_WIDE_SHOP, { "shop-native-sides.png", "merchant-sides.png" } },
+        /* The approved art is the 16:9 one (44 columns, 22 a side). The earlier ultrawide atlases were not
+         * approved and were removed: ultrawide shows the 16:9 art and black beyond it. */
+        { SS_PRESENT_WIDE_LANGUAGE, { "language-native-sides.png", NULL } },
+        { SS_PRESENT_WIDE_TITLE, { "title-native-sides.png", NULL } },
+        { SS_PRESENT_WIDE_MARBLE, { "menu-sides.png", NULL } },
+        { SS_PRESENT_WIDE_SHOP, { "shop-native-sides.png", NULL } },
         { SS_PRESENT_WIDE_SHOP_INSPECT, { "shop-sides.png", NULL } },
-        { SS_PRESENT_WIDE_SAVE, { "save-native-sides.png", "save-sides.png" } },
-        { SS_PRESENT_WIDE_FOREST, { "forest-native-sides.png", "forest-sides.png" } },
-        { SS_PRESENT_WIDE_INSPECT, { NULL, "inspect-sides.png" } },
+        { SS_PRESENT_WIDE_SAVE, { "save-native-sides.png", NULL } },
+        { SS_PRESENT_WIDE_FOREST, { "forest-native-sides.png", NULL } },
     };
     for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
         if (files[i].scene != scene)
@@ -2886,42 +2886,39 @@ static void canvas_keep_field(const uint32_t *frame, int width, int height)
     canvas_field_id++;
 }
 
-/* Above and below the console's rows (`top` rows each side), once its side strips are in canvas_decor. */
-static void canvas_bands(const struct canvas_key *key, int left, int top)
+/* Flat art made for the whole canvas of a scene (PixelBuddy: the approved 16:9 columns kept, only what they do not
+ * cover generated): assets/launcher/<scene>-flat.png, canvas_w x canvas_h; only what lies outside the console's
+ * picture is used. None approved yet: then the 16:9 art beside the picture and black around it. */
+static const SDL_Surface *flat_art(int scene, int width, int height)
 {
-    const SDL_Surface *art = key->art;
-    const int art_half = art ? art->w / 2 : 0;
-    const bool art_wide = art && art_half >= SS_SCREEN_W / 2 + 8;      /* the 256-column art reaches the middle */
-    const unsigned light = (unsigned)key->light;
-    for (int e = 0; e < top; e++) {
-        int m = e % (2 * SS_SCREEN_H);
-        if (m >= SS_SCREEN_H)
-            m = 2 * SS_SCREEN_H - 1 - m;                                /* mirrored, and back again */
-        for (int side = 0; side < 2; side++) {
-            const int y = side ? top + SS_SCREEN_H + e : top - 1 - e, art_y = side ? SS_SCREEN_H - 1 - m : m;
-            uint32_t *out = canvas_decor + (size_t)y * (size_t)canvas_w;
-            const uint32_t *mirror = canvas_decor + (size_t)(top + art_y) * (size_t)canvas_w;
-            const uint32_t *art_row = art_wide ? (const uint32_t *)((const uint8_t *)art->pixels + art_y * art->pitch) : NULL;
-            if (y < 0 || y >= canvas_h)
-                continue;
-            memcpy(out, mirror, (size_t)left * sizeof *out);
-            memcpy(out + left + SS_SCREEN_W, mirror + left + SS_SCREEN_W, (size_t)(canvas_w - left - SS_SCREEN_W) * sizeof *out);
-            for (int c = 0; c < SS_SCREEN_W; c++) {
-                uint32_t outer;
-                if (art_row) {
-                    /* the left art mirrored rightwards from the picture's left edge, the right art leftwards */
-                    const int from_left = c < art_half - 1 ? c : art_half - 1;
-                    const int from_right = SS_SCREEN_W - 1 - c < art_half - 1 ? SS_SCREEN_W - 1 - c : art_half - 1;
-                    const uint32_t a = art_row[art_half - 1 - from_left], b = art_row[art_half + from_right];
-                    const int t = c < 90 ? 0 : c >= 150 ? 256 : (c - 90) * 256 / 60;
-                    outer = wide_mix(0xff000000u, wide_mix(a, b, (unsigned)t), light);
-                } else {
-                    outer = 0xff000000u;    /* no art for this scene: black, never the picture's edge drawn out */
-                }
-                out[left + c] = outer;
+    static struct { int scene; const char *name; bool loaded; SDL_Surface *surface; } files[] = {
+        { SS_PRESENT_WIDE_LANGUAGE, "language-flat.png" }, { SS_PRESENT_WIDE_TITLE, "title-flat.png" },
+        { SS_PRESENT_WIDE_MARBLE, "menu-flat.png" }, { SS_PRESENT_WIDE_SHOP, "shop-flat.png" },
+        { SS_PRESENT_WIDE_SHOP_INSPECT, "shop-inspect-flat.png" }, { SS_PRESENT_WIDE_SAVE, "save-flat.png" },
+        { SS_PRESENT_WIDE_FOREST, "forest-flat.png" },
+    };
+    for (unsigned i = 0; i < sizeof files / sizeof files[0]; i++) {
+        if (files[i].scene != scene)
+            continue;
+        if (!files[i].loaded) {
+            const char *base = SDL_GetBasePath();
+            char relative[64], *path = NULL;
+            SDL_Surface *image = NULL;
+            files[i].loaded = true;
+            SDL_snprintf(relative, sizeof relative, "assets/launcher/%s", files[i].name);
+            if (base && SDL_asprintf(&path, "%s%s", base, relative) >= 0) {
+                image = SDL_LoadPNG(path);
+                SDL_free(path);
             }
+            if (!image)
+                image = SDL_LoadPNG(relative);
+            if (image && image->w == width && image->h == height)
+                files[i].surface = SDL_ConvertSurface(image, SDL_PIXELFORMAT_ARGB8888);
+            SDL_DestroySurface(image);
         }
+        return files[i].surface;
     }
+    return NULL;
 }
 
 static void canvas_build(const struct canvas_key *key)
@@ -2940,12 +2937,17 @@ static void canvas_build(const struct canvas_key *key)
         /* Only real content around the picture: the scene's own side art at one art pixel per game pixel (no
          * scaling, no smearing of the picture's edges), else black. */
         const SDL_Surface *art = key->art;
+        const SDL_Surface *flat = flat_art(wide_scene_for_output(key->scene, false), canvas_w, canvas_h);
         const int art_half = art ? art->w / 2 : 0;
         for (size_t i = 0; i < count; i++) {
             int y = (int)(i / (size_t)canvas_w), x = (int)(i % (size_t)canvas_w);
             if (y < top || y >= top + SS_SCREEN_H || x < left || x >= left + SS_SCREEN_W)
-                canvas_decor[i] = 0xff000000u;
+                canvas_decor[i] = flat ? wide_mix(0xff000000u, ((const uint32_t *)((const uint8_t *)flat->pixels + y * flat->pitch))[x],
+                                                  (unsigned)key->light)
+                                       : 0xff000000u;
         }
+        if (flat)
+            art = NULL;                 /* the Flat art has the 16:9 columns in it already */
         for (int y = 0; art && y < SS_SCREEN_H; y++) {
             const uint32_t *art_row = (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch);
             uint32_t *out = canvas_decor + (size_t)(top + y) * (size_t)canvas_w;
@@ -2955,7 +2957,6 @@ static void canvas_build(const struct canvas_key *key)
                     out[left + SS_SCREEN_W + d] = wide_mix(0xff000000u, art_row[art_half + d], (unsigned)key->light);
             }
         }
-        canvas_bands(key, left, top);
     }
 }
 
@@ -2988,10 +2989,10 @@ static void canvas_decor_update(int width, int height)
             key.scene = wide_picture;
             key.light = (int)wide_light;
             key.ultrawide = wide_ultrawide;
-            /* The side art in assets/launcher was made and approved for the 16:9 view only: it is not used on the
-             * canvas (not cropped, tiled or mirrored into the 4:3 bands). Framed scenes get black around them until
-             * art made for 4:3 exists (inputs: assets/launcher/43-masks). */
-            key.art = NULL;
+            /* Beside the picture: the scene's approved 16:9 art (22 columns a side) at one art pixel per game pixel,
+             * the columns the wide view shows next to it; the rest of the canvas black. A scene with Flat art made for
+             * the whole canvas (flat_art) shows that instead. */
+            key.art = wide_art(wide_scene_for_output(wide_picture, false), false);
             memcpy(key.edges, wide_edges, sizeof key.edges);
             memcpy(key.rows, wide_rows, sizeof key.rows);
         }
