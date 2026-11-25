@@ -1,0 +1,39 @@
+# GA36 diagnostic v2 (4:3) - design. Not yet merged into "ShiningSource GA36 - Diagnostico.sh" (owned by the
+# ShiningSource-ga36 worker until their $game fix lands). Merge = replace the case list of v1 with this one and
+# apply the four script changes below. tools/ga36_diag_report.py reads the result (case names keep v1's patterns:
+# cap-headless, cap-render-W, cap-nopic-*, cap-noshow-V, cap-show-V, hash-*, play-paced-*).
+#
+# Script changes
+# 1. The child gets everything explicitly: export game rom DIAG_ENVSH before re-invoking "$self" --child, and the
+#    child also recomputes game from DIAG_GAME if empty and exits 121 with "game vacio" on stderr if still empty.
+#    (v1 bug: $game empty in the child -> exec /libarmhf/ld-linux-armhf.so.3 not found, exit 127 in 1.2 s, run lost.)
+# 2. Pre-flight case 00-preflight before anything else: headless SS_FRAMES=60 and sdl SS_QUIT=60 SS_PICTURE=2.
+#    If either exits != 0, or the headless one prints no "frame    60  hash" line: write
+#    "DIAGNOSTICO ABORTADO: el juego no arranca (salida N): <last stderr line>" to /dev/tty0 and to status.txt
+#    ("ABORT preflight N"), keep the census, sleep 20 s so it can be read, END 1. No other case runs.
+# 3. Watchdog by wall clock: each case records t0=$(up) and is killed when up - t0 > budget (TERM, 5 s, KILL),
+#    polled every second; the global deadline also uses /proc/uptime (DIAG_DEADLINE=840 s after the census).
+#    No counting of loop rounds (a busy board makes `sleep 1` rounds longer than a second).
+# 4. Every case's env is written in full (no implicit defaults): SS_SKIP SS_NET SS_FRAMELOG SS_CANVAS SS_VIEW
+#    SS_VIEW_H SS_FB_VIEW SDL_AUDIO_DRIVER and the case's own; env.txt is the exact list. Crash cases keep
+#    stderr, dmesg tail and any crash log the runtime writes (copied as crash-*.txt).
+#
+# Cases: name  budget_s  kind  variables   (in order of value; total about 15 min)
+00-preflight            20  headless+sdl  SS_FRAMES=60 / SS_QUIT=60 SS_PICTURE=2
+crash-scene-43         150  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_FB_VIEW=320 SS_QUIT=8000 SS_STATS=1 SS_PROF=1 SS_FB_SHOT=6000 SS_INPUT_FILE=$play   # plays through the first cut-scene and on (the real launch crashed rc=139 ~94 s in)
+hash-headless          100  headless  SS_FRAMES=3000 SS_HASH_ALL=1 SS_INPUT_FILE=$play   # compare with tools/tests/ga36_hash_reference.txt
+play-paced-43           80  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_FB_VIEW=320 SS_QUIT=2400 SS_STATS=1 SS_PROF=1 SS_FB_SHOT=1500 SS_INPUT_FILE=$play
+play-paced-320          80  sdl   SS_FB_VIEW=320 SS_VIEW=320 SS_QUIT=2400 SS_STATS=1 SS_PROF=1 SS_INPUT_FILE=$play
+play-paced-240          80  sdl   SS_FB_VIEW=240 SS_VIEW=240 SS_QUIT=2400 SS_STATS=1 SS_PROF=1 SS_INPUT_FILE=$play
+cap-headless            90  headless  SS_FRAMES=4000 SS_PROF=1 SS_INPUT_FILE=$play
+cap-render-320          90  headless  SS_FRAMES=4000 SS_TEST_RENDER=320 SS_VIEW=320 SS_PROF=1 SS_INPUT_FILE=$play
+cap-nopic-alsa          90  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_PICTURE=0 SS_QUIT=4000 SS_PROF=1 SS_INPUT_FILE=$play
+cap-noshow-43           90  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_PICTURE=2 SS_QUIT=4000 SS_PROF=1 SS_INPUT_FILE=$play
+cap-show-43             80  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_TEST_SLOW=17 SS_FRAMESKIP=0 SS_QUIT=1200 SS_PROF=1 SS_STATS=1 SS_INPUT_FILE=$play
+hash-sdl                90  sdl   SS_FRAMES=3000 SS_HASH_ALL=1 SS_INPUT_FILE=$play
+town-43                120  sdl   SS_CANVAS=320x240 SS_VIEW=320 SS_VIEW_H=240 SS_FB_VIEW=320 SS_INPUT_FILE=$town SS_PICTURE=0:9000 SS_TEST_WARP=9000:0:0 SS_QUIT=9900 SS_PROF=9000:9900 SS_STATS=1
+input-log               30  sdl   SS_QUIT=1200 SS_INPUT_LOG=1   # screen asks to press every button once (button map)
+cap-render-240          60  headless  SS_FRAMES=3000 SS_TEST_RENDER=240 SS_VIEW=240 SS_PROF=1 SS_INPUT_FILE=$play
+save-tmpfs              45  headless  SS_FRAMES=3100 SS_TEST_SAVE=3000 SS_INPUT_FILE=$play
+# dropped from v1: clock-probe (kept only if time remains: last), cores-pinned (no taskset on the board),
+# gov-performance (governor not writable as user), cap-render-480, audio-disk, save-card.

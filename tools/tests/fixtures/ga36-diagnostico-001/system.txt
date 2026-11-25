@@ -1,0 +1,647 @@
+== uname
+Linux goodluckOS 7.2.9-dirty #2 SMP PREEMPT Mon Nov 23 08:34:32 UTC 2026 armv7l GNU/Linux
+== uptime
+114.39 381.41
+== date (board clock, may be wrong)
+Sun Jun 21 15:46:06 UTC 1970
+== /proc/cpuinfo
+processor	: 0
+model name	: ARMv7 Processor rev 5 (v7l)
+BogoMIPS	: 57.14
+Features	: half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32 lpae evtstrm 
+CPU implementer	: 0x41
+CPU architecture: 7
+CPU variant	: 0x0
+CPU part	: 0xc07
+CPU revision	: 5
+
+processor	: 1
+model name	: ARMv7 Processor rev 5 (v7l)
+BogoMIPS	: 57.14
+Features	: half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32 lpae evtstrm 
+CPU implementer	: 0x41
+CPU architecture: 7
+CPU variant	: 0x0
+CPU part	: 0xc07
+CPU revision	: 5
+
+processor	: 2
+model name	: ARMv7 Processor rev 5 (v7l)
+BogoMIPS	: 57.14
+Features	: half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32 lpae evtstrm 
+CPU implementer	: 0x41
+CPU architecture: 7
+CPU variant	: 0x0
+CPU part	: 0xc07
+CPU revision	: 5
+
+processor	: 3
+model name	: ARMv7 Processor rev 5 (v7l)
+BogoMIPS	: 57.14
+Features	: half thumb fastmult vfp edsp neon vfpv3 tls vfpv4 idiva idivt vfpd32 lpae evtstrm 
+CPU implementer	: 0x41
+CPU architecture: 7
+CPU variant	: 0x0
+CPU part	: 0xc07
+CPU revision	: 5
+
+Hardware	: Allwinner sun8i Family
+Revision	: 0000
+Serial		: 0000000000000000
+== /proc/meminfo
+MemTotal:         502864 kB
+MemFree:          402504 kB
+MemAvailable:     455808 kB
+Buffers:            7460 kB
+Cached:            42680 kB
+SwapCached:            0 kB
+Active:            20656 kB
+Inactive:          31496 kB
+Active(anon):        148 kB
+Inactive(anon):     2120 kB
+Active(file):      20508 kB
+Inactive(file):    29376 kB
+Unevictable:           8 kB
+Mlocked:               0 kB
+HighTotal:             0 kB
+HighFree:              0 kB
+LowTotal:         502864 kB
+LowFree:          402504 kB
+SwapTotal:        262140 kB
+SwapFree:         262140 kB
+Dirty:                88 kB
+Writeback:             0 kB
+AnonPages:          2168 kB
+Mapped:             3484 kB
+Shmem:               256 kB
+KReclaimable:      15260 kB
+Slab:              26488 kB
+SReclaimable:      15260 kB
+SUnreclaim:        11228 kB
+KernelStack:         860 kB
+PageTables:          644 kB
+SecPageTables:         0 kB
+NFS_Unstable:          0 kB
+Bounce:                0 kB
+WritebackTmp:          0 kB
+CommitLimit:      513572 kB
+Committed_AS:      23092 kB
+VmallocTotal:     507904 kB
+VmallocUsed:        1592 kB
+VmallocChunk:          0 kB
+Percpu:              256 kB
+CmaTotal:          16384 kB
+CmaFree:            9852 kB
+Balloon:               0 kB
+GPUActive:             0 kB
+GPUReclaim:            0 kB
+== /proc/version
+Linux version 7.2.9-dirty (root@buildkitsandbox) (arm-linux-gnueabihf-gcc (Debian 12.2.0-14) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40) #2 SMP PREEMPT Mon Nov 23 08:34:32 UTC 2026
+== /proc/cmdline
+root=/dev/mmcblk0p1 rootfstype=ext4 rootwait rw init=/sbin/init coherent_pool=4m loglevel=8
+== /proc/loadavg
+0.83 0.30 0.11 2/102 406
+== /proc/fb
+0 sun4i-drmdrmfb
+== /proc/asound/cards
+ 0 [GA36mbAudio    ]: simple-card - GA36mbAudio
+                      GA36mbAudio
+== /proc/asound/pcm
+00-00: 1c22c00.dai-sun8i-codec-aif1 sun8i-codec-aif1-0 : 1c22c00.dai-sun8i-codec-aif1 sun8i-codec-aif1-0 : playback 1 : capture 1
+== /proc/asound/devices
+  0: [ 0]   : control
+ 16: [ 0- 0]: digital audio playback
+ 24: [ 0- 0]: digital audio capture
+ 33:        : timer
+== /proc/asound/version
+Advanced Linux Sound Architecture Driver Version k7.2.9-dirty.
+== /proc/bus/input/devices
+I: Bus=0019 Vendor=0001 Product=0001 Version=0100
+N: Name="1c22800.lradc"
+P: Phys=sun4i_lradc/input0
+S: Sysfs=/devices/platform/soc/1c22800.lradc/input/input0
+U: Uniq=
+H: Handlers=kbd event0 
+B: PROP=0
+B: EV=3
+B: KEY=c0000 0 0 0
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="axp20x-pek"
+P: Phys=m1kbd/input2
+S: Sysfs=/devices/platform/soc/1f03400.rsb/sunxi-rsb-3a3/axp221-pek/input/input1
+U: Uniq=
+H: Handlers=kbd event1 
+B: PROP=0
+B: EV=3
+B: KEY=100000 0 0 0
+
+I: Bus=0019 Vendor=0000 Product=0000 Version=0000
+N: Name="GA36-MB Gamepad"
+P: Phys=
+S: Sysfs=/devices/platform/soc/1c28400.serial/1c28400.serial:0/1c28400.serial:0.0/serial0/serial0-0/input/input2
+U: Uniq=
+H: Handlers=js0 event2 
+B: PROP=0
+B: EV=b
+B: KEY=f 0 0 0 0 0 0 0 7fdb0000 0 0 0 0 0 0 0 0 0
+B: ABS=1b
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="GA36mbAudio sun8i-codec-analog.0-jack"
+P: Phys=ALSA
+S: Sysfs=/devices/platform/sound/sound/card0/input3
+U: Uniq=
+H: Handlers=event3 
+B: PROP=0
+B: EV=21
+B: SW=4
+
+== /etc/os-release
+NAME="goodluckOS"
+ID=goodluckos
+VERSION="0.0.1"
+PRETTY_NAME="goodluckOS 0.0.1"
+== /etc/issue
+Oh No! It's goodluckOS!
+== /etc/version
+cat: can't open '/etc/version': No such file or directory
+== /etc/hostname
+goodluckOS
+== /proc/mounts
+/dev/root / ext4 rw,relatime 0 0
+devtmpfs /dev devtmpfs rw,relatime,size=242728k,nr_inodes=60682,mode=755 0 0
+proc /proc proc rw,relatime 0 0
+/dev/mmcblk0p2 /home/player vfat rw,relatime,uid=1000,gid=1000,fmask=0022,dmask=0022,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro 0 0
+devpts /dev/pts devpts rw,relatime,gid=5,mode=620,ptmxmode=666 0 0
+tmpfs /dev/shm tmpfs rw,relatime 0 0
+tmpfs /tmp tmpfs rw,noatime,size=65536k 0 0
+sysfs /sys sysfs rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,relatime,size=4096k,mode=755 0 0
+none /sys/fs/cgroup cgroup2 rw,relatime 0 0
+none /sys/kernel/config configfs rw,relatime 0 0
+mtp /dev/ffs-mtp functionfs rw,relatime 0 0
+== cpu
+cpu0 online= gov=schedutil min=120000 max=1200000 cur=1200000 avail=120000 240000 312000 408000 480000 504000 600000 648000 720000 816000 912000 1008000 1104000 1200000  govs=performance schedutil 
+cpu1 online= gov=schedutil min=120000 max=1200000 cur=1200000 avail=120000 240000 312000 408000 480000 504000 600000 648000 720000 816000 912000 1008000 1104000 1200000  govs=performance schedutil 
+cpu2 online= gov=schedutil min=120000 max=1200000 cur=1200000 avail=120000 240000 312000 408000 480000 504000 600000 648000 720000 816000 912000 1008000 1104000 1200000  govs=performance schedutil 
+cpu3 online= gov=schedutil min=120000 max=1200000 cur=1200000 avail=120000 240000 312000 408000 480000 504000 600000 648000 720000 816000 912000 1008000 1104000 1200000  govs=performance schedutil 
+== thermal
+thermal_zone0 cpu-thermal 44712
+== fb0
+bits_per_pixel: 32 
+blank: 4 
+console: 
+cursor: 
+dev: 29:0 
+mode: 
+modes: U:640x480p-0 
+name: sun4i-drmdrmfb 
+pan: 0,0 
+rotate: 0 
+state: 0 
+stride: 2560 
+uevent: MAJOR=29 MINOR=0 DEVNAME=fb0 
+virtual_size: 640,480 
+== fbset
+
+mode "640x480-0"
+	# D: 0.000 MHz, H: 0.000 kHz, V: 0.000 Hz
+	geometry 640 480 640 480 32
+	timings 0 0 0 0 0 0 0
+	accel false
+	rgba 8/16,8/8,8/0,0/0
+endmode
+
+== amixer
+Simple mixer control 'Headphone',0
+  Capabilities: pvolume pvolume-joined pswitch
+  Playback channels: Front Left - Front Right
+  Limits: Playback 0 - 63
+  Mono:
+  Front Left: Playback 60 [95%] [-3.00dB] [on]
+  Front Right: Playback 60 [95%] [-3.00dB] [on]
+Simple mixer control 'Headphone Source',0
+  Capabilities: penum
+  Items: 'DAC' 'Mixer'
+  Item0: 'Mixer'
+  Item1: 'Mixer'
+Simple mixer control 'Speaker',0
+  Capabilities: pswitch pswitch-joined
+  Playback channels: Mono
+  Mono: Playback [on]
+Simple mixer control 'Line In',0
+  Capabilities: pvolume pvolume-joined pswitch cswitch
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: Playback 0 - 7
+  Front Left: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+  Front Right: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+Simple mixer control 'Mic1',0
+  Capabilities: pvolume pvolume-joined pswitch cswitch
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: Playback 0 - 7
+  Front Left: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+  Front Right: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+Simple mixer control 'Mic1 Boost',0
+  Capabilities: volume volume-joined
+  Playback channels: Mono
+  Capture channels: Mono
+  Limits: 0 - 7
+  Mono: 0 [0%] [0.00dB]
+Simple mixer control 'Mic2',0
+  Capabilities: pvolume pvolume-joined pswitch cswitch
+  Playback channels: Front Left - Front Right
+  Capture channels: Front Left - Front Right
+  Limits: Playback 0 - 7
+  Front Left: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+  Front Right: Playback 0 [0%] [-4.50dB] [off] Capture [off]
+Simple mixer control 'Mic2 Boost',0
+  Capabilities: volume volume-joined
+  Playback channels: Mono
+  Capture channels: Mono
+  Limits: 0 - 7
+  Mono: 0 [0%] [0.00dB]
+Simple mixer control 'Mixer',0
+  Capabilities: cswitch
+  Capture channels: Front Left - Front Right
+  Front Left: Capture [off]
+  Front Right: Capture [off]
+Simple mixer control 'Mixer Reversed',0
+  Capabilities: cswitch
+  Capture channels: Front Left - Front Right
+  Front Left: Capture [off]
+  Front Right: Capture [off]
+Simple mixer control 'ADC',0
+  Capabilities: cvolume
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 192
+  Front Left: Capture 0 [0%] [-99999.99dB]
+  Front Right: Capture 0 [0%] [-99999.99dB]
+Simple mixer control 'ADC Digital DAC',0
+  Capabilities: pswitch
+  Playback channels: Front Left - Front Right
+  Mono:
+  Front Left: Playback [off]
+  Front Right: Playback [off]
+Simple mixer control 'ADC Gain',0
+  Capabilities: cvolume cvolume-joined
+  Capture channels: Mono
+  Limits: Capture 0 - 7
+  Mono: Capture 3 [43%] [0.00dB]
+Simple mixer control 'AIF1 AD0',0
+  Capabilities: cvolume
+  Capture channels: Front Left - Front Right
+  Limits: Capture 0 - 192
+== aplay -l
+**** List of PLAYBACK Hardware Devices ****
+card 0: GA36mbAudio [GA36mbAudio], device 0: 1c22c00.dai-sun8i-codec-aif1 sun8i-codec-aif1-0 [1c22c00.dai-sun8i-codec-aif1 sun8i-codec-aif1-0]
+  Subdevices: 1/1
+  Subdevice #0: subdevice #0
+== ls
+crw-rw----    1 root     video      29,   0 Jun 21 15:44 /dev/fb0
+crw-rw-rw-    1 root     tty         5,   0 Jun 21 15:46 /dev/tty
+crw--w----    1 root     tty         4,   0 Jun 21 15:44 /dev/tty0
+crw--w----    1 player   tty         4,   1 Jun 21 15:46 /dev/tty1
+crw--w----    1 root     tty         4,  10 Jun 21 15:44 /dev/tty10
+crw--w----    1 root     tty         4,  11 Jun 21 15:44 /dev/tty11
+crw--w----    1 root     tty         4,  12 Jun 21 15:44 /dev/tty12
+crw--w----    1 root     tty         4,  13 Jun 21 15:44 /dev/tty13
+crw--w----    1 root     tty         4,  14 Jun 21 15:44 /dev/tty14
+crw--w----    1 root     tty         4,  15 Jun 21 15:44 /dev/tty15
+crw--w----    1 root     tty         4,  16 Jun 21 15:44 /dev/tty16
+crw--w----    1 root     tty         4,  17 Jun 21 15:44 /dev/tty17
+crw--w----    1 root     tty         4,  18 Jun 21 15:44 /dev/tty18
+crw--w----    1 root     tty         4,  19 Jun 21 15:44 /dev/tty19
+crw--w----    1 root     tty         4,   2 Jun 21 15:44 /dev/tty2
+crw--w----    1 root     tty         4,  20 Jun 21 15:44 /dev/tty20
+crw--w----    1 root     tty         4,  21 Jun 21 15:44 /dev/tty21
+crw--w----    1 root     tty         4,  22 Jun 21 15:44 /dev/tty22
+crw--w----    1 root     tty         4,  23 Jun 21 15:44 /dev/tty23
+crw--w----    1 root     tty         4,  24 Jun 21 15:44 /dev/tty24
+crw--w----    1 root     tty         4,  25 Jun 21 15:44 /dev/tty25
+crw--w----    1 root     tty         4,  26 Jun 21 15:44 /dev/tty26
+crw--w----    1 root     tty         4,  27 Jun 21 15:44 /dev/tty27
+crw--w----    1 root     tty         4,  28 Jun 21 15:44 /dev/tty28
+crw--w----    1 root     tty         4,  29 Jun 21 15:44 /dev/tty29
+crw--w----    1 root     tty         4,   3 Jun 21 15:44 /dev/tty3
+crw--w----    1 root     tty         4,  30 Jun 21 15:44 /dev/tty30
+crw--w----    1 root     tty         4,  31 Jun 21 15:44 /dev/tty31
+crw--w----    1 root     tty         4,  32 Jun 21 15:44 /dev/tty32
+crw--w----    1 root     tty         4,  33 Jun 21 15:44 /dev/tty33
+crw--w----    1 root     tty         4,  34 Jun 21 15:44 /dev/tty34
+crw--w----    1 root     tty         4,  35 Jun 21 15:44 /dev/tty35
+crw--w----    1 root     tty         4,  36 Jun 21 15:44 /dev/tty36
+crw--w----    1 root     tty         4,  37 Jun 21 15:44 /dev/tty37
+crw--w----    1 root     tty         4,  38 Jun 21 15:44 /dev/tty38
+crw--w----    1 root     tty         4,  39 Jun 21 15:44 /dev/tty39
+crw--w----    1 root     tty         4,   4 Jun 21 15:44 /dev/tty4
+crw--w----    1 root     tty         4,  40 Jun 21 15:44 /dev/tty40
+crw--w----    1 root     tty         4,  41 Jun 21 15:44 /dev/tty41
+crw--w----    1 root     tty         4,  42 Jun 21 15:44 /dev/tty42
+crw--w----    1 root     tty         4,  43 Jun 21 15:44 /dev/tty43
+crw--w----    1 root     tty         4,  44 Jun 21 15:44 /dev/tty44
+crw--w----    1 root     tty         4,  45 Jun 21 15:44 /dev/tty45
+crw--w----    1 root     tty         4,  46 Jun 21 15:44 /dev/tty46
+crw--w----    1 root     tty         4,  47 Jun 21 15:44 /dev/tty47
+crw--w----    1 root     tty         4,  48 Jun 21 15:44 /dev/tty48
+crw--w----    1 root     tty         4,  49 Jun 21 15:44 /dev/tty49
+crw--w----    1 root     tty         4,   5 Jun 21 15:44 /dev/tty5
+crw--w----    1 root     tty         4,  50 Jun 21 15:44 /dev/tty50
+crw--w----    1 root     tty         4,  51 Jun 21 15:44 /dev/tty51
+crw--w----    1 root     tty         4,  52 Jun 21 15:44 /dev/tty52
+crw--w----    1 root     tty         4,  53 Jun 21 15:44 /dev/tty53
+crw--w----    1 root     tty         4,  54 Jun 21 15:44 /dev/tty54
+crw--w----    1 root     tty         4,  55 Jun 21 15:44 /dev/tty55
+crw--w----    1 root     tty         4,  56 Jun 21 15:44 /dev/tty56
+crw--w----    1 root     tty         4,  57 Jun 21 15:44 /dev/tty57
+crw--w----    1 root     tty         4,  58 Jun 21 15:44 /dev/tty58
+crw--w----    1 root     tty         4,  59 Jun 21 15:44 /dev/tty59
+crw--w----    1 root     tty         4,   6 Jun 21 15:44 /dev/tty6
+crw--w----    1 root     tty         4,  60 Jun 21 15:44 /dev/tty60
+crw--w----    1 root     tty         4,  61 Jun 21 15:44 /dev/tty61
+crw--w----    1 root     tty         4,  62 Jun 21 15:44 /dev/tty62
+crw--w----    1 root     tty         4,  63 Jun 21 15:44 /dev/tty63
+crw--w----    1 root     tty         4,   7 Jun 21 15:44 /dev/tty7
+crw--w----    1 root     tty         4,   8 Jun 21 15:44 /dev/tty8
+crw--w----    1 root     tty         4,   9 Jun 21 15:44 /dev/tty9
+crw--w----    1 root     root      244,   0 Jun 21 15:44 /dev/ttyGS0
+crw-rw----    1 root     dialout     4,  65 Jun 21 15:44 /dev/ttyS1
+crw-rw----    1 root     dialout     4,  66 Jun 21 15:44 /dev/ttyS2
+crw-rw----    1 root     dialout     4,  67 Jun 21 15:44 /dev/ttyS3
+crw-rw----    1 root     dialout     4,  68 Jun 21 15:44 /dev/ttyS4
+crw-rw----    1 root     dialout     4,  69 Jun 21 15:44 /dev/ttyS5
+crw-rw----    1 root     dialout     4,  70 Jun 21 15:44 /dev/ttyS6
+crw-rw----    1 root     dialout     4,  71 Jun 21 15:44 /dev/ttyS7
+crw-------    1 root     root        3, 176 Jun 21 15:44 /dev/ttya0
+crw-------    1 root     root        3, 177 Jun 21 15:44 /dev/ttya1
+crw-------    1 root     root        3, 178 Jun 21 15:44 /dev/ttya2
+crw-------    1 root     root        3, 179 Jun 21 15:44 /dev/ttya3
+crw-------    1 root     root        3, 180 Jun 21 15:44 /dev/ttya4
+crw-------    1 root     root        3, 181 Jun 21 15:44 /dev/ttya5
+crw-------    1 root     root        3, 182 Jun 21 15:44 /dev/ttya6
+crw-------    1 root     root        3, 183 Jun 21 15:44 /dev/ttya7
+crw-------    1 root     root        3, 184 Jun 21 15:44 /dev/ttya8
+crw-------    1 root     root        3, 185 Jun 21 15:44 /dev/ttya9
+crw-------    1 root     root        3, 186 Jun 21 15:44 /dev/ttyaa
+crw-------    1 root     root        3, 187 Jun 21 15:44 /dev/ttyab
+crw-------    1 root     root        3, 188 Jun 21 15:44 /dev/ttyac
+crw-------    1 root     root        3, 189 Jun 21 15:44 /dev/ttyad
+crw-------    1 root     root        3, 190 Jun 21 15:44 /dev/ttyae
+crw-------    1 root     root        3, 191 Jun 21 15:44 /dev/ttyaf
+crw-------    1 root     root        3, 192 Jun 21 15:44 /dev/ttyb0
+crw-------    1 root     root        3, 193 Jun 21 15:44 /dev/ttyb1
+crw-------    1 root     root        3, 194 Jun 21 15:44 /dev/ttyb2
+crw-------    1 root     root        3, 195 Jun 21 15:44 /dev/ttyb3
+crw-------    1 root     root        3, 196 Jun 21 15:44 /dev/ttyb4
+crw-------    1 root     root        3, 197 Jun 21 15:44 /dev/ttyb5
+crw-------    1 root     root        3, 198 Jun 21 15:44 /dev/ttyb6
+crw-------    1 root     root        3, 199 Jun 21 15:44 /dev/ttyb7
+crw-------    1 root     root        3, 200 Jun 21 15:44 /dev/ttyb8
+crw-------    1 root     root        3, 201 Jun 21 15:44 /dev/ttyb9
+crw-------    1 root     root        3, 202 Jun 21 15:44 /dev/ttyba
+crw-------    1 root     root        3, 203 Jun 21 15:44 /dev/ttybb
+crw-------    1 root     root        3, 204 Jun 21 15:44 /dev/ttybc
+crw-------    1 root     root        3, 205 Jun 21 15:44 /dev/ttybd
+crw-------    1 root     root        3, 206 Jun 21 15:44 /dev/ttybe
+crw-------    1 root     root        3, 207 Jun 21 15:44 /dev/ttybf
+crw-------    1 root     root        3, 208 Jun 21 15:44 /dev/ttyc0
+crw-------    1 root     root        3, 209 Jun 21 15:44 /dev/ttyc1
+crw-------    1 root     root        3, 210 Jun 21 15:44 /dev/ttyc2
+crw-------    1 root     root        3, 211 Jun 21 15:44 /dev/ttyc3
+crw-------    1 root     root        3, 212 Jun 21 15:44 /dev/ttyc4
+crw-------    1 root     root        3, 213 Jun 21 15:44 /dev/ttyc5
+crw-------    1 root     root        3, 214 Jun 21 15:44 /dev/ttyc6
+crw-------    1 root     root        3, 215 Jun 21 15:44 /dev/ttyc7
+crw-------    1 root     root        3, 216 Jun 21 15:44 /dev/ttyc8
+crw-------    1 root     root        3, 217 Jun 21 15:44 /dev/ttyc9
+crw-------    1 root     root        3, 218 Jun 21 15:44 /dev/ttyca
+crw-------    1 root     root        3, 219 Jun 21 15:44 /dev/ttycb
+crw-------    1 root     root        3, 220 Jun 21 15:44 /dev/ttycc
+crw-------    1 root     root        3, 221 Jun 21 15:44 /dev/ttycd
+crw-------    1 root     root        3, 222 Jun 21 15:44 /dev/ttyce
+crw-------    1 root     root        3, 223 Jun 21 15:44 /dev/ttycf
+crw-------    1 root     root        3, 224 Jun 21 15:44 /dev/ttyd0
+crw-------    1 root     root        3, 225 Jun 21 15:44 /dev/ttyd1
+crw-------    1 root     root        3, 226 Jun 21 15:44 /dev/ttyd2
+crw-------    1 root     root        3, 227 Jun 21 15:44 /dev/ttyd3
+crw-------    1 root     root        3, 228 Jun 21 15:44 /dev/ttyd4
+crw-------    1 root     root        3, 229 Jun 21 15:44 /dev/ttyd5
+crw-------    1 root     root        3, 230 Jun 21 15:44 /dev/ttyd6
+crw-------    1 root     root        3, 231 Jun 21 15:44 /dev/ttyd7
+crw-------    1 root     root        3, 232 Jun 21 15:44 /dev/ttyd8
+crw-------    1 root     root        3, 233 Jun 21 15:44 /dev/ttyd9
+crw-------    1 root     root        3, 234 Jun 21 15:44 /dev/ttyda
+crw-------    1 root     root        3, 235 Jun 21 15:44 /dev/ttydb
+crw-------    1 root     root        3, 236 Jun 21 15:44 /dev/ttydc
+crw-------    1 root     root        3, 237 Jun 21 15:44 /dev/ttydd
+crw-------    1 root     root        3, 238 Jun 21 15:44 /dev/ttyde
+crw-------    1 root     root        3, 239 Jun 21 15:44 /dev/ttydf
+crw-------    1 root     root        3, 240 Jun 21 15:44 /dev/ttye0
+crw-------    1 root     root        3, 241 Jun 21 15:44 /dev/ttye1
+crw-------    1 root     root        3, 242 Jun 21 15:44 /dev/ttye2
+crw-------    1 root     root        3, 243 Jun 21 15:44 /dev/ttye3
+crw-------    1 root     root        3, 244 Jun 21 15:44 /dev/ttye4
+crw-------    1 root     root        3, 245 Jun 21 15:44 /dev/ttye5
+crw-------    1 root     root        3, 246 Jun 21 15:44 /dev/ttye6
+crw-------    1 root     root        3, 247 Jun 21 15:44 /dev/ttye7
+crw-------    1 root     root        3, 248 Jun 21 15:44 /dev/ttye8
+crw-------    1 root     root        3, 249 Jun 21 15:44 /dev/ttye9
+crw-------    1 root     root        3, 250 Jun 21 15:44 /dev/ttyea
+crw-------    1 root     root        3, 251 Jun 21 15:44 /dev/ttyeb
+== mount
+/dev/root on / type ext4 (rw,relatime)
+devtmpfs on /dev type devtmpfs (rw,relatime,size=242728k,nr_inodes=60682,mode=755)
+proc on /proc type proc (rw,relatime)
+/dev/mmcblk0p2 on /home/player type vfat (rw,relatime,uid=1000,gid=1000,fmask=0022,dmask=0022,codepage=437,iocharset=iso8859-1,shortname=mixed,errors=remount-ro)
+devpts on /dev/pts type devpts (rw,relatime,gid=5,mode=620,ptmxmode=666)
+tmpfs on /dev/shm type tmpfs (rw,relatime)
+tmpfs on /tmp type tmpfs (rw,noatime,size=65536k)
+sysfs on /sys type sysfs (rw,relatime)
+tmpfs on /run type tmpfs (rw,nosuid,nodev,relatime,size=4096k,mode=755)
+none on /sys/fs/cgroup type cgroup2 (rw,relatime)
+none on /sys/kernel/config type configfs (rw,relatime)
+mtp on /dev/ffs-mtp type functionfs (rw,relatime)
+== df
+Filesystem           1K-blocks      Used Available Use% Mounted on
+/dev/root               358271    155185    179330  46% /
+devtmpfs                242728         0    242728   0% /dev
+/dev/mmcblk0p2        29994672  25360336   4634336  85% /home/player
+tmpfs                   251432         8    251424   0% /dev/shm
+tmpfs                    65536        64     65472   0% /tmp
+tmpfs                     4096       184      3912   4% /run
+== free
+              total        used        free      shared  buff/cache   available
+Mem:         502864       41256      388612         256       72996      449392
+Swap:        262140           0      262140
+== ps
+PID   USER     COMMAND
+    1 root     init
+    2 root     [kthreadd]
+    3 root     [pool_workqueue_]
+    4 root     [kworker/R-rcu_g]
+    5 root     [kworker/R-sync_]
+    6 root     [kworker/R-kvfre]
+    7 root     [kworker/R-slub_]
+    8 root     [kworker/R-netns]
+    9 root     [kworker/0:0-eve]
+   10 root     [kworker/0:1-dev]
+   11 root     [kworker/0:0H-kb]
+   12 root     [kworker/u16:0-t]
+   13 root     [kworker/R-mm_pe]
+   14 root     [ksoftirqd/0]
+   15 root     [rcu_preempt]
+   16 root     [rcu_exp_par_gp_]
+   17 root     [rcu_exp_gp_kthr]
+   18 root     [migration/0]
+   19 root     [cpuhp/0]
+   20 root     [cpuhp/1]
+   21 root     [migration/1]
+   22 root     [ksoftirqd/1]
+   23 root     [kworker/1:0-eve]
+   24 root     [kworker/1:0H-kb]
+   25 root     [cpuhp/2]
+   26 root     [migration/2]
+   27 root     [ksoftirqd/2]
+   28 root     [kworker/2:0-eve]
+   29 root     [kworker/2:0H-kb]
+   30 root     [cpuhp/3]
+   31 root     [migration/3]
+   32 root     [ksoftirqd/3]
+   33 root     [kworker/3:0-eve]
+   34 root     [kworker/3:0H-kb]
+   35 root     [kdevtmpfs]
+   36 root     [kworker/R-inet_]
+   37 root     [oom_reaper]
+   38 root     [kworker/R-write]
+   39 root     [kcompactd0]
+   40 root     [kworker/R-kbloc]
+   41 root     [kworker/u16:1-t]
+   42 root     [kworker/R-ata_s]
+   43 root     [kworker/R-devfr]
+   44 root     [watchdogd]
+   45 root     [kworker/1:1-rcu]
+   46 root     [kworker/R-rpcio]
+   47 root     [kworker/R-xprti]
+   48 root     [kworker/R-cfg80]
+   49 root     [kswapd0]
+   50 root     [kworker/2:1-eve]
+   51 root     [kworker/R-nfsio]
+   52 root     [kworker/0:2-eve]
+   53 root     [kworker/0:3-eve]
+   54 root     [kworker/R-gp]
+   55 root     [kworker/R-pp]
+   56 root     [kworker/R-uas]
+   57 root     [kworker/u16:2-a]
+   58 root     [kworker/u17:0]
+   59 root     [kworker/2:2-eve]
+   60 root     [irq/77-axp22x_i]
+   61 root     [kworker/u16:3-a]
+   62 root     [kworker/3:1-mm_]
+   63 root     [card1-crtc0]
+   64 root     [sugov:0]
+   65 root     [kworker/1:2-mm_]
+   66 root     [kworker/1:3-eve]
+   67 root     [kworker/1:4]
+   68 root     [irq/173-sunxi-m]
+   69 root     [irq/174-sunxi-m]
+   70 root     [kworker/u16:4]
+   71 root     [kworker/R-mmc_c]
+   72 root     [kworker/0:1H-mm]
+   76 root     [kworker/3:1H-kb]
+   77 root     [kworker/3:2H]
+   78 root     [jbd2/mmcblk0p1-]
+   79 root     [kworker/R-ext4-]
+   81 root     [kworker/1:1H-kb]
+   83 root     [kworker/2:1H-kb]
+   86 root     [kworker/2:2H]
+  104 root     /sbin/syslogd -n
+  108 root     /sbin/klogd -n
+  125 root     /sbin/udevd
+  146 root     [kworker/0:2H-kb]
+  152 root     [kworker/1:2H]
+  167 dbus     /usr/bin/dbus-daemon --system --syslog
+  180 root     umtprd
+  192 root     {battery-care.sh} /bin/sh /usr/local/bin/battery-care.sh
+  221 root     /usr/sbin/crond -f
+  227 root     /usr/sbin/dropbear -R
+  237 root     {appctl} /bin/sh /usr/local/bin/appctl daemon
+  242 root     /usr/sbin/thd --daemon --triggers /etc/triggerhappy/triggers.d --socket /var/run/thd.socket --pidfile /var/run/thd.pid /dev/input/event0 /dev/input/event1 /dev/input/event2 /dev/input/event3
+  243 root     /sbin/getty -L console 0 vt100
+  244 root     /sbin/getty -L ttyGS0 115200 vt100
+  287 root     [kworker/3:2-eve]
+  346 root     [kworker/2:3-eve]
+  365 root     [appctl]
+  375 root     {appctl} /bin/sh /usr/local/bin/appctl daemon
+  377 player   /bin/sh /home/player/ports/shiningsourcega36/../ShiningSource GA36 - Diagnostico.sh
+  504 root     sleep 10
+== env
+DIAG_ENVSH=/home/player/ports/shiningsourcega36/ga36-env.sh
+EDITOR=/bin/vi
+GALLIUM_HUD=fps,cpu
+GALLIUM_HUD_TOGGLE_SIGNAL=34
+GALLIUM_HUD_VISIBLE=false
+HISTFILE=/tmp/.ash_history
+HOME=/home/player
+LOGNAME=player
+PATH=/usr/local/bin:/bin:/sbin:/usr/bin:/usr/sbin
+PS1=$ 
+PWD=/home/player
+SDL_GAMECONTROLLERCONFIG=1900c621474133362d4d422047616d00,GA36-MB Gamepad,dpleft:b15,rightx:a2,dpright:b16,rightshoulder:b5,dpdown:b14,righty:a3,leftshoulder:b4,y:b3,x:b2,b:b0,a:b1,dpup:b13,back:b8,leftstick:b11,start:b9,lefty:a1,guide:b8,lefttrigger:b6,righttrigger:b7,rightstick:b12,leftx:a0,platform:Linux
+SHELL=/bin/sh
+SHLVL=3
+TERM=vt102
+USER=player
+== ulimit
+core file size (blocks)         (-c) 0
+data seg size (kb)              (-d) unlimited
+scheduling priority             (-e) 0
+file size (blocks)              (-f) unlimited
+pending signals                 (-i) 3930
+max locked memory (kb)          (-l) 8192
+max memory size (kb)            (-m) unlimited
+open files                      (-n) 1024
+POSIX message queues (bytes)    (-q) 819200
+real-time priority              (-r) 0
+stack size (kb)                 (-s) 8192
+cpu time (seconds)              (-t) unlimited
+max user processes              (-u) 3930
+virtual memory (kb)             (-v) unlimited
+file locks                      (-x) unlimited
+== busybox
+[ [[ addgroup adduser ar arch arp arping ascii ash awk base32 base64 basename bash bc blkid bunzip2 bzcat cat chattr chgrp chmod chown chroot chrt chvt cksum clear cmp cp cpio crc32 crond crontab cut date dc dd deallocvt delgroup deluser devmem df diff dirname dmesg dnsd dnsdomainname dos2unix du dumpkmap echo egrep eject env ether-wake expr factor fallocate false fbset fdflush fdformat fdisk fgrep find flock fold free freeramdisk fsck fsfreeze fstrim fuser getfattr getopt getty grep gunzip gzip halt hdparm head hexdump hexedit hostid hostname hwclock i2cdetect i2cdump i2cget i2cset i2ctransfer id ifconfig ifdown ifup inetd init insmod install ip ipaddr ipcrm ipcs iplink ipneigh iproute iprule iptunnel kill killall killall5 klogd last less link linux32 linux64 linuxrc ln loadfont loadkmap logger login logname losetup ls lsattr lsblk lsmod lsof lspci lsscsi lsusb lzcat lzma lzopcat makedevs md5sum mdev mesg microcom mim mkdir mkdosfs mke2fs mkfifo mknod mkpasswd mkswap mktemp modprobe more mount mountpoint mt mv nameif netstat nice nl nohup nologin nproc nslookup nuke od openvt partprobe passwd paste patch pidof ping pipe_progress pivot_root poweroff printenv printf ps pwd rdate readlink readprofile realpath reboot renice reset resize resume rm rmdir rmmod route run-init run-parts runlevel sed seedrng seq setarch setconsole setfattr setkeycodes setlogcons setpriv setserial setsid sh sha1sum sha256sum sha384sum sha3sum sha512sum shred sleep sort ssl_server start-stop-daemon strings stty su sulogin svc svok swapoff swapon switch_root sync sysctl syslogd tail tar tee telnet test tftp time top touch tr traceroute tree true truncate ts tsort tty ubirename udhcpc udhcpd uevent umount uname uniq unix2dos unlink unlzma unlzop unshare unxz unzip uptime usleep uudecode uuencode uuidgen vconfig vi vlock vmstat w watch watchdog wc wget which who whoami xargs xxd xz xzcat yes zcat 
+taskset=
+timeout=
+setsid=/usr/bin/setsid
+nice=/bin/nice
+renice=/usr/bin/renice
+hexdump=/usr/bin/hexdump
+od=/usr/bin/od
+dd=/bin/dd
+awk=/usr/bin/awk
+ip=/sbin/ip
+ifconfig=/sbin/ifconfig
+iw=/usr/sbin/iw
+fbset=/usr/sbin/fbset
+amixer=/usr/bin/amixer
+aplay=/usr/bin/aplay
+evtest=/usr/bin/evtest
+== network (presence only)
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+lo        Link encap:Local Loopback  
+          inet addr:127.0.0.1  Mask:255.0.0.0
+          UP LOOPBACK RUNNING  MTU:65536  Metric:1
+          RX packets:0 errors:0 dropped:0 overruns:0 frame:0
+          TX packets:0 errors:0 dropped:0 overruns:0 carrier:0
+          collisions:0 txqueuelen:1000 
+          RX bytes:0 (0.0 B)  TX bytes:0 (0.0 B)
+
+Inter-|   Receive                                                |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo:       0       0    0    0    0     0          0         0        0       0    0    0    0     0       0          0
+cat: can't open '/proc/net/wireless': No such file or directory
+== tmpfs /dev/shm/ssdiag.377

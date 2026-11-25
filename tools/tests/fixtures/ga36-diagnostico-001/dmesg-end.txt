@@ -1,0 +1,200 @@
+[    0.201353] usbcore: registered new interface driver asix
+[    0.201434] usbcore: registered new interface driver ax88179_178a
+[    0.201514] usbcore: registered new interface driver cdc_ether
+[    0.201595] usbcore: registered new interface driver net1080
+[    0.201675] usbcore: registered new interface driver rndis_host
+[    0.201756] usbcore: registered new interface driver cdc_subset
+[    0.201842] usbcore: registered new interface driver zaurus
+[    0.201924] usbcore: registered new interface driver cdc_ncm
+[    0.202023] usbcore: registered new interface driver r8153_ecm
+[    0.202839] usbcore: registered new interface driver cdc_acm
+[    0.202875] cdc_acm: USB Abstract Control Model driver for USB modems and ISDN adapters
+[    0.203283] usbcore: registered new interface driver uas
+[    0.203381] usbcore: registered new interface driver usb-storage
+[    0.203644] usbcore: registered new interface driver ch341
+[    0.203700] usbserial: USB Serial support registered for ch341-uart
+[    0.203768] usbcore: registered new interface driver cp210x
+[    0.203817] usbserial: USB Serial support registered for cp210x
+[    0.203884] usbcore: registered new interface driver ftdi_sio
+[    0.203951] usbserial: USB Serial support registered for FTDI USB Serial Device
+[    0.204024] usbcore: registered new interface driver pl2303
+[    0.204073] usbserial: USB Serial support registered for pl2303
+[    0.206077] input: 1c22800.lradc as /devices/platform/soc/1c22800.lradc/input/input0
+[    0.206928] usbcore: registered new interface driver xpad
+[    0.208828] sun6i-rtc 1f00000.rtc: registered as rtc0
+[    0.208908] sun6i-rtc 1f00000.rtc: setting system clock to 1970-06-21T15:44:12 UTC (14831052)
+[    0.209598] i2c_dev: i2c /dev entries driver
+[    0.213040] sunxi-wdt 1c20ca0.watchdog: Watchdog enabled (timeout=16 sec, nowayout=0)
+[    0.215251] usbcore: registered new interface driver usbhid
+[    0.215294] usbhid: USB HID core driver
+[    0.221276] cedrus 1c0e000.video-codec: Device registered as /dev/video0
+[    0.224857] usbcore: registered new interface driver snd-usb-audio
+[    0.228978] NET: Registered PF_PACKET protocol family
+[    0.229047] can: controller area network core
+[    0.229124] NET: Registered PF_CAN protocol family
+[    0.229154] can: raw protocol
+[    0.229208] can: broadcast manager protocol
+[    0.229239] can: netlink gateway - max_hops=1
+[    0.229404] Key type dns_resolver registered
+[    0.229660] Registering SWP/SWPB emulation handler
+[    0.243336] Loading compiled-in X.509 certificates
+[    0.260059] gpio gpiochip0: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.262459] sun8i-a23-r-pinctrl 1f02c00.pinctrl: initialized sunXi PIO driver
+[    0.263140] sun8i-a23-r-pinctrl 1f02c00.pinctrl: supply vcc-pl not found, using dummy regulator
+[    0.272997] sun8i-a23-r-pinctrl 1f02c00.pinctrl: supply vcc-pl not found, using dummy regulator
+[    0.273570] sunxi-rsb 1f03400.rsb: RSB running at 3000000 Hz
+[    0.274086] axp20x-rsb sunxi-rsb-3a3: AXP20x variant AXP223 found
+[    0.278288] input: axp20x-pek as /devices/platform/soc/1f03400.rsb/sunxi-rsb-3a3/axp221-pek/input/input1
+[    0.279541] axp20x-adc axp22x-adc: DMA mask not set
+[    0.280797] axp20x-battery-power-supply axp20x-battery-power-supply: DMA mask not set
+[    0.281558] axp20x-battery-power-supply axp20x-battery-power-supply: couldn't set ccc from DT: fallback to min value
+[    0.283264] axp20x-usb-power-supply axp20x-usb-power-supply: DMA mask not set
+[    0.284809] axp20x-rsb sunxi-rsb-3a3: AXP20X driver loaded
+[    0.287084] gpio gpiochip1: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.291116] sun8i-a33-pinctrl 1c20800.pinctrl: initialized sunXi PIO driver
+[    0.315852] 1c28400.serial: ttyS0 at MMIO 0x1c28400 (irq = 170, base_baud = 1500000) is a U6_16550A
+[    0.316829] serial serial0: tty port ttyS0 registered
+[    0.317679] sun8i-a33-pinctrl 1c20800.pinctrl: supply vcc-pe not found, using dummy regulator
+[    0.318786] input: GA36-MB Gamepad as /devices/platform/soc/1c28400.serial/1c28400.serial:0/1c28400.serial:0.0/serial0/serial0-0/input/input2
+[    0.339386] 1c28800.serial: ttyS1 at MMIO 0x1c28800 (irq = 171, base_baud = 1500000) is a U6_16550A
+[    0.339540] printk: legacy console [ttyS1] enabled
+[    0.425433] ga36-gamepad serial0-0: GA36-MB Gamepad Driver Initialized
+[    0.437899] panel-boe-jd9366 1ca0000.dsi.0: Starting probe...
+[    1.696749] panel-boe-jd9366 1ca0000.dsi.0: Read panel-id: 1
+[    1.780602] panel-boe-jd9366 1ca0000.dsi.0: mipi_dsi_attach() failed: -517
+[    1.787567] ------------[ cut here ]------------
+[    1.792199] WARNING: drivers/regulator/core.c:2675 at _regulator_put+0x58/0x5c, CPU#2: kworker/u16:0/12
+[    1.801649] Modules linked in:
+[    1.804730] CPU: 2 UID: 0 PID: 12 Comm: kworker/u16:0 Not tainted 7.2.9-dirty #2 PREEMPT 
+[    1.804746] Hardware name: Allwinner sun8i Family
+[    1.804754] Workqueue: events_unbound deferred_probe_work_func
+[    1.804776] Call trace: 
+[    1.804791]  unwind_backtrace from show_stack+0x10/0x14
+[    1.804815]  show_stack from dump_stack_lvl+0x68/0x74
+[    1.804836]  dump_stack_lvl from __warn+0x90/0x100
+[    1.804856]  __warn from warn_slowpath_fmt+0x1b8/0x1c0
+[    1.804871]  warn_slowpath_fmt from _regulator_put+0x58/0x5c
+[    1.804889]  _regulator_put from regulator_put+0x1c/0x2c
+[    1.804905]  regulator_put from devres_release_all+0x94/0xfc
+[    1.804926]  devres_release_all from device_unbind_cleanup+0x24/0x88
+[    1.804946]  device_unbind_cleanup from really_probe+0x198/0x2c8
+[    1.804968]  really_probe from __driver_probe_device+0x94/0x1c4
+[    1.804990]  __driver_probe_device from driver_probe_device+0x34/0xb8
+[    1.805012]  driver_probe_device from __device_attach_driver+0x94/0xc4
+[    1.805034]  __device_attach_driver from bus_for_each_drv+0x90/0xe4
+[    1.805055]  bus_for_each_drv from __device_attach+0xa8/0x1a4
+[    1.805075]  __device_attach from device_initial_probe+0x3c/0x48
+[    1.805097]  device_initial_probe from bus_probe_device+0x28/0x7c
+[    1.805118]  bus_probe_device from device_add+0x5c8/0x79c
+[    1.805137]  device_add from mipi_dsi_device_register_full+0xcc/0x14c
+[    1.805157]  mipi_dsi_device_register_full from mipi_dsi_host_register+0xc8/0x174
+[    1.805174]  mipi_dsi_host_register from sun6i_dsi_probe+0x14c/0x2a8
+[    1.805195]  sun6i_dsi_probe from platform_probe+0x5c/0x90
+[    1.805218]  platform_probe from really_probe+0xc8/0x2c8
+[    1.805241]  really_probe from __driver_probe_device+0x94/0x1c4
+[    1.805262]  __driver_probe_device from driver_probe_device+0x34/0xb8
+[    1.805284]  driver_probe_device from __device_attach_driver+0x94/0xc4
+[    1.805306]  __device_attach_driver from bus_for_each_drv+0x90/0xe4
+[    1.805326]  bus_for_each_drv from __device_attach+0xa8/0x1a4
+[    1.805347]  __device_attach from device_initial_probe+0x3c/0x48
+[    1.805368]  device_initial_probe from bus_probe_device+0x28/0x7c
+[    1.805389]  bus_probe_device from deferred_probe_work_func+0x80/0xac
+[    1.805409]  deferred_probe_work_func from process_one_work+0x164/0x2ec
+[    1.805432]  process_one_work from worker_thread+0x160/0x2fc
+[    1.805449]  worker_thread from kthread+0x11c/0x140
+[    1.805467]  kthread from ret_from_fork+0x14/0x28
+[    1.805481] Exception stack(0xe0851fb0 to 0xe0851ff8)
+[    1.805492] 1fa0:                                     00000000 00000000 00000000 00000000
+[    1.805503] 1fc0: 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000
+[    1.805512] 1fe0: 00000000 00000000 00000000 00000000 00000013 00000000
+[    2.054775] ---[ end trace 0000000000000000 ]---
+[    2.060195] sun4i-drm display-engine: bound 1e00000.display-frontend (ops 0xc0c5dfb8)
+[    2.068516] sun4i-drm display-engine: bound 1e60000.display-backend (ops 0xc0c5d720)
+[    2.076481] sun4i-drm display-engine: bound 1e70000.drc (ops 0xc0c5d250)
+[    2.083873] sun4i-drm display-engine: No panel or bridge found... RGB output disabled
+[    2.091795] sun4i-drm display-engine: bound 1c0c000.lcd-controller (ops 0xc0c5beb4)
+[    2.099567] sun4i-drm display-engine: bound 1ca0000.dsi (ops 0xc0c5f028)
+[    2.107169] [drm] Initialized sun4i-drm 1.0.0 for display-engine on minor 1
+[    2.114328] sun4i-drm display-engine: [drm] Cannot find any crtc or sizes
+[    2.121313] sun4i-drm display-engine: [drm] Cannot find any crtc or sizes
+[    2.141153] sun8i-codec 1c22e00.codec: using zero-initialized flat cache, this may cause unexpected behavior
+[    2.151720] simple-amplifier audio-amplifier: supply VCC not found, using dummy regulator
+[    2.164278] input: GA36mbAudio sun8i-codec-analog.0-jack as /devices/platform/sound/sound/card0/input3
+[    2.175167] panel-boe-jd9366 1ca0000.dsi.0: Starting probe...
+[    2.175457] sunxi-mmc 1c0f000.mmc: initialized, max. request size: 16384 KB
+[    2.175457] sunxi-mmc 1c10000.mmc: initialized, max. request size: 16384 KB
+[    2.180976] panel-boe-jd9366 1ca0000.dsi.0: Read panel-id: 1
+[    2.212330] mmc0: host does not support reading read-only switch, assuming write-enable
+[    2.222401] mmc0: new high speed SDHC card at address 0001
+[    2.229055] mmcblk0: mmc0:0001 SD 29.1 GiB
+[    2.236630]  mmcblk0: p1 p2
+[    2.735436] panel-boe-jd9366 1ca0000.dsi.0: mipi_dsi_dcs_exit_sleep_mode() finished: 0
+[    2.735485] panel-boe-jd9366 1ca0000.dsi.0: mipi_dsi_dcs_set_display_on() finished: 0
+[    2.765405] panel-boe-jd9366 1ca0000.dsi.0: jd9366_prepare() SUCCESS.
+[    2.830263] Console: switching to colour frame buffer device 80x30
+[    2.878303] sun4i-drm display-engine: [drm] fb0: sun4i-drmdrmfb frame buffer device
+[    2.889502] sun6i-mipi-dsi 1ca0000.dsi: Attached device jd9366
+[    2.898367] usb_phy_generic usb_phy_generic.1.auto: dummy supplies not allowed for exclusive requests (id=vbus)
+[    2.912800] musb-hdrc musb-hdrc.2.auto: MUSB HDRC host driver
+[    2.920282] musb-hdrc musb-hdrc.2.auto: new USB bus registered, assigned bus number 1
+[    2.931465] usb usb1: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 7.02
+[    2.943329] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.959537] usb usb1: Product: MUSB HDRC host driver
+[    2.970751] usb usb1: Manufacturer: Linux 7.2.9-dirty musb-hcd
+[    2.978261] usb usb1: SerialNumber: musb-hdrc.2.auto
+[    2.985645] hub 1-0:1.0: USB hub found
+[    2.991041] hub 1-0:1.0: 1 port detected
+[    3.018649] ehci-platform 1c1a000.usb: EHCI Host Controller
+[    3.019134] ohci-platform 1c1a400.usb: Generic Platform OHCI controller
+[    3.019527] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    3.022069] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    3.023678] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    3.023810] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    3.023827] cfg80211: failed to load regulatory.db
+[    3.023886] clk: Disabling unused clocks
+[    3.023989] PM: genpd: Disabling unused power domains
+[    3.024001] ALSA device list:
+[    3.024006]   #0: GA36mbAudio
+[    3.024274] ehci-platform 1c1a000.usb: new USB bus registered, assigned bus number 2
+[    3.030953] ohci-platform 1c1a400.usb: new USB bus registered, assigned bus number 3
+[    3.123854] ohci-platform 1c1a400.usb: irq 177, io mem 0x01c1a400
+[    3.123889] ehci-platform 1c1a000.usb: irq 176, io mem 0x01c1a000
+[    3.155403] ehci-platform 1c1a000.usb: USB 2.0 started, EHCI 1.00
+[    3.163045] usb usb2: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 7.02
+[    3.174433] usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    3.184550] usb usb2: Product: EHCI Host Controller
+[    3.190896] usb usb2: Manufacturer: Linux 7.2.9-dirty ehci_hcd
+[    3.198205] usb usb2: SerialNumber: 1c1a000.usb
+[    3.205043] hub 2-0:1.0: USB hub found
+[    3.210401] hub 2-0:1.0: 1 port detected
+[    3.216283] usb usb3: New USB device found, idVendor=1d6b, idProduct=0001, bcdDevice= 7.02
+[    3.227675] usb usb3: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    3.237854] usb usb3: Product: Generic Platform OHCI controller
+[    3.245294] usb usb3: Manufacturer: Linux 7.2.9-dirty ohci_hcd
+[    3.252626] usb usb3: SerialNumber: 1c1a400.usb
+[    3.259224] hub 3-0:1.0: USB hub found
+[    3.264420] hub 3-0:1.0: 1 port detected
+[    3.310682] EXT4-fs (mmcblk0p1): mounted filesystem 242e4a15-6ed7-4ffb-a48b-f88d17c10d26 r/w with ordered data mode. Quota mode: disabled.
+[    3.326201] VFS: Mounted root (ext4 filesystem) on device 179:1.
+[    3.334358] devtmpfs: mounted
+[    3.339034] VFS: Pivoted into new rootfs
+[    3.345681] Freeing unused kernel image (initmem) memory: 1024K
+[    3.353297] Run /sbin/init as init process
+[    3.358837]   with arguments:
+[    3.363161]     /sbin/init
+[    3.367220]   with environment:
+[    3.371689]     HOME=/
+[    3.375399]     TERM=linux
+[    3.631296] random: crng init done
+[    3.712631] zram0: detected capacity change from 0 to 524288
+[    3.747589] Adding 262140k swap on /dev/zram0.  Priority:100 extents:1 across:262140k SS
+[    3.853578] udevd[125]: starting version 3.2.14
+[    3.894900] udevd[125]: starting eudev-3.2.14
+[    4.534896] file system registered
+[    4.562872] read descriptors
+[    4.567282] read strings
+[    5.125554] appd: starting launcher
+[   15.152145] appd: launching app: /bin/sh /home/player/ports/shiningsourcega36/launch.sh
+[  108.977632] appd: app exited (rc=139), returning to launcher
+[  108.985696] appd: starting launcher
+[  114.136017] appd: launching app: /bin/sh /home/player/ports/shiningsourcega36/diagnostico.sh

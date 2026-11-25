@@ -1,0 +1,4 @@
+event0 name=1c22800.lradc ev=3 key=c0000 0 0 0 abs=0
+event1 name=axp20x-pek ev=3 key=100000 0 0 0 abs=0
+event2 name=GA36-MB Gamepad ev=b key=f 0 0 0 0 0 0 0 7fdb0000 0 0 0 0 0 0 0 0 0 abs=1b
+event3 name=GA36mbAudio sun8i-codec-analog.0-jack ev=21 key=0 abs=0

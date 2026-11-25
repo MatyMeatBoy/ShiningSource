@@ -1,0 +1,6 @@
+64+0 records in
+64+0 records out
+dd 4MiB to /home/player/ports/shiningsourcega36/diagnostico-001: 0.63 s
+64+0 records in
+64+0 records out
+dd 4MiB to /dev/shm/ssdiag.377: 0.02 s

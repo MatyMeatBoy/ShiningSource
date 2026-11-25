@@ -1,0 +1,60 @@
+[    2.943329] usb usb1: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    2.959537] usb usb1: Product: MUSB HDRC host driver
+[    2.970751] usb usb1: Manufacturer: Linux 7.2.9-dirty musb-hcd
+[    2.978261] usb usb1: SerialNumber: musb-hdrc.2.auto
+[    2.985645] hub 1-0:1.0: USB hub found
+[    2.991041] hub 1-0:1.0: 1 port detected
+[    3.018649] ehci-platform 1c1a000.usb: EHCI Host Controller
+[    3.019134] ohci-platform 1c1a400.usb: Generic Platform OHCI controller
+[    3.019527] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+[    3.022069] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+[    3.023678] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[    3.023810] faux_driver regulatory: Direct firmware load for regulatory.db failed with error -2
+[    3.023827] cfg80211: failed to load regulatory.db
+[    3.023886] clk: Disabling unused clocks
+[    3.023989] PM: genpd: Disabling unused power domains
+[    3.024001] ALSA device list:
+[    3.024006]   #0: GA36mbAudio
+[    3.024274] ehci-platform 1c1a000.usb: new USB bus registered, assigned bus number 2
+[    3.030953] ohci-platform 1c1a400.usb: new USB bus registered, assigned bus number 3
+[    3.123854] ohci-platform 1c1a400.usb: irq 177, io mem 0x01c1a400
+[    3.123889] ehci-platform 1c1a000.usb: irq 176, io mem 0x01c1a000
+[    3.155403] ehci-platform 1c1a000.usb: USB 2.0 started, EHCI 1.00
+[    3.163045] usb usb2: New USB device found, idVendor=1d6b, idProduct=0002, bcdDevice= 7.02
+[    3.174433] usb usb2: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    3.184550] usb usb2: Product: EHCI Host Controller
+[    3.190896] usb usb2: Manufacturer: Linux 7.2.9-dirty ehci_hcd
+[    3.198205] usb usb2: SerialNumber: 1c1a000.usb
+[    3.205043] hub 2-0:1.0: USB hub found
+[    3.210401] hub 2-0:1.0: 1 port detected
+[    3.216283] usb usb3: New USB device found, idVendor=1d6b, idProduct=0001, bcdDevice= 7.02
+[    3.227675] usb usb3: New USB device strings: Mfr=3, Product=2, SerialNumber=1
+[    3.237854] usb usb3: Product: Generic Platform OHCI controller
+[    3.245294] usb usb3: Manufacturer: Linux 7.2.9-dirty ohci_hcd
+[    3.252626] usb usb3: SerialNumber: 1c1a400.usb
+[    3.259224] hub 3-0:1.0: USB hub found
+[    3.264420] hub 3-0:1.0: 1 port detected
+[    3.310682] EXT4-fs (mmcblk0p1): mounted filesystem 242e4a15-6ed7-4ffb-a48b-f88d17c10d26 r/w with ordered data mode. Quota mode: disabled.
+[    3.326201] VFS: Mounted root (ext4 filesystem) on device 179:1.
+[    3.334358] devtmpfs: mounted
+[    3.339034] VFS: Pivoted into new rootfs
+[    3.345681] Freeing unused kernel image (initmem) memory: 1024K
+[    3.353297] Run /sbin/init as init process
+[    3.358837]   with arguments:
+[    3.363161]     /sbin/init
+[    3.367220]   with environment:
+[    3.371689]     HOME=/
+[    3.375399]     TERM=linux
+[    3.631296] random: crng init done
+[    3.712631] zram0: detected capacity change from 0 to 524288
+[    3.747589] Adding 262140k swap on /dev/zram0.  Priority:100 extents:1 across:262140k SS
+[    3.853578] udevd[125]: starting version 3.2.14
+[    3.894900] udevd[125]: starting eudev-3.2.14
+[    4.534896] file system registered
+[    4.562872] read descriptors
+[    4.567282] read strings
+[    5.125554] appd: starting launcher
+[   15.152145] appd: launching app: /bin/sh /home/player/ports/shiningsourcega36/launch.sh
+[  108.977632] appd: app exited (rc=139), returning to launcher
+[  108.985696] appd: starting launcher
+[  114.136017] appd: launching app: /bin/sh /home/player/ports/shiningsourcega36/diagnostico.sh

@@ -1,0 +1,4 @@
+total 48
+drwxr-xr-x    2 player   player       16384 Jan  1  1980 .
+drwxr-xr-x    3 player   player       16384 Jan  1  1980 ..
+-rwxr-xr-x    1 player   player         223 Jan  1  1980 case.env
