@@ -193,16 +193,22 @@ static int hud_split_line(const uint8_t *map, int scroll_x, int scroll_y, int y)
     return !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
 }
 
-/* Does native tile row `ty` of this layer hold a window across the screen (left, middle and right)? */
+/* Does native tile row `ty` of this layer show anything in the console's columns (a window, a label, text)? */
 static int window_row(const uint8_t *map, int scroll_x, int scroll_y, int ty)
 {
     const uint16_t *row = (const uint16_t *)(map + (((ty * 8 + scroll_y) & 255) >> 3) * 64);
-    return (row[((16 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((224 + scroll_x) & 255) >> 3] & 0x3FF);
+    int tx;
+    for (tx = 0; tx < 30; tx++)
+        if (row[((tx * 8 + scroll_x) & 255) >> 3] & 0x3FF)
+            return 1;
+    return 0;
 }
 
-/* The message window of a field scene: the lowest run of window rows in the lower half of the console's
- * picture. A window may be drawn on several backgrounds without a source map (its fill on one, its frame and
- * text on another), so a row counts when any of them crosses the screen there. Sets msg_top/msg_bottom/msg_drop. */
+/* What of a field scene's interface sits at the console's bottom edge: the message window, the label of the
+ * ring menu and the like. It is the lowest run of rows with interface in the lower half of the picture, if it
+ * reaches the last lines (a window in the middle of the screen stays where it is). A window may be drawn on
+ * several backgrounds without a source map (its fill on one, its frame and text on another) and the console's
+ * window feature, so a row counts when any of them shows something there. Sets msg_top/msg_bottom/msg_drop. */
 static void find_message_window(void)
 {
     int n, ty, last = -1, first, rows = 0;
@@ -225,7 +231,7 @@ static void find_message_window(void)
     for (n = 0; n < 2; n++) {
         uint16_t h = IO16(0x40 + n * 2), v = IO16(0x44 + n * 2);
         int left = h >> 8, right = h & 255, top = v >> 8, bottom = v & 255;
-        if (!(IO16(0) & (0x2000 << n)) || right - left < 200 || top < 80 || bottom > H || bottom <= top)
+        if (!(IO16(0) & (0x2000 << n)) || right - left < 16 || top < 80 || bottom > H || bottom <= top)
             continue;
         for (ty = top >> 3; ty < (bottom + 7) >> 3 && ty < 20; ty++)
             window[ty] = 1, rows++;
@@ -241,7 +247,7 @@ static void find_message_window(void)
     msg_bottom = last * 8 + 8;
     if (msg_bottom > H) msg_bottom = H;
     msg_drop = view.height - view.shift_y - msg_bottom;
-    if (msg_drop <= 0 || msg_top < 80)
+    if (msg_drop <= 0 || msg_top < 80 || msg_bottom < H - 24)
         msg_top = msg_bottom = msg_drop = 0;
 }
 
