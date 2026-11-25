@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<gameList>
+  <game>
+    <path>./ShiningSource GA36.sh</path>
+    <name>ShiningSource</name>
+    <genre>Action RPG</genre>
+    <desc>Native ARMv7 runtime for Shining Soul II on the GA36 handheld. Requires your own European cartridge dump.</desc>
+  </game>
+</gameList>
