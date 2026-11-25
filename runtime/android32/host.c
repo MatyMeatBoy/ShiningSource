@@ -286,6 +286,7 @@ int main(int argc, char **argv)
     /* armhf Linux: the launcher changes into the game folder first. */
     read_settings("shiningsource.env");
     read_settings("shiningsource.test.env");
+    if (argc > 2 && !strcmp(argv[1], "--game")) { argv++; argc--; } /* launchers pass --game ROM */
     rom = argc > 1 ? argv[1] : SDL_getenv("SHININGSOURCE_ROM");
 #elif !defined(SS_ANDROID32_HEADLESS)
     static char rom_path[4096];
@@ -302,6 +303,7 @@ int main(int argc, char **argv)
     snprintf(rom_path, sizeof rom_path, "%s/rom.gba", folder);
     rom = rom_path;
 #else
+    if (argc > 2 && !strcmp(argv[1], "--game")) { argv++; argc--; } /* launchers pass --game ROM */
     rom = argc > 1 ? argv[1] : getenv("SHININGSOURCE_ROM");
 #endif
     fprintf(stderr, "ShiningSource %s; %s; pointer %u; page %ld; native rebased guest\n",
