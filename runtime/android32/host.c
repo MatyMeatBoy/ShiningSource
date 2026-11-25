@@ -201,8 +201,8 @@ enum { POOL_MAX = 3 };
 static pthread_t pool_threads_storage[POOL_MAX];
 static pthread_mutex_t pool_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t pool_wake = PTHREAD_COND_INITIALIZER, pool_done = PTHREAD_COND_INITIALIZER;
-static void (*pool_work)(uint32_t, int);
-static uint32_t pool_context;
+static void (*pool_work)(void *, int);
+static void *pool_context;
 static int pool_count, pool_size = -1, pool_busy;
 static unsigned pool_generation;
 static atomic_int pool_next;
@@ -253,11 +253,13 @@ static void pool_start(void)
     fprintf(stderr, "host32: %d thread(s) for the picture (%ld core(s))%c", pool_size + 1, cores, 10);
 }
 
-static SERVICE void b_parallel(uint32_t function, uint32_t context, int count)
+/* The same pool for the host's own work (the framebuffer copy, runtime/plat/fbdev_linux.c). Only one caller at a
+ * time: the game's thread. */
+void ss_host_parallel(void (*work)(void *, int), void *context, int count)
 {
     if (pool_size < 0)
         pool_start();
-    pool_work = (void (*)(uint32_t, int))(uintptr_t)function;
+    pool_work = work;
     pool_context = context;
     pool_count = count;
     atomic_store(&pool_next, 0);
@@ -275,6 +277,12 @@ static SERVICE void b_parallel(uint32_t function, uint32_t context, int count)
     while (pool_busy)
         pthread_cond_wait(&pool_done, &pool_lock);
     pthread_mutex_unlock(&pool_lock);
+}
+
+/* SS_B_PARALLEL: the image's function and context are its 32-bit pointers; the calling conventions are the same. */
+static SERVICE void b_parallel(uint32_t function, uint32_t context, int count)
+{
+    ss_host_parallel((void (*)(void *, int))(uintptr_t)function, (void *)(uintptr_t)context, count);
 }
 
 static SERVICE void b_option_hook(uint32_t function) { guest_option = (int (*)(int, int))(uintptr_t)function; }

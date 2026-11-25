@@ -130,37 +130,43 @@ static inline int ss_fb_format_bytes(int format)
  * `scale`: the decor outside the rectangle (x, y, w, h) when `with_decor`, and the rectangle from `pixels` (its top
  * left pixel, rows `stride` apart) over the decor. The rectangle must lie inside the canvas. Used by
  * ss_fb_present_canvas and by tools/tests/test_fbdev_convert.c. */
+static inline void ss_fb_canvas_rows(uint8_t *base, size_t line, int format, int scale, int with_decor,
+                                     const uint32_t *decor, int canvas_w, int row_from, int row_to,
+                                     const uint32_t *pixels, int stride, int x, int y, int w, int h)
+{
+    const size_t bytes = (size_t)ss_fb_format_bytes(format), step = (size_t)scale * bytes;
+    for (int row = row_from; row < row_to; row++) {
+        const uint32_t *under = decor + (size_t)row * (size_t)canvas_w;
+        int inside = row >= y && row < y + h && w > 0;
+        /* Every screen row of the canvas row is written from the source: video memory is slow to read back (it
+         * is not cached), so no screen row is copied from another. */
+        for (int k = 0; k < scale; k++) {
+            uint8_t *out = base + ((size_t)row * (size_t)scale + (size_t)k) * line;
+            if (with_decor) {
+                if (!inside) {
+                    ss_fb_row(out, format, under, NULL, canvas_w, scale, 1);
+                } else {
+                    if (x > 0)
+                        ss_fb_row(out, format, under, NULL, x, scale, 1);
+                    if (x + w < canvas_w)
+                        ss_fb_row(out + (size_t)(x + w) * step, format, under + x + w, NULL, canvas_w - x - w, scale, 1);
+                }
+            }
+            if (inside)
+                ss_fb_row(out + (size_t)x * step, format, pixels + (size_t)(row - y) * (size_t)stride, under + x, w, scale, 0);
+        }
+    }
+}
+
+/* The canvas into `base` (where its top left pixel goes on the screen; screen rows `line` bytes apart) at a whole
+ * `scale`: the decor outside the rectangle (x, y, w, h) when `with_decor`, and the rectangle from `pixels` (its top
+ * left pixel, rows `stride` apart) over the decor. The rectangle must lie inside the canvas. Used by
+ * ss_fb_present_canvas (in bands, ss_fb_canvas_rows) and by tools/tests/test_fbdev_convert.c. */
 static inline void ss_fb_canvas_blit(uint8_t *base, size_t line, int format, int scale, int with_decor,
                                      const uint32_t *decor, int canvas_w, int canvas_h,
                                      const uint32_t *pixels, int stride, int x, int y, int w, int h)
 {
-    const size_t bytes = (size_t)ss_fb_format_bytes(format), step = (size_t)scale * bytes;
-    for (int row = 0; row < canvas_h; row++) {
-        uint8_t *out = base + (size_t)row * (size_t)scale * line;
-        const uint32_t *under = decor + (size_t)row * (size_t)canvas_w;
-        int inside = row >= y && row < y + h && w > 0;
-        size_t from = 0, length = 0;
-        if (with_decor) {
-            if (!inside) {
-                ss_fb_row(out, format, under, NULL, canvas_w, scale, 1);
-            } else {
-                if (x > 0)
-                    ss_fb_row(out, format, under, NULL, x, scale, 1);
-                if (x + w < canvas_w)
-                    ss_fb_row(out + (size_t)(x + w) * step, format, under + x + w, NULL, canvas_w - x - w, scale, 1);
-            }
-            length = (size_t)canvas_w * step;
-        }
-        if (inside) {
-            ss_fb_row(out + (size_t)x * step, format, pixels + (size_t)(row - y) * (size_t)stride, under + x, w, scale, 0);
-            if (!with_decor) {
-                from = (size_t)x * step;
-                length = (size_t)w * step;
-            }
-        }
-        for (int k = 1; k < scale && length; k++)
-            memcpy(out + (size_t)k * line + from, out + from, length);
-    }
+    ss_fb_canvas_rows(base, line, format, scale, with_decor, decor, canvas_w, 0, canvas_h, pixels, stride, x, y, w, h);
 }
 
 /* ---- runtime/plat/fbdev_linux.c ---- */

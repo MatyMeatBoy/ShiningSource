@@ -330,6 +330,27 @@ int ss_fb_present_picture(const uint32_t *pixels, int width, int stride, const u
     return 1;
 }
 
+/* The host's worker threads (runtime/android32/host.c), when the program has them: the canvas goes to the screen
+ * in bands of rows, each on a free core. */
+extern void ss_host_parallel(void (*work)(void *, int), void *context, int count) __attribute__((weak));
+enum { CANVAS_BAND = 16 };
+static struct {
+    uint8_t *base;
+    size_t line;
+    int scale, full, canvas_w, canvas_h, stride, x, y, w, h;
+    const uint32_t *decor, *pixels;
+} canvas_job;
+
+static void canvas_band(void *unused, int band)
+{
+    int from = band * CANVAS_BAND, to = from + CANVAS_BAND;
+    (void)unused;
+    if (to > canvas_job.canvas_h) to = canvas_job.canvas_h;
+    ss_fb_canvas_rows(canvas_job.base, canvas_job.line, fb_format, canvas_job.scale, canvas_job.full, canvas_job.decor,
+                      canvas_job.canvas_w, from, to, canvas_job.pixels, canvas_job.stride,
+                      canvas_job.x, canvas_job.y, canvas_job.w, canvas_job.h);
+}
+
 int ss_fb_present_canvas(const uint32_t *decor, int canvas_w, int canvas_h, unsigned decor_id,
                          const uint32_t *pixels, int stride, int x, int y, int w, int h)
 {
@@ -358,8 +379,24 @@ int ss_fb_present_canvas(const uint32_t *decor, int canvas_w, int canvas_h, unsi
         clear_rect(base, 0, top, left, canvas_h * scale);
         clear_rect(base, left + canvas_w * scale, top, (int)fb_var.xres - left - canvas_w * scale, canvas_h * scale);
     }
-    ss_fb_canvas_blit(page_base(page) + (size_t)top * fb_fix.line_length + (size_t)left * (size_t)fb_bytes, fb_fix.line_length,
-                      fb_format, scale, full, decor, canvas_w, canvas_h, pixels, stride, x, y, w, h);
+    canvas_job.base = page_base(page) + (size_t)top * fb_fix.line_length + (size_t)left * (size_t)fb_bytes;
+    canvas_job.line = fb_fix.line_length;
+    canvas_job.scale = scale;
+    canvas_job.full = full;
+    canvas_job.decor = decor;
+    canvas_job.canvas_w = canvas_w;
+    canvas_job.canvas_h = canvas_h;
+    canvas_job.pixels = pixels;
+    canvas_job.stride = stride;
+    canvas_job.x = x; canvas_job.y = y; canvas_job.w = w; canvas_job.h = h;
+    {
+        int bands = (canvas_h + CANVAS_BAND - 1) / CANVAS_BAND;
+        if (ss_host_parallel)
+            ss_host_parallel(canvas_band, NULL, bands);
+        else
+            for (int band = 0; band < bands; band++)
+                canvas_band(NULL, band);
+    }
     fb_dirty &= ~(1u << page);
     fb_canvas[page].id = decor_id;
     fb_canvas[page].valid = 1;
