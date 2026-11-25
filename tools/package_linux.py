@@ -32,7 +32,7 @@ def main():
     if not files['SDL3-LICENSE.txt'].is_file():
         import os
         sdk = Path(os.environ.get('SHININGSOURCE_LINUX_SYSROOT', 'D:/01Claude/ReKHCoM-build/linux/amd64'))
-        candidates = list((sdk/'sdl/share/licenses').glob('**/LICENSE*')) + list((sdk/'sdl/share').glob('**/LICENSE.txt'))
+        candidates = list((sdk/'sdl/share/licenses').glob('**/LICENSE*')) + list((sdk/'sdl/share').glob('**/LICENSE.txt')) + list(sdk.glob('sdl-src-LICENSE.txt'))
         if not candidates:
             raise SystemExit('SDL3 license missing from the Linux SDK')
         files['SDL3-LICENSE.txt'] = candidates[0]
