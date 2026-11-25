@@ -13,6 +13,13 @@
  *   - the top `hud_rows` lines are the HUD: their left half stays at the left edge, their right half goes to
  *     the right edge;
  *   - everything else that has no source map is centred.
+ *
+ * Tall view (the 4:3 canvas, `height` > 160). The same rules hold for rows: the console's 160 lines sit at
+ * `shift_y`; the rows above and below come from the source maps; the status display's top lines go to the top
+ * edge of the canvas (raised by shift_y, its halves still at the side edges); the rest without a source map
+ * stays in the middle, and a scene without source maps leaves the rows around the console's picture to the
+ * platform as it leaves it the columns. Rows outside the console's lines take the registers of the nearest line.
+ * At height 160 everything is drawn exactly as before.
  */
 #include "shiningsource/runtime.h"
 
@@ -29,7 +36,7 @@
 
 /* the field's status display in a wide view: its lines, and the column that parts its left and right groups */
 enum { HUD_BAND = SS_HUD_ROWS, HUD_SPLIT = SS_HUD_SPLIT, EDGE_FADE = 8 };
-enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
+enum { W = SS_SCREEN_W, H = SS_SCREEN_H, MAXW = SS_MAX_VIEW_W, MAXH = SS_MAX_VIEW_H, LAYER_OBJ = 4, LAYER_BACKDROP = 5 };
 
 /* per scanline, per background: palette index + 1 (0 = transparent); the sprites have their own lines further down */
 static uint16_t line_bg[4][MAXW];
@@ -37,6 +44,10 @@ static uint16_t line_bg[4][MAXW];
 static struct ss_view view;
 static int page_shown;          /* a full-screen page over the field, in a wide view */
 static int hud_at_edges;        /* this frame the field's status display goes to the edges of a wide view */
+static int hud_raise;           /* ... and its lines to the top edge of a tall view (by shift_y) */
+static uint8_t raised_px[MAXW]; /* on that row: a pixel of the raised status display (its windows are its own line's) */
+
+int ss_sprite_bottom = SS_SCREEN_H;
 
 /* The status display as a layer of its own (ss_ppu_hud_layer). A window larger than the picture shows every
  * pixel as a square of several of its own, and the status display is small on it. So that the platform can show
@@ -76,7 +87,7 @@ static int page_open(void)
 static int native_x(int X, int y)
 {
     int extra = view.width - W, x;
-    if (y < view.hud_rows) {            /* halves of the HUD at the edges of what is visible */
+    if (y >= 0 && y < view.hud_rows) {  /* halves of the HUD at the edges of what is visible */
         x = X - view.hud_left;
         if (x >= 0 && x < W / 2) return x;
         x = X - (view.hud_right - W);
@@ -169,7 +180,35 @@ static void source_span(uint16_t *dst, int count, int wx, int wy, const struct s
     }
 }
 
-static void text_background(int n, int y)
+/* Does line y (native) of a background without a source map belong to the status display: does it part at
+ * HUD_SPLIT (a window or a message that crosses that column is one piece)? */
+static int hud_split_line(const uint8_t *map, int scroll_x, int scroll_y, int y)
+{
+    int py = (y + scroll_y) & 255;
+    const uint16_t *row = (const uint16_t *)(map + (py >> 3) * 64);
+    return !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
+}
+
+/* The status display's line y (native) of a background without a source map, its two groups at the side edges,
+ * over what `dst` holds: the line raised to the top of a tall view (hud_raise). */
+static void raised_hud_line(uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
+                            int width, int height, int scroll_x, int scroll_y, int colour256)
+{
+    static uint16_t part[W];
+    int x, right = view.width - W;
+    if (!hud_split_line(map, scroll_x, scroll_y, y))
+        return;                         /* a window or a message: it stays where the console has it */
+    hardware_span(part, W, scroll_x, y + scroll_y, chars, map, width, height, colour256);
+    for (x = 0; x < W; x++) {
+        int X = x < HUD_SPLIT ? x : x + right;
+        if (part[x]) {
+            dst[X] = part[x];
+            raised_px[X] = 1;
+        }
+    }
+}
+
+static void text_background(int n, int Y)
 {
     uint16_t cnt = IO16(0x08 + n * 2);
     const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
@@ -179,7 +218,8 @@ static void text_background(int n, int y)
     int scroll_x = IO16(0x10 + n * 4) & 511, scroll_y = IO16(0x12 + n * 4) & 511;
     const struct ss_bg_source *source = &view.bg[n];
     uint16_t *dst = line_bg[n];
-    int X, split;
+    int X, split, y = Y - view.shift_y;         /* the console's line shown on this row (outside 0..159 above and below) */
+    int native_row = y >= 0 && y < H;
 
     if (view.menu_background && n == 3 && cnt == 0x1f03 && scroll_x == 0) {
         enum { painted_left = (SS_WIDE_16_9_W - W) / 2, map_right = 256 - W, palette_base = 8 * 16 + 1 };
@@ -208,6 +248,10 @@ static void text_background(int n, int y)
         int wy = y + source->scroll_y;
         int from = view.shift < 0 ? 0 : view.shift > view.width ? view.width : view.shift;
         int to = view.shift + W < from ? from : view.shift + W > view.width ? view.width : view.shift + W;
+        if (!native_row) {              /* above or below the console's lines: all of it from the source map */
+            source_span(dst, view.width, source->scroll_x - view.shift, wy, source, chars, colour256);
+            return;
+        }
         if (from > 0)
             source_span(dst, from, source->scroll_x - view.shift, wy, source, chars, colour256);
         if (to > from)
@@ -216,14 +260,26 @@ static void text_background(int n, int y)
             source_span(dst + to, view.width - to, to - view.shift + source->scroll_x, wy, source, chars, colour256);
         return;
     }
+    if (!native_row) {                  /* nothing of the console's picture here, but maybe the raised status display */
+        memset(dst, 0, (size_t)view.width * sizeof *dst);
+        if (hud_raise && Y < HUD_BAND)
+            raised_hud_line(dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        return;
+    }
     split = 0;
     if ((hud_at_edges || hud_apart) && y < HUD_BAND) {
         /* The field's status display: what is left of HUD_SPLIT stays at the left edge of the screen and what
          * is right of it goes to the right edge. A line where the layer crosses that column (a window, a
          * message) is one piece and stays in the middle. */
-        int py = (y + scroll_y) & 255;
-        const uint16_t *row = (const uint16_t *)(map + (py >> 3) * 64);
-        split = !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
+        split = hud_split_line(map, scroll_x, scroll_y, y);
+    }
+    if (hud_raise && split) {
+        /* A tall view: the status display's lines are at the top edge, so its line here has gone up; the line
+         * raised to this row (if it is one of the display's) is drawn instead. */
+        memset(dst, 0, (size_t)view.width * sizeof *dst);
+        if (Y < HUD_BAND)
+            raised_hud_line(dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        return;
     }
     if (split && hud_apart) {           /* the whole line belongs to the status display: into its layer */
         hardware_span(hud_bg[n], W, scroll_x, y + scroll_y, chars, map, width, height, colour256);
@@ -245,18 +301,24 @@ static void text_background(int n, int y)
         hardware_span(dst + X, run, x + scroll_x, y + scroll_y, chars, map, width, height, colour256);
         X += run;
     }
+    if (hud_raise && Y < HUD_BAND)      /* what stays in the middle, and the display's raised line over it */
+        raised_hud_line(dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
 }
 
-static void affine_background(int n, int y)
+static void affine_background(int n, int Y)
 {
     uint16_t cnt = IO16(0x08 + n * 2);
     const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
     const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
-    int size = 128 << (cnt >> 14), wrap = cnt & 0x2000, X;
+    int size = 128 << (cnt >> 14), wrap = cnt & 0x2000, X, y = Y - view.shift_y;
     int base = 0x20 + (n - 2) * 0x10;
     int32_t pa = (int16_t)IO16(base), pb = (int16_t)IO16(base + 2), pc = (int16_t)IO16(base + 4), pd = (int16_t)IO16(base + 6);
     int32_t ref_x = (int32_t)(IO32(base + 8) << 4) >> 4, ref_y = (int32_t)(IO32(base + 12) << 4) >> 4;
 
+    if (y < 0 || y >= H) {              /* no source map: nothing above or below the console's lines */
+        memset(line_bg[n], 0, (size_t)view.width * sizeof line_bg[n][0]);
+        return;
+    }
     for (X = 0; X < view.width; X++) {
         int x = native_x(X, y), px, py, index;
         if (x < 0) {
@@ -348,28 +410,52 @@ static uint8_t only_now[128];       /* this entry alternates: it belongs to this
 static uint8_t obj_moved[128];      /* this entry is not where it was last seen (or was never seen) */
 static struct { uint16_t entry[3]; uint8_t index, kept, moved; } copies[COPIES];   /* sprites of the other frame's picture only */
 static int copy_count;
-static uint8_t two_pictures[H];     /* lines on which something alternates */
+static uint8_t two_pictures[MAXH];  /* view rows on which something alternates */
 
 /* Per pixel of the last picture: 1 where what is shown has not moved since the frame before (a background
  * that did not scroll, a sprite that stayed in its place). The smoothing of blinking in frame.c works only
  * there: anything that moves must stay sharp. Row y starts at y * the picture's width. */
-static uint8_t still[MAXW * H];
+static uint8_t still[MAXW * MAXH];
 
 const uint8_t *ss_ppu_still(void)
 {
     return still;
 }
 
+enum { OBJ_HIDDEN = -1000 };
+
+/* The native y of a sprite whose box is `box_h` lines tall. The sprite table has 8 bits for it: on the console
+ * anything from 160 up is off screen or a wrapped negative position. A tall view also shows lines 160 and more
+ * (down to 160 + shift_y) and lines above 0: a position from 160 up is read the way that shows more of the
+ * sprite in the view (the game keeps sprites from -64 to ss_sprite_bottom, see patches.json). The game parks
+ * the sprites it does not show at 160 as plain 8 x 8 ones: in a tall view these stay hidden. */
+static int obj_y(const uint16_t *e, int box_h)
+{
+    int y = e[0] & 255, top, bottom, below, above;
+    if (y < 160)
+        return y;
+    if (view.height <= H)
+        return y - 256;
+    if ((e[0] & 0xC3FF) == 0x00A0 && !(e[1] & 0xC000))
+        return OBJ_HIDDEN;
+    top = -view.shift_y;
+    bottom = H + view.shift_y;
+    below = (y + box_h < bottom ? y + box_h : bottom) - y;
+    above = (y - 256 + box_h) - (y - 256 > top ? y - 256 : top);
+    return below > above ? y : y - 256;
+}
+
 static int obj_box(const uint16_t *e, int *x, int *y, int *w, int *h)
 {
     if ((!(e[0] & 0x100) && (e[0] & 0x200)) || (e[0] >> 14) == 3)
         return 0;
-    *y = e[0] & 255;
-    if (*y >= 160) *y -= 256;
-    *x = e[1] & 511;
-    if (*x >= 384) *x -= 512;
     *w = obj_sizes[e[0] >> 14][e[1] >> 14][0];
     *h = obj_sizes[e[0] >> 14][e[1] >> 14][1];
+    *y = obj_y(e, (e[0] & 0x300) == 0x300 ? *h * 2 : *h);
+    if (*y == OBJ_HIDDEN)
+        return 0;
+    *x = e[1] & 511;
+    if (*x >= 384) *x -= 512;
     return *y > -64;
 }
 
@@ -522,9 +608,12 @@ static void mark_lines(const uint16_t *e)
         return;
     if ((e[0] & 0x300) == 0x300)
         h *= 2;
-    for (h += y; y < h; y++)
-        if (y >= 0 && y < H)
-            two_pictures[y] = 1;
+    for (h += y; y < h; y++) {
+        if (y + view.shift_y >= 0 && y + view.shift_y < view.height)
+            two_pictures[y + view.shift_y] = 1;
+        if (view.shift_y && y >= 0 && y < HUD_BAND)
+            two_pictures[y] = 1;        /* the status display's sprites may be raised to the top (hud_raise) */
+    }
 }
 
 static void find_alternating(void)
@@ -684,7 +773,7 @@ static void find_alternating(void)
             const uint16_t *e = kept[t->kept].oam + t->entry * 4;
             int x, y;
             track_place(t, (int)(frame - t->last), &x, &y);
-            if (x < -128 || x >= 384 || y <= -64 || y >= 160)
+            if (x < -128 || x >= 384 || y <= -64 || y >= H + view.shift_y)
                 continue;
             copies[copy_count].entry[0] = (uint16_t)((e[0] & 0xFF00) | (y & 0xFF));
             copies[copy_count].entry[1] = (uint16_t)((e[1] & 0xFE00) | (x & 0x1FF));
@@ -700,13 +789,14 @@ static void find_alternating(void)
 
 /* One sprite on line y, into `line`. `oam` is the sprite table it belongs to (for its rotation), `tiles` its
  * graphics, `colours` its palette if it is drawn from a past frame (NULL: this frame's, looked up later). */
-static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t *tiles, const uint16_t *colours, int moved, struct obj_line *line)
+static void sprite(int Y, const uint16_t *e, const uint16_t *oam, const uint8_t *tiles, const uint16_t *colours, int moved, struct obj_line *line)
 {
     uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
     int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width, ui = 0;
+    int raised = 0;
     int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
 
     if ((!affine && (a0 & 0x200)) || shape == 3)
@@ -719,15 +809,23 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
         box_w *= 2;
         box_h *= 2;
     }
-    y0 = a0 & 255;
-    if (y0 >= 160) y0 -= 256;
-    row = y - y0;
-    if (row < 0 || row >= box_h)
+    y0 = obj_y(e, box_h);
+    if (y0 == OBJ_HIDDEN)
         return;
     x0 = a1 & 511;
     /* On the console anything from 240 up is off screen or a wrapped negative position. With a wider view a
      * sprite just right of 240 is visible, so only the top of the range is read as negative. */
     if (x0 >= (extra ? 512 - 128 : 240)) x0 -= 512;
+    row = Y - view.shift_y - y0;
+    if (hud_raise && ((a2 >> 10) & 3) == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND
+        && (x0 + box_w / 2 < 72 || x0 + box_w / 2 >= HUD_SPLIT)) {
+        row = Y - y0;                   /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
+        raised = 16;
+    }
+    if (row < 0 || row >= box_h)
+        return;
+    if (page_shown && (Y < view.shift_y || Y >= view.shift_y + H))
+        return;                         /* a page is the console's picture: nothing of it above or below it */
     /* where this sprite goes in the view: sprites of a scene with a source map with the world, the icons of
      * the status display to their edge, anything else centred */
     place = view.world ? view.shift : extra / 2;
@@ -786,7 +884,7 @@ static void sprite(int y, const uint16_t *e, const uint16_t *oam, const uint8_t 
         if (prio <= line->prio[sx] || !line->colour[sx]) {
             line->colour[sx] = colours ? (uint16_t)(0x8000 | (colours[index] & 0x7FFF)) : (uint16_t)(0x100 + index + 1);
             line->prio[sx] = (uint8_t)prio;
-            line->flags[sx] = (uint8_t)((line->flags[sx] & 2) | (mode == 1) | moved | ui);
+            line->flags[sx] = (uint8_t)((line->flags[sx] & 2) | (mode == 1) | moved | ui | raised);
         }
     }
 }
@@ -797,7 +895,7 @@ static void sprites(int y, int two)
     memset(obj_now.colour, 0, sizeof obj_now.colour);
     memset(obj_now.prio, 4, sizeof obj_now.prio);
     memset(obj_now.flags, 0, sizeof obj_now.flags);
-    if (hud_apart && y < HUD_BAND) {
+    if (hud_apart && y - view.shift_y >= 0 && y - view.shift_y < HUD_BAND) {
         memset(hud_now.colour, 0, W * sizeof hud_now.colour[0]);
         memset(hud_now.flags, 0, W);
         memset(hud_other.colour, 0, W * sizeof hud_other.colour[0]);
@@ -910,14 +1008,17 @@ static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_
  * the fades. `moved` tells whether what is shown in front moved since the last frame. */
 enum { COMPOSE_TRANSPARENT = 0x100 };
 
-static uint16_t compose(int X, int y, const struct obj_line *obj, int *moved)
+static uint16_t compose(int X, int Y, const struct obj_line *obj, int *moved)
 {
     int mask = 0x3F, top = LAYER_BACKDROP, second = LAYER_BACKDROP, p, n;
     uint16_t dispcnt = line.dispcnt, bldcnt = line.bldcnt;
     uint16_t top_colour = PAL[0], second_colour = PAL[0];
     int obj_visible, semi = 0, edge_blended = 0;
-
-    int outside = view.world && (X < view.hud_left || X >= view.hud_right);
+    /* window rows are native too: rows above and below take the edge line's; the raised status display its own */
+    int y = (raised_px[X] || (obj->flags[X] & 16)) ? Y : Y - view.shift_y;
+    int outside = view.world && (X < view.hud_left || X >= view.hud_right || Y < view.map_top || Y >= view.map_bottom);
+    if (y < 0) y = 0;
+    if (y > H - 1) y = H - 1;
     if (outside)
         top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
     if (line.windows) {
@@ -1075,6 +1176,10 @@ static void take_view(const struct ss_view *requested)
     if (!view.hud_right) view.hud_right = view.width;
     if (view.width < W) view.width = W;
     if (view.width > MAXW) view.width = MAXW;
+    if (view.height < H) view.height = H;
+    if (view.height > MAXH) view.height = MAXH;
+    view.shift_y = (view.height - H) / 2;
+    if (!view.map_bottom) view.map_bottom = view.height;
 }
 
 /* A frame that is not drawn (a machine too slow for every picture leaves some out, see ss_plat_present). Which
@@ -1088,25 +1193,32 @@ void ss_ppu_unseen(const struct ss_view *requested)
 
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
 {
-    static uint32_t place[H][4];        /* where each background was on each line of the last frame */
-    int mode = 0, y, X, n;
+    static uint32_t place[MAXH][4];     /* where each background was on each row of the last frame */
+    int mode = 0, y, Y, X, n, wide;
     uint8_t end_of_frame[SS_LINE_REGISTERS];
     int per_line = ss_line_registers(0) != NULL;
 
     take_view(requested);
+    wide = view.width > W || view.height > H;
     memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     find_alternating();
     prepare_edge_fade();
-    page_shown = view.world && view.width > W && (IO16(0) & 7) == 0 && page_open();
-    hud_at_edges = view.world && view.width > W && (IO16(0) & 7) == 0 && !page_shown;
-    hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(view.width > W ? page_shown : page_open());
-    for (y = 0; y < H; y++) {
-        uint32_t *out = pixels + y * pitch_pixels;
-        uint8_t *calm = still + y * view.width;
-        int two;
+    page_shown = view.world && wide && (IO16(0) & 7) == 0 && page_open();
+    hud_at_edges = view.world && wide && (IO16(0) & 7) == 0 && !page_shown;
+    hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(wide ? page_shown : page_open());
+    hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0;
+    for (Y = 0; Y < view.height; Y++) {
+        uint32_t *out = pixels + Y * pitch_pixels;
+        uint8_t *calm = still + Y * view.width;
+        int two, native_row, line_y;
+        y = Y - view.shift_y;           /* the console's line on this row */
+        native_row = y >= 0 && y < H;
+        line_y = y < 0 ? 0 : y >= H ? H - 1 : y;    /* the registers of the nearest line */
+        if (view.shift_y)
+            memset(raised_px, 0, (size_t)view.width);
         if (per_line)
-            memcpy((void *)(uintptr_t)SS_IO, ss_line_registers(y), SS_LINE_REGISTERS);
-        if (y == 0 || per_line) {
+            memcpy((void *)(uintptr_t)SS_IO, ss_line_registers(line_y), SS_LINE_REGISTERS);
+        if (Y == 0 || per_line) {
             line.dispcnt = IO16(0); line.bldcnt = IO16(0x50);
             mode = line.dispcnt & 7; line.eva = IO16(0x52) & 31; line.evb = (IO16(0x52) >> 8) & 31; line.evy = IO16(0x54) & 31;
             line.windows = line.dispcnt & 0xE000;
@@ -1132,40 +1244,40 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
                 at = IO32(0x20 + (n - 2) * 0x10) * 31u + IO32(0x24 + (n - 2) * 0x10) * 131u + IO32(0x28 + (n - 2) * 0x10) * 7u + IO32(0x2C + (n - 2) * 0x10);
             if (view.bg[n].map)
                 at += (uint32_t)view.shift << 9;
-            line.moved[n] = at != place[y][n];
+            line.moved[n] = at != place[Y][n];
             if (frame_is_new)
-                place[y][n] = at;
+                place[Y][n] = at;
         }
         if (line.dispcnt & 0x80) {
             for (X = 0; X < view.width; X++) out[X] = 0xFFFFFFFFu;
             memset(calm, 1, (size_t)view.width);
-            if (hud_apart && y < HUD_BAND)
+            if (hud_apart && native_row && y < HUD_BAND)
                 memset(hud_pixels + y * W, 0, W * sizeof hud_pixels[0]);
             continue;
         }
         hud_line = 0;
         for (n = 0; n < 4; n++) {
             if (!line.enabled[n]) continue;
-            if ((mode == 1 && n == 2) || mode == 2) affine_background(n, y);
-            else text_background(n, y);
+            if ((mode == 1 && n == 2) || mode == 2) affine_background(n, Y);
+            else text_background(n, Y);
         }
-        two = two_pictures[y] && (line.dispcnt & 0x1000);
-        if (line.dispcnt & 0x1000) sprites(y, two);
-        if (hud_apart && y < HUD_BAND)
+        two = two_pictures[Y] && (line.dispcnt & 0x1000);
+        if (line.dispcnt & 0x1000) sprites(Y, two);
+        if (hud_apart && native_row && y < HUD_BAND)
             hud_row(y, two);
         for (X = 0; X < view.width; X++) {
             int moved, moved_other;
             uint32_t colour;
-            if (!view.world && !view.menu_background && view.width > W && native_x(X, y) < 0 && y >= view.hud_rows) {
+            if (!view.world && !view.menu_background && wide && (!native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 calm[X] = 0;
                 continue;
             }
-            uint16_t pixel = compose(X, y, &obj_now, &moved);
+            uint16_t pixel = compose(X, Y, &obj_now, &moved);
             colour = (moved & COMPOSE_TRANSPARENT) ? 0 : to_rgb(pixel);
             if (two && (obj_now.colour[X] != obj_other.colour[X] || obj_now.prio[X] != obj_other.prio[X] || obj_now.flags[X] != obj_other.flags[X])) {
                 /* something alternates here: half of this frame's picture, half of the other frame's */
-                uint16_t other_pixel = compose(X, y, &obj_other, &moved_other);
+                uint16_t other_pixel = compose(X, Y, &obj_other, &moved_other);
                 uint32_t other = (moved_other & COMPOSE_TRANSPARENT) ? 0 : to_rgb(other_pixel);
                 if (colour && other)
                     colour = 0xFF000000u | (((colour >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + ((colour | other) & 0x010101));

@@ -91,9 +91,30 @@ static int test_render;                 /* SS_TEST_RENDER: the picture's width, 
 static uint32_t picture_hash = 2166136261u;
 static unsigned long picture_count;
 /* the picture of the frame at hand, with or without a window, and room for the status display's layer behind it */
-static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_SCREEN_H + SS_SCREEN_W * SS_HUD_ROWS];
+static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_MAX_VIEW_H + SS_SCREEN_W * SS_HUD_ROWS];
 static const char *input_script;
 static int windowed, forced_width;
+static int forced_height;               /* SS_VIEW_H: the picture's height on any platform (tests), 0 if not asked */
+
+/* The view of this frame for a picture width x height: a field scene's maps, else the console's composition in
+ * the middle (core/field_view.c fills in where it sits either way). */
+static void scene_view(struct ss_view *view, int width, int height)
+{
+    if (!ss_field_view(view, width, height)) {
+        memset(view, 0, sizeof *view);
+        view->width = width;
+        view->height = height;
+        view->shift_y = (height - SS_SCREEN_H) / 2;
+        view->map_bottom = height;
+    }
+    /* the game keeps sprite parts down to this line (patches.json): the rows below the console's show them */
+    ss_sprite_bottom = height > SS_SCREEN_H ? SS_SCREEN_H + (height - SS_SCREEN_H) / 2 - 1 : SS_SCREEN_H;
+}
+
+static int test_height(void)
+{
+    return forced_height ? forced_height : SS_SCREEN_H;
+}
 static int picture_mode = 1;            /* SS_PICTURE: 1 normal, 0 neither drawn nor shown, 2 drawn, not shown */
 static unsigned long picture_until;     /* ... up to this frame (0: always) */
 
@@ -975,9 +996,9 @@ static void scene_log(void)
 
 static void dump_video(void)
 {
-    static uint32_t shot[SS_MAX_VIEW_W * SS_SCREEN_H];
+    static uint32_t shot[SS_MAX_VIEW_W * SS_MAX_VIEW_H];
     struct ss_view view;
-    int width = forced_width ? forced_width : SS_SCREEN_W;
+    int width = forced_width ? forced_width : SS_SCREEN_W, height = test_height();
     FILE *file = fopen("ss_video_dump.bin", "wb");
     if (file) {
         fwrite((void *)(uintptr_t)SS_IO, 1, 0x400, file);
@@ -994,14 +1015,11 @@ static void dump_video(void)
     }
     file = fopen("ss_frame.raw", "wb");
     if (file) {
-        if (!ss_field_view(&view, width)) {
-            memset(&view, 0, sizeof view);
-            view.width = width;
-        }
+        scene_view(&view, width, height);
         view.menu_background = !view.world && width > SS_SCREEN_W && width <= SS_WIDE_16_9_W &&
                                ss_frontend_picture() == SS_PRESENT_WIDE_MARBLE;
         ss_ppu_render(shot, width, &view);
-        fwrite(shot, 4, (size_t)width * SS_SCREEN_H, file);
+        fwrite(shot, 4, (size_t)width * height, file);
         fclose(file);
         if (ss_ppu_hud() && (file = fopen("ss_hud.raw", "wb")) != NULL) {
             fwrite(ss_ppu_hud(), 4, SS_SCREEN_W * SS_HUD_ROWS, file);
@@ -1088,26 +1106,26 @@ const uint8_t *ss_ppu_still(void);       /* core/ppu.c: per pixel of the last pi
 
 static int couch_picture;
 
-static void finish_picture(uint32_t *pixels, int width)
+static void finish_picture(uint32_t *pixels, int width, int height)
 {
     /* The last four pictures, as they were drawn. They are kept in a ring: the newest takes the place of the
      * oldest and `newest` moves on, so a frame costs one copy of the picture, not four. */
-    static uint32_t past[4][SS_MAX_VIEW_W * SS_SCREEN_H];
-    static uint8_t calm[SS_MAX_VIEW_W * SS_SCREEN_H];      /* for how many frames in a row the pixel has shown something that stayed in place */
+    static uint32_t past[4][SS_MAX_VIEW_W * SS_MAX_VIEW_H];
+    static uint8_t calm[SS_MAX_VIEW_W * SS_MAX_VIEW_H];    /* for how many frames in a row the pixel has shown something that stayed in place */
     const uint8_t *restrict still = ss_ppu_still();
     static int past_width, shade, newest;
-    int count = width * SS_SCREEN_H, i, wanted;
+    int count = width * height, i, wanted;
     unsigned long light = 0, sampled = 0;
     uint32_t *restrict now_at = pixels, *restrict oldest;
     const uint32_t *restrict a_at, *restrict b_at, *restrict c_at;
 
     if (smooth < 0)
         smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
-    if (past_width != width) {          /* the window changed: nothing to compare with */
+    if (past_width != width + (height << 16)) {     /* the window changed: nothing to compare with */
         for (i = 0; i < 4; i++)
             memcpy(past[i], pixels, (size_t)count * 4);
         memset(calm, 0, sizeof calm);
-        past_width = width;
+        past_width = width + (height << 16);
     }
     a_at = past[newest];
     b_at = past[(newest + 1) & 3];
@@ -1246,10 +1264,7 @@ static void bench_frame(void)
             for (y = 0; y < SS_SCREEN_H; y++)
                 memcpy(&line_registers[y][address - SS_IO], &c->b, 2);
     }
-    if (!ss_field_view(&view, width)) {
-        memset(&view, 0, sizeof view);
-        view.width = width;
-    }
+    scene_view(&view, width, SS_SCREEN_H);
     for (n = 0; n < 4 && (dx || dy); n++)
         if (view.bg[n].map) {           /* the camera moved: the layer's place in its map and its scroll registers */
             view.bg[n].scroll_x += dx;
@@ -1273,10 +1288,10 @@ static void bench_frame(void)
         fwrite(head, 4, 6, out);
         fwrite((const void *)(uintptr_t)SS_OAM, 1, 0x400, out);
         fwrite(shot, 4, (size_t)width * SS_SCREEN_H, out);
-        finish_picture(shot, width);
+        finish_picture(shot, width, SS_SCREEN_H);
         fwrite(shot, 4, (size_t)width * SS_SCREEN_H, out);
     } else {
-        finish_picture(shot, width);
+        finish_picture(shot, width, SS_SCREEN_H);
     }
     for (n = 0, save = kept; n < 4; n++) {
         memcpy((void *)(uintptr_t)parts[n].base, save, parts[n].size);
@@ -1324,6 +1339,10 @@ void VBlankIntrWait(void)
         if (text && !memcmp(text, "classic", 8)) forced_width = SS_SCREEN_W;
         if (forced_width && forced_width < SS_SCREEN_W) forced_width = SS_SCREEN_W;
         if (forced_width > SS_MAX_VIEW_W) forced_width = SS_MAX_VIEW_W;
+        text = getenv("SS_VIEW_H");           /* SS_VIEW_H=240 forces the picture's height (the 4:3 canvas), for tests */
+        forced_height = text ? (int)strtoul(text, NULL, 10) : 0;
+        if (forced_height && forced_height < SS_SCREEN_H) forced_height = SS_SCREEN_H;
+        if (forced_height > SS_MAX_VIEW_H) forced_height = SS_MAX_VIEW_H;
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
         couch_picture = getenv("SS_COUCH_SEAT") != NULL;
@@ -1361,17 +1380,14 @@ void VBlankIntrWait(void)
     if (test_render) {                  /* SS_TEST_RENDER: the picture a window would show, drawn and thrown away */
         uint32_t *pixels = frame_pixels;
         struct ss_view view;
-        int i, count = test_render * SS_SCREEN_H;
-        if (!ss_field_view(&view, test_render)) {
-            memset(&view, 0, sizeof view);
-            view.width = test_render;
-        }
+        int i, height = test_height(), count = test_render * height;
+        scene_view(&view, test_render, height);
         ss_prof(SS_PROF_RENDER, 1);
         ss_ppu_render(pixels, test_render, &view);
         ss_prof(SS_PROF_RENDER, 0);
         ss_prof(SS_PROF_FINISH, 1);
-        finish_picture(pixels, test_render);
-        int link_screen = ss_link_screen_draw(pixels, test_render);
+        finish_picture(pixels, test_render, height);
+        int link_screen = ss_link_screen_draw(pixels + view.shift_y * test_render, test_render);
         ss_prof(SS_PROF_FINISH, 0);
         for (i = 0; i < count; i++)
             picture_hash = (picture_hash ^ pixels[i]) * 16777619u;
@@ -1432,11 +1448,14 @@ void VBlankIntrWait(void)
     if (windowed) {
         uint32_t *pixels = frame_pixels;
         struct ss_view view;
-        int width = forced_width ? forced_width : ss_plat_view_width();
-        if (!ss_field_view(&view, width)) {     /* menus and cut-scenes keep the console's composition, centred */
-            memset(&view, 0, sizeof view);
-            view.width = width;
-        }
+        int size = ss_plat_view_width();
+        int width = forced_width ? forced_width : SS_VIEW_SIZE_WIDTH(size);
+        int height = forced_height ? forced_height : SS_VIEW_SIZE_HEIGHT(size);
+        uint32_t tall;
+        if (height < SS_SCREEN_H) height = SS_SCREEN_H;
+        if (height > SS_MAX_VIEW_H) height = SS_MAX_VIEW_H;
+        tall = height != SS_SCREEN_H ? (uint32_t)height << SS_PRESENT_HEIGHT_SHIFT : 0;
+        scene_view(&view, width, height);       /* menus and cut-scenes keep the console's composition, centred */
         view.transparent_outside = couch_picture;
         {
             static uint16_t held;
@@ -1451,8 +1470,8 @@ void VBlankIntrWait(void)
                     ss_ppu_render(pixels, width, &view);
                     ss_prof(SS_PROF_RENDER, 0);
                     ss_prof(SS_PROF_FINISH, 1);
-                    finish_picture(pixels, width);
-                    ss_link_screen_draw(pixels, width);
+                    finish_picture(pixels, width, height);
+                    ss_link_screen_draw(pixels + view.shift_y * width, width);
                     ss_prof(SS_PROF_FINISH, 0);
                 } else {
                     ss_ppu_unseen(&view);
@@ -1468,7 +1487,7 @@ void VBlankIntrWait(void)
                 left_out++;
                 ss_ppu_unseen(&view);
                 ss_prof(SS_PROF_PRESENT, 1);
-                held = ss_plat_present(pixels, language);
+                held = ss_plat_present(pixels, (int)((uint32_t)language | tall));
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;
@@ -1483,18 +1502,19 @@ void VBlankIntrWait(void)
                 ss_ppu_render(pixels, width, &view);
                 ss_prof(SS_PROF_RENDER, 0);
                 ss_prof(SS_PROF_FINISH, 1);
-                finish_picture(pixels, width);
-                int link_screen = ss_link_screen_draw(pixels, width);
+                finish_picture(pixels, width, height);
+                int link_screen = ss_link_screen_draw(pixels + view.shift_y * width, width);
                 ss_prof(SS_PROF_FINISH, 0);
                 ss_plat_overlay(skip.darkness, skip.text);
                 ss_prof(SS_PROF_PRESENT, 1);
                 if (width > SS_SCREEN_W && !link_screen)
                     present_width |= frontend;
+                /* the height in bits 24..31 (runtime.h): kept unsigned, 240 << 24 sets bit 31 */
                 if (!link_screen && ss_ppu_hud()) {     /* the status display goes with the picture as a layer of its own */
-                    memcpy(pixels + width * SS_SCREEN_H, ss_ppu_hud(), SS_SCREEN_W * SS_HUD_ROWS * sizeof *pixels);
-                    held = ss_plat_present(pixels, present_width | SS_PRESENT_HUD);
+                    memcpy(pixels + width * height, ss_ppu_hud(), SS_SCREEN_W * SS_HUD_ROWS * sizeof *pixels);
+                    held = ss_plat_present(pixels, (int)((uint32_t)(present_width | SS_PRESENT_HUD) | tall));
                 } else
-                    held = ss_plat_present(pixels, present_width);
+                    held = ss_plat_present(pixels, (int)((uint32_t)present_width | tall));
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;
