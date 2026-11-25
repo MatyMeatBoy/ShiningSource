@@ -37,6 +37,12 @@ export SS_FBDEV="${SS_FBDEV-/dev/fb0}"
 if [ -z "$ss_error" ] && [ -n "$SS_FBDEV" ] && { [ ! -r "$SS_FBDEV" ] || [ ! -w "$SS_FBDEV" ]; }; then
     ss_error="framebuffer $SS_FBDEV is not readable and writable."
 fi
+# The 4:3 canvas: 320x240 game pixels at 2x fill the 640x480 panel. The field is
+# shown in every direction; menus and cut-scenes keep the console's 240x160
+# picture (480x320 on the panel) with the port's decor around it.
+# SS_CANVAS=240x160 shows the console's picture alone, 480x320 in the middle;
+# an empty SS_CANVAS gives the earlier wide picture (SS_FB_VIEW, 320x160).
+export SS_CANVAS="${SS_CANVAS-320x240}"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-offscreen}"
 export SDL_AUDIO_DRIVER="${SDL_AUDIO_DRIVER:-alsa}"
 

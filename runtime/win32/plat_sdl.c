@@ -6,6 +6,7 @@
 #include "shiningsource/ini.h"
 #include "shiningsource/language_file.h"
 #include "shiningsource/window_mode.h"
+#include "shiningsource/fbdev.h"     /* its pixel routines are portable: the canvas uses them on every system */
 #include "soul_field.h"
 #include "wide_art.h"
 
@@ -116,6 +117,9 @@ static const char *setting_text(int which)
 }
 
 static int classic = -1, border, border_style, sides_field = 1;     /* screen mode, see "screen modes" */
+static int canvas_w, canvas_h;          /* SS_CANVAS: the fixed canvas, see "canvas" (0: the window decides) */
+enum { CANVAS_MAX_H = 2 * SS_SCREEN_H };
+static void read_canvas(void);
 static void read_mode(void);
 enum { MENU_UP, MENU_DOWN, MENU_LEFT, MENU_RIGHT, MENU_OK, MENU_BACK, MENU_TOGGLE };
 static int menu_open;
@@ -289,7 +293,8 @@ static void open_available_pad(void)
 /* The picture's texture. Made at the start, and again when the system says the graphics device was reset (a
  * driver restart, an Android app coming back without its graphics context): every texture is gone then. The
  * others are made again where they are used: the typeface from the ROM, a notice's icon from its pixels. */
-static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture, *wide_texture;
+static SDL_Texture *font_texture, *notice_texture, *field_texture, *hud_texture, *wide_texture, *canvas_texture;
+static unsigned canvas_texture_id;      /* the decor (canvas_decor) canvas_texture holds; 0: none */
 static int wide_picture, wide_drawn_width, wide_dirty;
 static bool wide_native_menu;
 static bool wide_ultrawide;
@@ -306,7 +311,8 @@ static void make_textures(void)
 {
     if (texture)
         SDL_DestroyTexture(texture);
-    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W, SS_SCREEN_H);
+    texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_MAX_VIEW_W,
+                                canvas_w ? CANVAS_MAX_H : SS_SCREEN_H);
     if (!texture)
         fprintf(stderr, "window: no texture for the picture: %s\n", SDL_GetError());
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
@@ -325,6 +331,10 @@ static void make_textures(void)
         SDL_DestroyTexture(wide_texture);
     wide_texture = NULL;
     wide_drawn_width = 0;
+    if (canvas_texture)
+        SDL_DestroyTexture(canvas_texture);
+    canvas_texture = NULL;
+    canvas_texture_id = 0;
     if (hud_texture)
         SDL_DestroyTexture(hud_texture);
     hud_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, SS_SCREEN_W, SS_HUD_ROWS);
@@ -405,6 +415,7 @@ int ss_plat_video_init(const char *title)
     stat_start_ms[0] = process_age_ms();
     read_bindings(getenv("SS_KEYS"), (int *)keys, 1, SDL_SCANCODE_COUNT);
     ss_pad_enable_gamecube();
+    read_canvas();
 #ifdef SS_FB_HOST
     fb_on = ss_fb_open();
     if (fb_on)
@@ -473,7 +484,8 @@ int ss_plat_video_init(const char *title)
         evdev_decide_ns = SDL_GetTicksNS() + 1000000000u;
     } else
 #endif
-    if (!SDL_CreateWindowAndRenderer(title, SS_SCREEN_W * 4, SS_SCREEN_H * 4, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+    if (!SDL_CreateWindowAndRenderer(title, canvas_w ? canvas_w * 3 : SS_SCREEN_W * 4, canvas_w ? canvas_h * 3 : SS_SCREEN_H * 4,
+                                     SDL_WINDOW_RESIZABLE, &window, &renderer)) {
         fprintf(stderr, "window: %s\n", SDL_GetError());
         return -1;
     }
@@ -675,9 +687,40 @@ void ss_plat_audio(const int16_t *samples, int frames)
  * a border. SS_BORDER is its thickness in console pixels (0 to 64) and SS_BORDER_STYLE its look (0 black,
  * 1 graphite, 2 indigo, 3 silver, 4 "Soul", the default). The border is drawn here, with no artwork of any game
  * or console. */
+/* ---- canvas ----
+ * SS_CANVAS=WxH (any system; the GA36 package sets 320x240) gives the enhanced mode a fixed canvas of W x H game
+ * pixels instead of the window's shape, shown at the largest whole scale (320x240 fills a 640x480 panel at 2x).
+ * ss_plat_view_width tells the core both measures (width | height << 16, plain width when H is 160); a frame comes
+ * back with its height in bits 24..31 of ss_plat_present's `width` (0: 160). The core extends the field scenes
+ * to the whole canvas; a scene it cannot extend comes as the console's 240 x 160 picture in the middle, and what
+ * the wide view puts beside such a picture (the Soul field, the scenes' side art from assets/launcher, the edges
+ * of the picture drawn out) surrounds it here on all four sides: see canvas_decor. A frame smaller than the canvas
+ * (160 rows from a core that does not fill the canvas, or right after a change of mode) is centred in it.
+ * SS_CANVAS=240x160 is the console's picture alone (480x320 in the middle of a 640x480 panel). W is 240..480 and
+ * H 160..320, both even; anything else leaves the canvas off. The classic mode is unchanged by it. */
+static void read_canvas(void)
+{
+    static int done;
+    const char *text = getenv("SS_CANVAS");
+    int w = 0, h = 0;
+    if (done)
+        return;
+    done = 1;
+    if (!text || !*text || text[0] == '0')
+        return;
+    if (sscanf(text, "%dx%d", &w, &h) != 2 || w < SS_SCREEN_W || w > SS_MAX_VIEW_W || h < SS_SCREEN_H || h > CANVAS_MAX_H) {
+        fprintf(stderr, "video: SS_CANVAS=%s is not WxH with W 240..480 and H 160..320: no canvas\n", text);
+        return;
+    }
+    canvas_w = w & ~1;
+    canvas_h = h & ~1;
+    fprintf(stderr, "video: canvas %dx%d\n", canvas_w, canvas_h);
+}
+
 static void read_mode(void)
 {
     const char *text = setting_text(SET_MODE);
+    read_canvas();
     classic = text && !strcmp(text, "classic");
     border = setting_text(SET_BORDER) ? atoi(setting_text(SET_BORDER)) : 16;
     if (border < 0) border = 0;
@@ -829,6 +872,8 @@ int ss_plat_view_width(void)
         read_mode();
     if (classic)
         return SS_SCREEN_W;
+    if (canvas_w)                       /* see "canvas": the height goes with it when it is not the console's */
+        return canvas_h > SS_SCREEN_H ? canvas_w | canvas_h << 16 : canvas_w;
 #ifdef SS_FB_HOST
     if (fb_on)
         return ss_fb_view();            /* SS_FB_VIEW: 320 by default, the panel's width at 2x */
@@ -1516,23 +1561,23 @@ static void draw_notice(int left, int top, int width)
  * open the buttons are neither drawn nor read (a touch then chooses in the menu, see handle_event). */
 struct touch_button { int bit; float x, y, w, h; };
 
-static int touch_layout(struct touch_button *b, int width)
+static int touch_layout(struct touch_button *b, int width, float low)
 {
     float w = (float)width;
-    int n = 0;
-    b[n++] = (struct touch_button){ 0, w - 36, 90, 30, 30 };                /* A */
-    b[n++] = (struct touch_button){ 1, w - 70, 116, 30, 30 };               /* B */
-    b[n++] = (struct touch_button){ 2, w / 2 - 36, 146, 30, 12 };           /* Select */
-    b[n++] = (struct touch_button){ 3, w / 2 + 6, 146, 30, 12 };            /* Start */
+    int n = 0;                          /* `low`: how far the bottom of the view is below the picture's (canvas) */
+    b[n++] = (struct touch_button){ 0, w - 36, 90 + low, 30, 30 };          /* A */
+    b[n++] = (struct touch_button){ 1, w - 70, 116 + low, 30, 30 };         /* B */
+    b[n++] = (struct touch_button){ 2, w / 2 - 36, 146 + low, 30, 12 };     /* Select */
+    b[n++] = (struct touch_button){ 3, w / 2 + 6, 146 + low, 30, 12 };      /* Start */
     b[n++] = (struct touch_button){ 9, 2, 2, 44, 20 };                      /* L */
     b[n++] = (struct touch_button){ 8, w - 46, 2, 44, 20 };                 /* R */
     return n;
 }
 
-static uint16_t touch_buttons(int width)
+static uint16_t touch_buttons(int width, int height)
 {
     static int wanted = -1, menu_before;
-    const float pad_x = 40, pad_y = 116, pad_radius = 36, dead = 9;
+    const float low = (float)(height - SS_SCREEN_H), pad_x = 40, pad_y = 116 + low, pad_radius = 36, dead = 9;
     const SDL_FRect menu_box = { (float)width / 2 - 13, 2, 26, 13 };
     struct touch_button buttons[8];
     SDL_TouchID *devices;
@@ -1559,7 +1604,7 @@ static uint16_t touch_buttons(int width)
         menu_before = 1;                /* the finger that chose "resume" opens nothing when it is still down */
         return 0;
     }
-    n = touch_layout(buttons, width);
+    n = touch_layout(buttons, width, low);
     SDL_GetWindowSize(window, &window_w, &window_h);
     devices = SDL_GetTouchDevices(&count);
     for (d = 0; devices && d < count; d++) {
@@ -1655,7 +1700,8 @@ static long pictures, game_frames;      /* what the window has shown, and how ma
 static int test_log;
 static uint16_t test_pad;
 static int logical_w, logical_h;        /* the logical size the renderer has now (0: none, the menu's own scale) */
-static struct { int scale, x, w, rows_y, pitch, count, items[ITEM_KINDS], middle[ITEM_KINDS], reach[ITEM_KINDS]; } menu_shape;
+static struct { int scale, x, w, rows_y, pitch, count, first, items[ITEM_KINDS], middle[ITEM_KINDS], reach[ITEM_KINDS]; } menu_shape;
+static int menu_first;                  /* the first entry shown when they do not all fit (canvas) */
 
 /* The entries shown now, top to bottom. */
 static int menu_items(int *items)
@@ -1671,6 +1717,9 @@ static int menu_items(int *items)
         items[n++] = ITEM_HUD;          /* the classic picture is the console's: its status display keeps its size */
     }
 #ifndef __ANDROID__
+#ifdef SS_FB_HOST
+    if (!fb_on)                         /* nor has the framebuffer a window */
+#endif
     items[n++] = ITEM_WINDOW_MODE;      /* an Android app always has the whole screen */
 #endif
     items[n++] = ITEM_VSYNC;
@@ -2020,6 +2069,7 @@ static void menu_click(float x, float y, int pressed)
     row = (uy - menu_shape.rows_y) / menu_shape.pitch;
     if (row >= menu_shape.count)
         return;
+    row += menu_shape.first;            /* count is the entries shown, from first on */
     if (row != menu_row)
         menu_quit_armed = 0;
     menu_row = row;
@@ -2138,10 +2188,15 @@ static int menu_info(char lines[INFO_LINES][INFO_BYTES])
                        "Online: la partita continua", "En línea: el juego sigue en marcha")
         : ui_text("Game paused", "Jeu en pause", "Spiel pausiert", "Gioco in pausa", "Juego en pausa"));
 #ifndef __ANDROID__
-    SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s",
-                 ui_text("Keys", "Touches", "Tasten", "Tasti", "Teclas"),
-                 key_name(keys[0]), key_name(keys[1]), key_name(keys[9]), key_name(keys[8]));
-    SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", key_name(keys[3]), key_name(keys[2]));
+#ifdef SS_FB_HOST
+    if (!fb_on)                         /* a handheld on its framebuffer has no keyboard */
+#endif
+    {
+        SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s",
+                     ui_text("Keys", "Touches", "Tasten", "Tasti", "Teclas"),
+                     key_name(keys[0]), key_name(keys[1]), key_name(keys[9]), key_name(keys[8]));
+        SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", key_name(keys[3]), key_name(keys[2]));
+    }
 #endif
     if (gamepad) {
         SDL_snprintf(lines[n++], INFO_BYTES, "%s: A=%s B=%s L=%s R=%s",
@@ -2185,7 +2240,7 @@ static void draw_menu(void)
 {
     char info[INFO_LINES][INFO_BYTES], buffer[32];
     int items[ITEM_KINDS], count = menu_items(items), lines = menu_info(info);
-    int out_w = 0, out_h = 0, attempt, game = 0, pitch = 0, info_pitch = 0, title = 0, w = 0, h = 0, scale = 1, x, y, i, k, row_y, tall;
+    int out_w = 0, out_h = 0, attempt, game = 0, shown, pitch = 0, info_pitch = 0, title = 0, w = 0, h = 0, scale = 1, x, y, i, k, row_y, tall;
     const char *heading = ui_text("Options", "Options", "Optionen", "Opzioni", "Opciones");
 
     SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
@@ -2207,6 +2262,25 @@ static void draw_menu(void)
         scale = 1;
     if (menu_row >= count)
         menu_row = count - 1;
+    shown = count;
+    if (canvas_w && !classic && game && scale < 2 && out_w / (w + 8) >= 2) {
+        /* the canvas (a small screen, 640x480 on the GA36): the menu at twice the size, readable, with as many
+         * entries as fit; the list scrolls with the chosen one */
+        int rows = (out_h / 2 - 8 - (5 + title + 6 + lines * info_pitch + 4)) / pitch;
+        if (rows >= 5 && rows < count) {
+            shown = rows;
+            scale = 2;
+            h = 5 + title + shown * pitch + 6 + lines * info_pitch + 4;
+        }
+    }
+    if (menu_row < menu_first)
+        menu_first = menu_row;
+    if (menu_row >= menu_first + shown)
+        menu_first = menu_row - shown + 1;
+    if (menu_first > count - shown)
+        menu_first = count - shown;
+    if (menu_first < 0)
+        menu_first = 0;
     tall = text_height();
     x = (out_w / scale - w) / 2;
     y = (out_h / scale - h) / 2;
@@ -2234,9 +2308,9 @@ static void draw_menu(void)
     draw_text(heading, -1, x + (w - text_width(heading, -1)) / 2, y + 5 + (title - 4 - tall) / 2, 255, 214, 110, 255);
     fill((float)x + 8, (float)(y + 5 + title - 3), (float)w - 16, 1, 170, 118, 40);
     row_y = y + 5 + title;
-    for (i = 0; i < count; i++) {
+    for (i = menu_first; i < menu_first + shown; i++) {
         const char *value = item_value(items[i], buffer, sizeof buffer);
-        int top = row_y + i * pitch, text_y = top + (pitch - tall) / 2, chosen = i == menu_row, wide, value_x;
+        int top = row_y + (i - menu_first) * pitch, text_y = top + (pitch - tall) / 2, chosen = i == menu_row, wide, value_x;
         if (chosen) {
             fill((float)x + 4, (float)top, (float)w - 8, (float)pitch, 150, 98, 26);
             fill((float)x + 4, (float)top, (float)w - 8, 1, 232, 168, 56);
@@ -2260,7 +2334,14 @@ static void draw_menu(void)
         menu_shape.middle[i] = value_x + wide / 2;
         menu_shape.reach[i] = value_x - 22;
     }
-    row_y += count * pitch + 6;
+    for (k = 0; k < 4 && shown < count; k++) {         /* more entries above, below: small arrows at the right */
+        int up = menu_first > 0, down = menu_first + shown < count, ax = x + w - 7;
+        if (up)
+            fill((float)(ax - k), (float)(row_y - 10 + k), (float)(2 * k + 1), 1, 255, 226, 138);
+        if (down)
+            fill((float)(ax - k), (float)(row_y + shown * pitch + 4 - k), (float)(2 * k + 1), 1, 255, 226, 138);
+    }
+    row_y += shown * pitch + 6;
     fill((float)x + 8, (float)(row_y - 3), (float)w - 16, 1, 170, 118, 40);
     for (i = 0; i < lines; i++) {
         int warn = i == 0 && menu_online;
@@ -2272,7 +2353,8 @@ static void draw_menu(void)
     menu_shape.w = w;
     menu_shape.rows_y = y + 5 + title;
     menu_shape.pitch = pitch;
-    menu_shape.count = count;
+    menu_shape.count = shown;
+    menu_shape.first = menu_first;
     SDL_SetRenderScale(renderer, 1.0f, 1.0f);
     block_text = 0;
 }
@@ -2407,8 +2489,9 @@ static int hud_scale(int view, int scale)
     return size > 2 * scale ? 2 * scale : size < scale ? scale : size;
 }
 
-/* `inside` is where the picture is, in the renderer's logical units (one is a pixel of the picture). */
-static void draw_hud(const SDL_FRect *inside, int view)
+/* `inside` is where the picture is, in the renderer's logical units (one is a pixel of the picture); `view` x
+ * `height` is the logical size (the canvas's in canvas mode). */
+static void draw_hud(const SDL_FRect *inside, int view, int height)
 {
     int out_w = 0, out_h = 0, scale, wanted;
     float by;
@@ -2423,7 +2506,7 @@ static void draw_hud(const SDL_FRect *inside, int view)
         }
         return;
     }
-    scale = out_h / SS_SCREEN_H < out_w / view ? out_h / SS_SCREEN_H : out_w / view;
+    scale = out_h / height < out_w / view ? out_h / height : out_w / view;
     if (scale < 1)
         scale = 1;
     wanted = option_hud && !classic && hud_texture && !hud_failed && hud_scale(view, scale) > scale;
@@ -2616,20 +2699,31 @@ int ss_wide_art_fill(uint32_t *pixels, int width, int scene, int allow_ultrawide
     return 1;
 }
 
-static void take_wide_picture(const uint32_t *pixels, int width, int scene)
+static void canvas_keep_field(const uint32_t *frame, int width, int height);
+static uint32_t wide_rows[2][SS_SCREEN_W];     /* canvas: the picture's top and bottom rows, see canvas_decor */
+
+/* `frame` is `width` x `height`; the console's 160 rows are in its middle. */
+static void take_wide_picture(const uint32_t *frame, int width, int height, int scene)
 {
+    const uint32_t *pixels = frame + (size_t)((height - SS_SCREEN_H) / 2) * (size_t)width;
+    const int canvas = canvas_w && !classic;
     int extra = width - SS_SCREEN_W, left = extra / 2;
     int output_width, output_height;
     wide_native_menu = scene == SS_PRESENT_WIDE_MARBLE && width <= SS_WIDE_16_9_W;
-    wide_ultrawide = width * 10 >= SS_SCREEN_H * 22 &&
-                      SDL_GetRenderOutputSize(renderer, &output_width, &output_height) &&
-                      output_width * 10 >= output_height * 22;
+    if (canvas)                         /* a canvas wider than 16:9 has room for the wide side art */
+        wide_ultrawide = width > SS_WIDE_16_9_W;
+    else
+        wide_ultrawide = width * 10 >= SS_SCREEN_H * 22 &&
+                         SDL_GetRenderOutputSize(renderer, &output_width, &output_height) &&
+                         output_width * 10 >= output_height * 22;
     scene = wide_scene_for_output(scene, wide_ultrawide);
     if (wide_field_age <= WIDE_FIELD_HOLD)
         wide_field_age++;
     if (scene == SS_PRESENT_WIDE_FIELD) {
         wide_frontend_blackout = 0;
-        if (option_wide_pro && sides_field && extra > 0) {
+        if (canvas && option_wide_pro && sides_field && extra > 0) {
+            canvas_keep_field(frame, width, height);
+        } else if (option_wide_pro && sides_field && extra > 0) {
             for (int y = 0; y < SS_SCREEN_H; y++) {
                 const uint32_t *row = pixels + y * width;
                 uint32_t *dst = wide_field + y * extra;
@@ -2660,6 +2754,11 @@ static void take_wide_picture(const uint32_t *pixels, int width, int scene)
     if (!scene || extra <= 0)
         return;
     wide_light = wide_sample_edges(pixels, width, scene, wide_ultrawide, wide_edges);
+    if (canvas)
+        for (int x = 0; x < SS_SCREEN_W; x++) {
+            wide_rows[0][x] = pixels[left + x] | 0xff000000u;
+            wide_rows[1][x] = pixels[(size_t)(SS_SCREEN_H - 1) * (size_t)width + (size_t)(left + x)] | 0xff000000u;
+        }
     if (scene == SS_PRESENT_WIDE_TRANSITION)
         wide_transition_light = wide_center_light(pixels, width, left);
     wide_dirty = 1;
@@ -2713,12 +2812,250 @@ static void draw_wide_strips(int view)
     SDL_RenderTexture(renderer, wide_texture, &strip, &target);
 }
 
-/* Draw the frame in the texture (`width` columns), what goes over it, and the menu. Returns the buttons the
- * touch controls hold. The picture shown is `width` wide except right after the mode changed and while a game
- * waits behind the menu, when the frame at hand has the width of the mode before: its middle is shown then, or
- * all of it in the middle. */
-static uint16_t show_picture(int width)
+/* ---- canvas decor (see "canvas") ----
+ * What surrounds the game's picture on the canvas, made here in memory once for a look and kept: the composed
+ * path uploads it to canvas_texture, the framebuffer writes it to the screen (ss_fb_present_canvas), both only
+ * when it changed. It is computed from what the wide view uses beside a picture (wide_picture, wide_edges,
+ * wide_light, the side art) plus the picture's top and bottom rows (wide_rows):
+ *   always the Soul field (SS_SIDES=0: black), which shows wherever the game's frame is transparent;
+ *   a scene with side art (menus, title, shops...): the art beside the console's 160 rows at one art pixel per
+ *     game pixel; above and below, the same art mirrored upwards and downwards, and over and under the picture
+ *     the art mirrored from both sides inwards (cross-faded in the middle). Never scaled, never the picture's
+ *     edges drawn out: a scene without art, or past the art's width, gets black. Only the console's 240 x 160 rectangle of the
+ *     frame is shown then; the rest of the frame is covered, as the wide view covers it with the strips;
+ *   the fade after a field scene: the last field frame darkened, as the wide view keeps the field's sides.
+ * Nothing but the shipped art and the game's own pixels is drawn. canvas_rect is the part of the frame shown. */
+static uint32_t *canvas_base, *canvas_decor, *canvas_field;    /* canvas_w x canvas_h each */
+static int canvas_base_sides = -1, canvas_field_valid, canvas_memory_failed;
+static unsigned canvas_decor_id, canvas_field_id;
+static struct { int x, y, w, h; } canvas_rect;
+struct canvas_key {
+    int mode, scene, sides, wide_pro, light, ultrawide;
+    unsigned field_id;
+    const void *art;
+    uint32_t edges[2][SS_SCREEN_H], rows[2][SS_SCREEN_W];
+};
+static struct canvas_key canvas_key;
+enum { CANVAS_PLAIN, CANVAS_NATIVE, CANVAS_SCENE, CANVAS_FADE };
+
+static int canvas_memory(void)
 {
+    const size_t size = (size_t)canvas_w * (size_t)canvas_h * sizeof(uint32_t);
+    if (!canvas_base && !canvas_memory_failed) {
+        canvas_base = malloc(size);
+        canvas_decor = malloc(size);
+        canvas_field = malloc(size);
+        if (!canvas_base || !canvas_decor || !canvas_field) {
+            free(canvas_base); free(canvas_decor); free(canvas_field);
+            canvas_base = canvas_decor = canvas_field = NULL;
+            canvas_memory_failed = 1;
+            fprintf(stderr, "video: no memory for the canvas decor: black around the picture\n");
+        }
+    }
+    if (canvas_base && canvas_base_sides != sides_field) {
+        const size_t count = (size_t)canvas_w * (size_t)canvas_h;
+        canvas_base_sides = sides_field;
+        if (sides_field && (canvas_w > SS_SCREEN_W || canvas_h > SS_SCREEN_H))
+            ss_soul_field_pixels(canvas_base, canvas_w, canvas_h, 0, 0, 0, 0);
+        else
+            for (size_t i = 0; i < count; i++)
+                canvas_base[i] = 0xff000000u;
+        canvas_field_valid = 0;
+    }
+    return canvas_base != NULL;
+}
+
+/* A field frame: kept over the Soul field, for the fade that may follow it. */
+static void canvas_keep_field(const uint32_t *frame, int width, int height)
+{
+    int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+    if (!canvas_memory())
+        return;
+    memcpy(canvas_field, canvas_base, (size_t)canvas_w * (size_t)canvas_h * sizeof(uint32_t));
+    for (int y = 0; y < height; y++) {
+        if (y + y0 < 0 || y + y0 >= canvas_h)
+            continue;
+        for (int x = 0; x < width; x++)
+            if (x + x0 >= 0 && x + x0 < canvas_w) {
+                size_t at = (size_t)(y + y0) * (size_t)canvas_w + (size_t)(x + x0);
+                canvas_field[at] = ss_fb_over(frame[(size_t)y * (size_t)width + (size_t)x], canvas_base[at]);
+            }
+    }
+    wide_field_light = wide_center_light(frame + (size_t)((height - SS_SCREEN_H) / 2) * (size_t)width, width, (width - SS_SCREEN_W) / 2);
+    wide_field_age = 0;
+    canvas_field_valid = 1;
+    canvas_field_id++;
+}
+
+/* Above and below the console's rows (`top` rows each side), once its side strips are in canvas_decor. */
+static void canvas_bands(const struct canvas_key *key, int left, int top)
+{
+    const SDL_Surface *art = key->art;
+    const int art_half = art ? art->w / 2 : 0;
+    const bool art_wide = art && art_half >= SS_SCREEN_W / 2 + 8;      /* the 256-column art reaches the middle */
+    const unsigned light = (unsigned)key->light;
+    for (int e = 0; e < top; e++) {
+        int m = e % (2 * SS_SCREEN_H);
+        if (m >= SS_SCREEN_H)
+            m = 2 * SS_SCREEN_H - 1 - m;                                /* mirrored, and back again */
+        for (int side = 0; side < 2; side++) {
+            const int y = side ? top + SS_SCREEN_H + e : top - 1 - e, art_y = side ? SS_SCREEN_H - 1 - m : m;
+            uint32_t *out = canvas_decor + (size_t)y * (size_t)canvas_w;
+            const uint32_t *mirror = canvas_decor + (size_t)(top + art_y) * (size_t)canvas_w;
+            const uint32_t *art_row = art_wide ? (const uint32_t *)((const uint8_t *)art->pixels + art_y * art->pitch) : NULL;
+            if (y < 0 || y >= canvas_h)
+                continue;
+            memcpy(out, mirror, (size_t)left * sizeof *out);
+            memcpy(out + left + SS_SCREEN_W, mirror + left + SS_SCREEN_W, (size_t)(canvas_w - left - SS_SCREEN_W) * sizeof *out);
+            for (int c = 0; c < SS_SCREEN_W; c++) {
+                uint32_t outer;
+                if (art_row) {
+                    /* the left art mirrored rightwards from the picture's left edge, the right art leftwards */
+                    const int from_left = c < art_half - 1 ? c : art_half - 1;
+                    const int from_right = SS_SCREEN_W - 1 - c < art_half - 1 ? SS_SCREEN_W - 1 - c : art_half - 1;
+                    const uint32_t a = art_row[art_half - 1 - from_left], b = art_row[art_half + from_right];
+                    const int t = c < 90 ? 0 : c >= 150 ? 256 : (c - 90) * 256 / 60;
+                    outer = wide_mix(0xff000000u, wide_mix(a, b, (unsigned)t), light);
+                } else {
+                    outer = 0xff000000u;    /* no art for this scene: black, never the picture's edge drawn out */
+                }
+                out[left + c] = outer;
+            }
+        }
+    }
+}
+
+static void canvas_build(const struct canvas_key *key)
+{
+    const size_t count = (size_t)canvas_w * (size_t)canvas_h;
+    const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
+    memcpy(canvas_decor, canvas_base, count * sizeof *canvas_decor);
+    if (key->mode == CANVAS_FADE) {
+        for (int y = 0; y < canvas_h; y++)
+            for (int x = 0; x < canvas_w; x++)
+                if (y < top || y >= top + SS_SCREEN_H || x < left || x >= left + SS_SCREEN_W) {
+                    size_t at = (size_t)y * (size_t)canvas_w + (size_t)x;
+                    canvas_decor[at] = wide_mix(0xff000000u, canvas_field[at], (unsigned)key->light);
+                }
+    } else if (key->mode == CANVAS_SCENE) {
+        /* Only real content around the picture: the scene's own side art at one art pixel per game pixel (no
+         * scaling, no smearing of the picture's edges), else black. */
+        const SDL_Surface *art = key->art;
+        const int art_half = art ? art->w / 2 : 0;
+        for (size_t i = 0; i < count; i++) {
+            int y = (int)(i / (size_t)canvas_w), x = (int)(i % (size_t)canvas_w);
+            if (y < top || y >= top + SS_SCREEN_H || x < left || x >= left + SS_SCREEN_W)
+                canvas_decor[i] = 0xff000000u;
+        }
+        for (int y = 0; art && y < SS_SCREEN_H; y++) {
+            const uint32_t *art_row = (const uint32_t *)((const uint8_t *)art->pixels + y * art->pitch);
+            uint32_t *out = canvas_decor + (size_t)(top + y) * (size_t)canvas_w;
+            for (int d = 0; d < left && d < art_half; d++) {
+                out[left - 1 - d] = wide_mix(0xff000000u, art_row[art_half - 1 - d], (unsigned)key->light);
+                if (left + SS_SCREEN_W + d < canvas_w)
+                    out[left + SS_SCREEN_W + d] = wide_mix(0xff000000u, art_row[art_half + d], (unsigned)key->light);
+            }
+        }
+        canvas_bands(key, left, top);
+    }
+}
+
+/* The decor for a `width` x `height` frame (centred on the canvas) and the part of it shown, after
+ * take_wide_picture. Cheap when nothing changed: the decor is only made again for a different look. */
+static void canvas_decor_update(int width, int height)
+{
+    const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
+    const int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+    struct canvas_key key;
+    canvas_rect.x = x0 < 0 ? 0 : x0;
+    canvas_rect.y = y0 < 0 ? 0 : y0;
+    canvas_rect.w = (width < canvas_w ? width : canvas_w);
+    canvas_rect.h = (height < canvas_h ? height : canvas_h);
+    if (!canvas_memory())
+        return;
+    memset(&key, 0, sizeof key);
+    key.sides = sides_field;
+    key.wide_pro = option_wide_pro;
+    if (width > SS_SCREEN_W && wide_native_menu && (!option_wide_pro || !sides_field)) {
+        key.mode = CANVAS_NATIVE;
+    } else if (width > SS_SCREEN_W && option_wide_pro && sides_field && wide_picture && !wide_native_menu) {
+        if (wide_picture == SS_PRESENT_WIDE_TRANSITION && canvas_field_valid && wide_field_age <= WIDE_FIELD_HOLD && wide_field_light) {
+            unsigned light = wide_transition_light * 256 / wide_field_light;
+            key.mode = CANVAS_FADE;
+            key.light = light > 256 ? 256 : (int)light;
+            key.field_id = canvas_field_id;
+        } else {
+            key.mode = CANVAS_SCENE;
+            key.scene = wide_picture;
+            key.light = (int)wide_light;
+            key.ultrawide = wide_ultrawide;
+            key.art = wide_art(wide_picture, wide_ultrawide);
+            memcpy(key.edges, wide_edges, sizeof key.edges);
+            memcpy(key.rows, wide_rows, sizeof key.rows);
+        }
+    }
+    if (key.mode != CANVAS_PLAIN && height >= SS_SCREEN_H) {
+        canvas_rect.x = left;
+        canvas_rect.y = top;
+        canvas_rect.w = SS_SCREEN_W;
+        canvas_rect.h = SS_SCREEN_H;
+    }
+    if (canvas_decor_id && !memcmp(&key, &canvas_key, sizeof key))
+        return;
+    canvas_key = key;
+    canvas_build(&key);
+    if (!++canvas_decor_id)
+        canvas_decor_id = 1;
+}
+
+/* The canvas through the renderer: the decor, the shown part of the frame, and what goes over them. */
+static void show_canvas(int width, int height)
+{
+    const int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+    SDL_FRect source, target, inside = { (float)x0, (float)y0, (float)width, (float)height };
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+    canvas_decor_update(width, height);
+    if (canvas_decor) {
+        if (!canvas_texture) {
+            canvas_texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, canvas_w, canvas_h);
+            if (canvas_texture) {
+                SDL_SetTextureScaleMode(canvas_texture, SDL_SCALEMODE_NEAREST);
+                SDL_SetTextureBlendMode(canvas_texture, SDL_BLENDMODE_NONE);
+            }
+            canvas_texture_id = 0;
+        }
+        if (canvas_texture && canvas_texture_id != canvas_decor_id && SDL_UpdateTexture(canvas_texture, NULL, canvas_decor, canvas_w * 4))
+            canvas_texture_id = canvas_decor_id;
+        if (canvas_texture && canvas_texture_id == canvas_decor_id)
+            SDL_RenderTexture(renderer, canvas_texture, NULL, NULL);
+    }
+    source = (SDL_FRect){ (float)(canvas_rect.x - x0), (float)(canvas_rect.y - y0), (float)canvas_rect.w, (float)canvas_rect.h };
+    target = (SDL_FRect){ (float)canvas_rect.x, (float)canvas_rect.y, (float)canvas_rect.w, (float)canvas_rect.h };
+    SDL_RenderTexture(renderer, texture, &source, &target);
+    draw_hud(&inside, canvas_w, canvas_h);
+    draw_notice(0, draw_overlay(canvas_w, canvas_h, 0, 0, canvas_w), canvas_w);
+}
+
+/* Draw the frame in the texture (`width` columns, `height` rows), what goes over it, and the menu. Returns the
+ * buttons the touch controls hold. The picture shown is `width` wide except right after the mode changed and
+ * while a game waits behind the menu, when the frame at hand has the width of the mode before: its middle is shown
+ * then, or all of it in the middle. */
+static uint16_t show_picture(int width, int height)
+{
+    if (canvas_w && !classic) {
+        uint16_t held;
+        if (canvas_w != logical_w || canvas_h != logical_h) {
+            SDL_SetRenderLogicalPresentation(renderer, canvas_w, canvas_h, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+            logical_w = canvas_w;
+            logical_h = canvas_h;
+        }
+        show_canvas(width, height);
+        held = touch_buttons(canvas_w, canvas_h);
+        if (menu_open)
+            draw_menu();
+        return held;
+    }
     int view = classic ? SS_SCREEN_W : menu_open ? (view_forced ? view_forced : ss_plat_view_width()) : width;
     int shown = width < view ? width : view, w = classic ? view + 2 * border : view, h = classic ? SS_SCREEN_H + 2 * border : SS_SCREEN_H;
     if (wide_native_menu && (!option_wide_pro || !sides_field))
@@ -2745,10 +3082,10 @@ static uint16_t show_picture(int width)
             draw_field(view, SS_SCREEN_H, 0, 0, 0, 0);
         SDL_RenderTexture(renderer, texture, &source, &inside);
         draw_wide_strips(view);
-        draw_hud(&inside, view);
+        draw_hud(&inside, view, SS_SCREEN_H);
         draw_notice(0, draw_overlay(w, h, 0, 0, view), view);
     }
-    held = touch_buttons(w);
+    held = touch_buttons(w, SS_SCREEN_H);
     if (menu_open)
         draw_menu();
     return held;
@@ -2814,7 +3151,7 @@ static uint16_t qol_buttons(const bool *state)
  * or classic border) it goes to the framebuffer directly at the largest whole scale, centred, as the renderer's
  * whole-number logical presentation would place it; transparent pixels show the Soul field or black, as there.
  * Otherwise the software renderer composes the frame in fb_surface and that goes to the framebuffer. */
-static int fb_direct(const uint32_t *pixels, int width)
+static int fb_direct(const uint32_t *pixels, int width, int height)
 {
     static uint32_t *field;
     static int field_width, touch = -1;
@@ -2823,6 +3160,16 @@ static int fb_direct(const uint32_t *pixels, int width)
         touch = getenv("SS_TOUCH") && atoi(getenv("SS_TOUCH")) != 0;
     if (classic || menu_open || overlay_darkness || overlay_text[0] || notice_count || option_hud || hud_asked || hud_have || touch)
         return 0;
+    if (canvas_w) {
+        /* the canvas: its decor is written to the screen only when it changes, the frame's shown part every time */
+        const int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+        canvas_decor_update(width, height);
+        if (!canvas_decor)
+            return 0;
+        return ss_fb_present_canvas(canvas_decor, canvas_w, canvas_h, canvas_decor_id,
+                                    pixels + (size_t)(canvas_rect.y - y0) * (size_t)width + (size_t)(canvas_rect.x - x0), width,
+                                    canvas_rect.x, canvas_rect.y, canvas_rect.w, canvas_rect.h);
+    }
     if (width > SS_SCREEN_W && wide_native_menu && (!option_wide_pro || !sides_field))
         return 0;                       /* only the middle is shown then */
     if (width > SS_SCREEN_W && option_wide_pro && sides_field && wide_picture && !wide_native_menu)
@@ -2854,20 +3201,29 @@ static void fb_composed(void)
 }
 #endif
 
-/* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above). */
-uint16_t ss_plat_present(const uint32_t *pixels, int width)
+/* Show one `width` x 160 ARGB frame, wait until the next 1/59.7275 s, and return the buttons held (bit order above).
+ * `width` carries more than the width (runtime.h): the status display's layer, the wide view's scene and the
+ * game's language in bits 16..23, and in canvas mode the frame's height in bits 24..31 (0: 160), see "canvas".
+ * It is read as unsigned: a height of 128 or more sets the sign bit. */
+uint16_t ss_plat_present(const uint32_t *pixels, int packed)
 {
+    const unsigned bits = (unsigned)packed;
+    int width = (int)(bits & 0xFFFFu), height = bits >> 24 ? (int)(bits >> 24) : SS_SCREEN_H;
     SDL_Rect update = { 0, 0, width, SS_SCREEN_H };
     uint16_t held = 0;
     uint64_t now, part_from = 0, part_to;
     uint32_t *part = stat_part_us[PART_UPLOAD] ? stat_part_us[PART_UPLOAD] + stat_part_count % STAT_SLOTS : NULL;
     SDL_Event event;
     static int frameskip = -1, test_slow_ms;
-    int waiting, late, hud = width & SS_PRESENT_HUD, frontend = width & SS_PRESENT_WIDE_MASK;
+    int waiting, late, hud = (int)(bits & SS_PRESENT_HUD), frontend = (int)(bits & SS_PRESENT_WIDE_MASK);
 
-    display_language = ss_game_language_from_id((unsigned)(width & SS_PRESENT_LANG_MASK) >> SS_PRESENT_LANG_SHIFT);
-    width &= ~(SS_PRESENT_HUD | SS_PRESENT_WIDE_MASK | SS_PRESENT_LANG_MASK);
+    display_language = ss_game_language_from_id((bits & SS_PRESENT_LANG_MASK) >> SS_PRESENT_LANG_SHIFT);
+    if (!canvas_w || height < SS_SCREEN_H || height > CANVAS_MAX_H)
+        height = SS_SCREEN_H;           /* the texture has 160 rows without a canvas */
+    if (width > SS_MAX_VIEW_W)
+        width = SS_MAX_VIEW_W;
     update.w = width;
+    update.h = height;
     if (!window)
         return 0;
     if (frameskip < 0) {
@@ -2915,9 +3271,9 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
     else
 #endif
     SDL_UpdateTexture(texture, &update, pixels, width * 4);
-    take_wide_picture(pixels, width, frontend);
+    take_wide_picture(pixels, width, height, frontend);
     hud_have = hud != 0;
-    if (hud && (!hud_texture || !SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4))) {
+    if (hud && (!hud_texture || !SDL_UpdateTexture(hud_texture, NULL, pixels + (size_t)width * (size_t)height, SS_SCREEN_W * 4))) {
         hud_have = 0;                   /* the status display's layer follows the picture (runtime.h) */
         if (!hud_failed)
             fprintf(stderr, "video: the status display's layer could not be drawn (%s); the option is off for this run\n", SDL_GetError());
@@ -2941,20 +3297,20 @@ uint16_t ss_plat_present(const uint32_t *pixels, int width)
         if (texture_remade) {           /* the device was reset: the new textures have not seen this frame */
             SDL_UpdateTexture(texture, &update, pixels, width * 4);
             if (hud && hud_texture)
-                SDL_UpdateTexture(hud_texture, NULL, pixels + width * SS_SCREEN_H, SS_SCREEN_W * 4);
+                SDL_UpdateTexture(hud_texture, NULL, pixels + (size_t)width * (size_t)height, SS_SCREEN_W * 4);
         }
 #ifdef SS_FB_HOST
         int fb_shown = 0;
-        if (fb_on && fb_direct(pixels, width)) {
+        if (fb_on && fb_direct(pixels, width, height)) {
             fb_shown = 1;
         } else {
             if (fb_on && fb_stale && !texture_remade)
                 SDL_UpdateTexture(texture, &update, pixels, width * 4);
             fb_stale = 0;
-            held |= show_picture(width);
+            held |= show_picture(width, height);
         }
 #else
-        held |= show_picture(width);
+        held |= show_picture(width, height);
 #endif
         texture_remade = 0;
         if (part) {

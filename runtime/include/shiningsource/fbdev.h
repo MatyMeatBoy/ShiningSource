@@ -2,7 +2,7 @@
 #define SHININGSOURCE_FBDEV_H
 
 /* Direct Linux framebuffer output and raw evdev input for handhelds without a usable GPU (GA36-MB: Allwinner A33,
- * 640x480 RGB565 /dev/fb0). The functions are in runtime/plat/fbdev_linux.c, which is empty on other systems; the
+ * 640x480 /dev/fb0, XRGB8888 on goodluckOS, RGB565 on older firmwares).The functions are in runtime/plat/fbdev_linux.c, which is empty on other systems; the
  * pixel routines below are portable so that tools/tests/test_fbdev_convert.c can check them anywhere.
  *
  * Environment: SS_FBDEV (the device, or a regular file for tests), SS_FBDEV_MODE=WxHxBPP (a file's geometry,
@@ -121,6 +121,48 @@ static inline void ss_fb_row(void *dst, int format, const uint32_t *src, const u
     }
 }
 
+static inline int ss_fb_format_bytes(int format)
+{
+    return format == SS_FB_RGB565 || format == SS_FB_BGR565 ? 2 : 4;
+}
+
+/* The canvas into `base` (where its top left pixel goes on the screen; screen rows `line` bytes apart) at a whole
+ * `scale`: the decor outside the rectangle (x, y, w, h) when `with_decor`, and the rectangle from `pixels` (its top
+ * left pixel, rows `stride` apart) over the decor. The rectangle must lie inside the canvas. Used by
+ * ss_fb_present_canvas and by tools/tests/test_fbdev_convert.c. */
+static inline void ss_fb_canvas_blit(uint8_t *base, size_t line, int format, int scale, int with_decor,
+                                     const uint32_t *decor, int canvas_w, int canvas_h,
+                                     const uint32_t *pixels, int stride, int x, int y, int w, int h)
+{
+    const size_t bytes = (size_t)ss_fb_format_bytes(format), step = (size_t)scale * bytes;
+    for (int row = 0; row < canvas_h; row++) {
+        uint8_t *out = base + (size_t)row * (size_t)scale * line;
+        const uint32_t *under = decor + (size_t)row * (size_t)canvas_w;
+        int inside = row >= y && row < y + h && w > 0;
+        size_t from = 0, length = 0;
+        if (with_decor) {
+            if (!inside) {
+                ss_fb_row(out, format, under, NULL, canvas_w, scale, 1);
+            } else {
+                if (x > 0)
+                    ss_fb_row(out, format, under, NULL, x, scale, 1);
+                if (x + w < canvas_w)
+                    ss_fb_row(out + (size_t)(x + w) * step, format, under + x + w, NULL, canvas_w - x - w, scale, 1);
+            }
+            length = (size_t)canvas_w * step;
+        }
+        if (inside) {
+            ss_fb_row(out + (size_t)x * step, format, pixels + (size_t)(row - y) * (size_t)stride, under + x, w, scale, 0);
+            if (!with_decor) {
+                from = (size_t)x * step;
+                length = (size_t)w * step;
+            }
+        }
+        for (int k = 1; k < scale && length; k++)
+            memcpy(out + (size_t)k * line + from, out + from, length);
+    }
+}
+
 /* ---- runtime/plat/fbdev_linux.c ---- */
 int ss_fb_open(void);                   /* SS_FBDEV: 1 when the framebuffer is in use, after the log line */
 int ss_fb_active(void);
@@ -130,6 +172,14 @@ int ss_fb_view(void);                   /* SS_FB_VIEW, 320 by default, within 24
 /* The game's `width` x 160 ARGB picture (rows `stride` apart) at the largest whole scale, centred; transparent
  * pixels show `under` (width x 160, NULL: black). Returns 0 when it does not fit (the caller composes instead). */
 int ss_fb_present_picture(const uint32_t *pixels, int width, int stride, const uint32_t *under);
+/* The 4:3 canvas (SS_CANVAS, see plat_sdl.c "canvas"): a `canvas_w` x `canvas_h` picture at the largest whole scale
+ * (320x240 at 2x on a 640x480 panel), centred. `decor` (canvas_w x canvas_h, opaque) is what surrounds the game's
+ * picture; it is written to the screen only when `decor_id` changes or the screen lost it, and then only outside
+ * the rectangle (x, y, w, h). That rectangle is written every frame from `pixels` (its top left pixel; rows `stride`
+ * apart), transparent pixels blended over the decor under them. Returns 0 when the canvas does not fit (the caller
+ * composes instead). */
+int ss_fb_present_canvas(const uint32_t *decor, int canvas_w, int canvas_h, unsigned decor_id,
+                         const uint32_t *pixels, int stride, int x, int y, int w, int h);
 /* A composed XRGB8888 frame (normally the panel's size), centred. */
 void ss_fb_present_full(const void *pixels, int pitch, int w, int h);
 void ss_fb_close(void);                 /* registered with atexit by ss_fb_open; logs the frame counts */

@@ -14,6 +14,7 @@
 #include <linux/input.h>
 #include <linux/kd.h>
 #include <signal.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
@@ -35,8 +36,11 @@ static struct fb_fix_screeninfo fb_fix;
 static uint32_t fb_first_yoffset;
 static unsigned fb_dirty;               /* pages whose borders may hold something: cleared before a picture alone */
 static int fb_last_width, fb_last_scale;
-static unsigned long fb_fast, fb_generic, fb_presented, fb_shot_at;
+static unsigned long fb_fast, fb_generic, fb_presented, fb_shot_at, fb_canvas_full;
 static int tty_fd = -1, tty_mode = KD_TEXT;
+/* The 4:3 canvas. What each page last received: the decor's id and the rectangle written over it; a page whose
+ * decor is current gets only the rectangle. */
+static struct { unsigned id; int valid, canvas_w, canvas_h, scale, x, y, w, h; } fb_canvas[2];
 
 int ss_fb_active(void) { return fb_map || fb_shadow; }
 int ss_fb_width(void) { return (int)fb_var.xres; }
@@ -308,6 +312,55 @@ int ss_fb_present_picture(const uint32_t *pixels, int width, int stride, const u
         for (int k = 1; k < scale; k++)
             memcpy(row + (size_t)k * fb_fix.line_length, row, row_bytes);
     }
+    fb_canvas[page].valid = 0;
+    fb_fast++;
+    frame_end(page);
+    return 1;
+}
+
+int ss_fb_present_canvas(const uint32_t *decor, int canvas_w, int canvas_h, unsigned decor_id,
+                         const uint32_t *pixels, int stride, int x, int y, int w, int h)
+{
+    int scale, left, top, page, full;
+    if (!ss_fb_active() || !decor || canvas_w <= 0 || canvas_h <= 0)
+        return 0;
+    scale = (int)fb_var.xres / canvas_w < (int)fb_var.yres / canvas_h ? (int)fb_var.xres / canvas_w : (int)fb_var.yres / canvas_h;
+    if (scale < 1)
+        return 0;
+    if (x < 0) { w += x; pixels -= x; x = 0; }
+    if (y < 0) { h += y; pixels -= (ptrdiff_t)y * stride; y = 0; }
+    if (x + w > canvas_w) w = canvas_w - x;
+    if (y + h > canvas_h) h = canvas_h - y;
+    if (w <= 0 || h <= 0 || !pixels)
+        w = h = 0;
+    left = ((int)fb_var.xres - canvas_w * scale) / 2;
+    top = ((int)fb_var.yres - canvas_h * scale) / 2;
+    page = frame_begin();
+    full = (fb_dirty >> page & 1) || !fb_canvas[page].valid || fb_canvas[page].id != decor_id
+        || fb_canvas[page].canvas_w != canvas_w || fb_canvas[page].canvas_h != canvas_h || fb_canvas[page].scale != scale
+        || fb_canvas[page].x != x || fb_canvas[page].y != y || fb_canvas[page].w != w || fb_canvas[page].h != h;
+    if (full && (left > 0 || top > 0) && (fb_dirty >> page & 1)) {
+        uint8_t *base = page_base(page);
+        clear_rect(base, 0, 0, (int)fb_var.xres, top);
+        clear_rect(base, 0, top + canvas_h * scale, (int)fb_var.xres, (int)fb_var.yres - top - canvas_h * scale);
+        clear_rect(base, 0, top, left, canvas_h * scale);
+        clear_rect(base, left + canvas_w * scale, top, (int)fb_var.xres - left - canvas_w * scale, canvas_h * scale);
+    }
+    ss_fb_canvas_blit(page_base(page) + (size_t)top * fb_fix.line_length + (size_t)left * (size_t)fb_bytes, fb_fix.line_length,
+                      fb_format, scale, full, decor, canvas_w, canvas_h, pixels, stride, x, y, w, h);
+    fb_dirty &= ~(1u << page);
+    fb_canvas[page].id = decor_id;
+    fb_canvas[page].valid = 1;
+    fb_canvas[page].canvas_w = canvas_w;
+    fb_canvas[page].canvas_h = canvas_h;
+    fb_canvas[page].scale = scale;
+    fb_canvas[page].x = x;
+    fb_canvas[page].y = y;
+    fb_canvas[page].w = w;
+    fb_canvas[page].h = h;
+    fb_last_width = 0;                  /* a picture alone after this clears the screen first */
+    if (full)
+        fb_canvas_full++;
     fb_fast++;
     frame_end(page);
     return 1;
@@ -339,7 +392,8 @@ void ss_fb_close(void)
 {
     if (!ss_fb_active())
         return;
-    fprintf(stderr, "fbdev: %lu frames presented: %lu by the direct path, %lu composed\n", fb_presented, fb_fast, fb_generic);
+    fprintf(stderr, "fbdev: %lu frames presented: %lu by the direct path (%lu with the canvas decor redrawn), %lu composed\n",
+            fb_presented, fb_fast, fb_canvas_full, fb_generic);
     if (fb_pages > 1 && fb_var.yoffset != fb_first_yoffset) {
         struct fb_var_screeninfo pan = fb_var;
         pan.yoffset = fb_first_yoffset;
