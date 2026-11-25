@@ -10,3 +10,10 @@ texto ni interfaz, y sin tocar un pixel fuera del magenta.
 
 Resultado: assets/launcher/shop-flat.png de 320x240 exactos (en la GA36 se ve a 2x = 640x480). El port
 usa solo lo que queda fuera del cuadro de la consola. Revisar a escala entera antes de aprobar.
+
+Versiones (2026-11-25):
+- shop-flat.png = opcion A (base elegida por el usuario): solo el arte aprobado 16:9 (22 columnas por lado) con
+  fundido a negro hacia afuera; arriba y abajo negro, el port funde las filas del borde del cuadro (canvas_seams).
+  Copia: base-A-fundido.png.
+- sin-fundido.png: el borrador sintetizado anterior (flat_synth), descartado por verse "a IA".
+- sintetico-con-fundido.png: ese borrador con fundido a negro arriba y abajo.
