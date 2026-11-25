@@ -84,6 +84,13 @@ static int hud_raise;           /* ... and its lines to the top edge of a tall v
  * lines msg_top..msg_bottom-1 of the backgrounds without a source map (and the speaker's portrait) are shown
  * msg_drop rows lower. 0: no window this frame. */
 static int msg_top, msg_bottom, msg_drop;
+/* A shop on a tall view (the 4:3 canvas): its status display (the gauges, the money and the bank, native lines
+ * 0..SHOP_HUD_ROWS-1 of backgrounds 0 and 2) goes to the top edge of the view, as the field's does, its gauges to
+ * the left edge and its money to the right one; under it the shop's own picture then shows. shop_split[y]: the
+ * first column of line y that goes right (see find_shop_hud). shop_hud 0: not this frame. */
+enum { SHOP_HUD_ROWS = 16 };
+static int shop_hud;
+static int shop_split[SHOP_HUD_ROWS];
 
 int ss_sprite_bottom = SS_SCREEN_H;
 
@@ -304,6 +311,46 @@ static void raised_hud_line(struct row_state *R, uint16_t *dst, int y, const uin
     }
 }
 
+/* Line y (native) of the shop's status display in background n, raised to row y of a tall view (shop_hud). */
+static void raised_shop_line(struct row_state *R, uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
+                             int width, int height, int scroll_x, int scroll_y, int colour256)
+{
+    uint16_t part[W];                   /* on the stack: rows are drawn on several cores */
+    int x, right = view.width - W;
+    hardware_span(part, W, scroll_x, y + scroll_y, chars, map, width, height, colour256);
+    for (x = 0; x < W; x++) {
+        int X = x < shop_split[y] ? x : x + right;
+        if (part[x]) {
+            dst[X] = part[x];
+            raised_px[X] = 1;
+        }
+    }
+}
+
+/* Is this frame a shop (its shelves, or an item's details) whose status display goes to the top of a tall view?
+ * Its layout: backgrounds 0 (the gauges and the numbers), 2 (the money and the bank, then the shop's panels; the
+ * details show its lower half) and 3 (the shop) as the shop task sets them. A line goes right from where the money
+ * begins on it; a line without money from where the field's display parts (the bank's number alone). */
+static int find_shop_hud(int frontend)
+{
+    uint16_t cnt = IO16(0x0C);
+    const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
+    const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
+    uint16_t part[W];
+    int y, x, scroll_y = IO16(0x1A) & 511;
+    if (view.world || view.shift_y < SHOP_HUD_ROWS || (IO16(0) & 0x0F07) != 0x0D00 || IO16(0x08) != 0x1c08 || cnt != 0x9a01 ||
+        IO16(0x10) || IO16(0x12) || IO16(0x18) || (scroll_y & 255) ||
+        (frontend != SS_PRESENT_WIDE_SHOP && frontend != SS_PRESENT_WIDE_SHOP_INSPECT))
+        return 0;
+    for (y = 0; y < SHOP_HUD_ROWS; y++) {
+        hardware_span(part, W, 0, y + scroll_y, chars, map, 256, 512, 0);
+        for (x = 0; x < W && !part[x]; x++)
+            ;
+        shop_split[y] = x < W ? x : HUD_SPLIT;
+    }
+    return 1;
+}
+
 static void text_background(struct row_state *R, int n, int Y)
 {
     uint16_t cnt = RIO16(0x08 + n * 2);
@@ -318,22 +365,29 @@ static void text_background(struct row_state *R, int n, int Y)
     int native_row = y >= 0 && y < H;
 
     if (view.menu_background && n == 3 && cnt == 0x1f03 && scroll_x == 0) {
-        enum { painted_left = (SS_WIDE_16_9_W - W) / 2, map_right = 256 - W, palette_base = 8 * 16 + 1 };
+        /* The marble of Objects and Status, continued over the whole view. Rows: the real map at the layer's own
+         * phase (its 256-row cycle covers any view height). Columns: the map's 256 (16 of them hidden on the
+         * console's right) and the approved painted ones beside it, 22 on the left and 6 on the right, so 284 in
+         * all: the 16:9 view. A wider view (the 4:3 canvas is 320) folds that band back at its outer edges, as
+         * the game makes the texture's own cycle: the lower half of the map is its upper half upside down. A fold
+         * has no seam and no pixel is stretched. The painted columns use the live palette (bank 8). */
+        enum { painted_left = (SS_WIDE_16_9_W - W) / 2, band = SS_WIDE_16_9_W, palette_base = 8 * 16 + 1 };
+        uint16_t texture[256];           /* on the stack: rows are drawn on several cores */
         int left = (view.width - W) / 2;
-        int right = view.width - left - W;
-        int native_right = right > map_right ? map_right : right;
         int py = (y + scroll_y) & 255;
-        /* The original map is 256 pixels wide, with 16 columns hidden on the
-         * right. The painted columns use its live palette and vertical phase. */
         const uint8_t *strip = menu_marble_sides[py < 128 ? py : 255 - py];
-        hardware_span(dst + left, W + native_right, 0, py, chars, map, width, height, colour256);
-        for (X = 0; X < left; X++) {
-            unsigned pixel = painted_left - left + X;
-            dst[X] = palette_base + ((strip[pixel / 2] >> (4 * (pixel & 1))) & 15);
-        }
-        for (X = native_right; X < right; X++) {
-            unsigned pixel = painted_left + X - map_right;
-            dst[left + W + X] = palette_base + ((strip[pixel / 2] >> (4 * (pixel & 1))) & 15);
+        hardware_span(texture, 256, 0, py, chars, map, width, height, colour256);
+        for (X = 0; X < view.width; X++) {
+            int u = (X - left + painted_left) % (2 * band), c;    /* 0 .. band-1: the 284 columns, painted_left = native 0 */
+            if (u < 0) u += 2 * band;
+            if (u >= band) u = 2 * band - 1 - u;
+            c = u - painted_left;
+            if (c >= 0 && c < 256) {
+                dst[X] = texture[c];
+            } else {
+                unsigned pixel = c < 0 ? (unsigned)u : (unsigned)(c - 256 + painted_left);
+                dst[X] = palette_base + ((strip[pixel / 2] >> (4 * (pixel & 1))) & 15);
+            }
         }
         return;
     }
@@ -367,6 +421,13 @@ static void text_background(struct row_state *R, int n, int Y)
             memset(dst, 0, (size_t)view.width * sizeof *dst);       /* it has gone down */
             return;
         }
+    }
+    if (shop_hud && (n == 0 || n == 2) && Y < view.shift_y + SHOP_HUD_ROWS) {
+        /* a shop's status display: gone from its native lines, at the top edge of the view instead */
+        memset(dst, 0, (size_t)view.width * sizeof *dst);
+        if (Y < SHOP_HUD_ROWS)
+            raised_shop_line(R, dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        return;
     }
     if (!native_row) {                  /* nothing of the console's picture here, but maybe the raised status display */
         memset(dst, 0, (size_t)view.width * sizeof *dst);
@@ -1470,7 +1531,8 @@ static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels,
             int moved, moved_other;
             uint32_t colour;
             uint16_t pixel;
-            if (!view.world && !view.menu_background && wide && (!native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
+            if (!view.world && !view.menu_background && wide && !raised_px[X] &&
+                (!native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 calm[X] = 0;
                 continue;
@@ -1508,7 +1570,7 @@ static void render_band(void *unused, int band)
 
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
 {
-    int wide;
+    int wide, frontend;
     int per_line = ss_line_registers(0) != NULL;
 
     take_view(requested);
@@ -1520,7 +1582,9 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(wide ? page_shown : page_open());
     /* A menu page drawn over a field map (Status, Objects: the marble layer passes for a map) keeps the status
      * display with the page, as the PC picture does: only the field itself raises it. */
-    hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !ss_frontend_picture();
+    frontend = ss_frontend_picture();
+    hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !frontend;
+    shop_hud = find_shop_hud(frontend);
     find_message_window();
     sprite_rows();
     if (hud_apart) {

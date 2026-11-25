@@ -111,6 +111,18 @@ static void scene_view(struct ss_view *view, int width, int height)
     ss_sprite_bottom = height > SS_SCREEN_H ? SS_SCREEN_H + (height - SS_SCREEN_H) / 2 - 1 : SS_SCREEN_H;
 }
 
+/* Objects and Status (their marble, see core/ppu.c) fill a view up to 16:9 and the 4:3 canvas (any width with
+ * the taller picture); a wider PC window shows the platform's side art beside them instead. On the canvas an
+ * item's details (over the same marble) fill it too, so the marble stays when they open. */
+static int menu_marble(const struct ss_view *view, int width, int height, int frontend)
+{
+    if (view->world || width <= SS_SCREEN_W)
+        return 0;
+    if (height > SS_SCREEN_H)
+        return frontend == SS_PRESENT_WIDE_MARBLE || frontend == SS_PRESENT_WIDE_INSPECT;
+    return width <= SS_WIDE_16_9_W && frontend == SS_PRESENT_WIDE_MARBLE;
+}
+
 static int test_height(void)
 {
     return forced_height ? forced_height : SS_SCREEN_H;
@@ -1016,8 +1028,7 @@ static void dump_video(void)
     file = fopen("ss_frame.raw", "wb");
     if (file) {
         scene_view(&view, width, height);
-        view.menu_background = !view.world && width > SS_SCREEN_W && width <= SS_WIDE_16_9_W &&
-                               ss_frontend_picture() == SS_PRESENT_WIDE_MARBLE;
+        view.menu_background = menu_marble(&view, width, height, ss_frontend_picture());
         ss_ppu_render(shot, width, &view);
         fwrite(shot, 4, (size_t)width * height, file);
         fclose(file);
@@ -1429,6 +1440,7 @@ void VBlankIntrWait(void)
         struct ss_view view;
         int i, height = test_height(), count = test_render * height;
         scene_view(&view, test_render, height);
+        view.menu_background = menu_marble(&view, test_render, height, ss_frontend_picture());
         ss_prof(SS_PROF_RENDER, 1);
         ss_ppu_render(pixels, test_render, &view);
         ss_prof(SS_PROF_RENDER, 0);
@@ -1543,7 +1555,7 @@ void VBlankIntrWait(void)
                 int present_width = width | language;
                 int frontend = width <= SS_SCREEN_W ? 0 :
                                view.world ? SS_PRESENT_WIDE_FIELD : ss_frontend_picture();
-                view.menu_background = width <= SS_WIDE_16_9_W && frontend == SS_PRESENT_WIDE_MARBLE;
+                view.menu_background = menu_marble(&view, width, height, frontend);
                 left_out = 0;
                 ss_prof(SS_PROF_RENDER, 1);
                 ss_ppu_render(pixels, width, &view);

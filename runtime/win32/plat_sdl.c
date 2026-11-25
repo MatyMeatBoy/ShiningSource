@@ -2738,7 +2738,10 @@ static void take_wide_picture(const uint32_t *frame, int width, int height, int 
     const int canvas = canvas_w && !classic;
     int extra = width - SS_SCREEN_W, left = extra / 2;
     int output_width, output_height;
-    wide_native_menu = scene == SS_PRESENT_WIDE_MARBLE && width <= SS_WIDE_16_9_W;
+    /* Objects and Status: the game's picture has the marble over all of it up to 16:9 and on the 4:3 canvas, there
+     * with an item's details too (core/frame.c menu_marble); nothing is put beside it then. */
+    wide_native_menu = height > SS_SCREEN_H ? scene == SS_PRESENT_WIDE_MARBLE || scene == SS_PRESENT_WIDE_INSPECT
+                                            : scene == SS_PRESENT_WIDE_MARBLE && width <= SS_WIDE_16_9_W;
     if (canvas)                         /* a canvas wider than 16:9 has room for the wide side art */
         wide_ultrawide = width > SS_WIDE_16_9_W;
     else
@@ -3097,6 +3100,16 @@ static void canvas_decor_update(int width, int height)
         canvas_rect.y = top;
         canvas_rect.w = SS_SCREEN_W;
         canvas_rect.h = SS_SCREEN_H;
+        if (key.mode == CANVAS_SCENE && height > SS_SCREEN_H && y0 <= 0 && x0 <= 0 &&
+            (key.scene == SS_PRESENT_WIDE_SHOP || key.scene == SS_PRESENT_WIDE_SHOP_INSPECT || key.scene == SS_PRESENT_WIDE_INSPECT)) {
+            /* a shop's status display is at the top edge of a tall frame (core/ppu.c shop_hud; on the canvas an item's
+             * details in a shop come here as SS_PRESENT_WIDE_INSPECT, wide_scene_for_output): the frame is shown from
+             * its top down to the console's last line, transparent but for the display */
+            canvas_rect.x = 0;
+            canvas_rect.y = 0;
+            canvas_rect.w = canvas_w;
+            canvas_rect.h = top + SS_SCREEN_H;
+        }
     }
     if (canvas_decor_id && !memcmp(&key, &canvas_key, sizeof key))
         return;
