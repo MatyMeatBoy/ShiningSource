@@ -53,6 +53,12 @@ enum { SS_PRESENT_HEIGHT_SHIFT = 24 };
 /* The lowest row (native y) the game's sprite builders keep a sprite part at: 160 as on the console, more with a
  * taller canvas (games/<game>/port/patches.json reads it; drawing only). */
 extern int ss_sprite_bottom;
+/* The sprite table entries the game draws for the world (characters, enemies, objects, names over a player), as
+ * opposed to its status display: entries first .. end-1 of the table being built (patches.json marks them; the
+ * marks are cleared when the game starts a new table). A sprite of the world is never taken for the status
+ * display and moved to an edge of a wide or tall picture. Drawing only. */
+void ss_sprite_world_mark(uint32_t first, uint32_t end);
+void ss_sprite_world_reset(void);
 
 /* Draw the current frame into 32-bit ARGB pixels, `view->width` wide (240 when view is NULL). */
 /* Exit code with which the game asks to be started again (its SoftReset). */

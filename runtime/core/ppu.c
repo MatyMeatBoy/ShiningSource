@@ -94,6 +94,27 @@ static int shop_split[SHOP_HUD_ROWS];
 
 int ss_sprite_bottom = SS_SCREEN_H;
 
+/* Which entries of the sprite table being built the game drew for the world (ss_sprite_world_mark). The status
+ * display is told from the world by place and priority (priority 0 in the top HUD_BAND lines, left of 72 or from
+ * HUD_SPLIT on), and a flying enemy, a bat's shadow or the name over a player there has those too: without the
+ * marks such a sprite went to the edge of a wide picture and up to the top of a tall one, and jumped back when
+ * it left that corner. The game copies the table it built into the sprite table at the vertical blank, before
+ * the picture is drawn, and only starts the next one after it. */
+static uint8_t world_now[128];
+
+void ss_sprite_world_mark(uint32_t first, uint32_t end)
+{
+    if (end > 128)
+        end = 128;
+    for (; first < end; first++)
+        world_now[first] = 1;
+}
+
+void ss_sprite_world_reset(void)
+{
+    memset(world_now, 0, sizeof world_now);
+}
+
 /* The status display as a layer of its own (ss_ppu_hud_layer). A window larger than the picture shows every
  * pixel as a square of several of its own, and the status display is small on it. So that the platform can show
  * the display with larger squares than the field, what the port already takes for it (the lines of a background
@@ -563,8 +584,23 @@ struct track {
     uint8_t entry, kept;        /* its sprite table entry when last seen, and which kept frame that is */
 };
 static struct track tracks[TRACKS];
-/* the sprite table, sprite tiles and sprite colours of the last frames, to draw from */
-static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; } kept[KEPT];
+/* the sprite table, sprite tiles and sprite colours of the last frames, to draw from (and which entries were the
+ * world's, world_now) */
+static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; uint8_t world[128]; } kept[KEPT];
+
+/* Whether entry `e` of sprite table `oam` (this frame's or a kept one) was drawn for the world. */
+static int obj_world(const uint16_t *e, const uint16_t *oam)
+{
+    int n, i = (int)((e - oam) / 4);
+    if (i < 0 || i >= 128)
+        return 0;
+    if (oam == OAM)
+        return world_now[i];
+    for (n = 0; n < KEPT; n++)
+        if (oam == kept[n].oam)
+            return kept[n].world[i];
+    return 0;
+}
 static uint32_t frame_drawn;
 static int frame_known, frame_is_new;
 static int camera_x, camera_y;
@@ -955,8 +991,8 @@ static void find_alternating(void)
 /* Where a sprite table entry goes this frame: its size, its box, its first view row (`start`: the entry covers
  * view rows start .. start + box_h - 1) and whether it was raised to the top or lowered with the message window.
  * 0 if the entry shows nothing. sprite(R, ) and the per-frame row ranges (sprite_rows) both use it, so they agree. */
-struct obj_place { int width, height, box_w, box_h, x0, y0, start, raised; };
-static int obj_place(const uint16_t *e, struct obj_place *p)
+struct obj_place { int width, height, box_w, box_h, x0, y0, start, raised, world; };
+static int obj_place(const uint16_t *e, const uint16_t *oam, struct obj_place *p)
 {
     uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
     int affine = a0 & 0x100, shape = a0 >> 14, extra = view.width - W;
@@ -980,12 +1016,13 @@ static int obj_place(const uint16_t *e, struct obj_place *p)
     if (p->x0 >= (extra ? 512 - 128 : 240)) p->x0 -= 512;
     p->start = view.shift_y + p->y0;
     p->raised = 0;
-    if (hud_raise && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
+    p->world = obj_world(e, oam);       /* drawn for the world: never the status display or the message's contents */
+    if (hud_raise && !p->world && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
         && (p->x0 + p->box_w / 2 < 72 || p->x0 + p->box_w / 2 >= HUD_SPLIT)) {
         p->start = p->y0;               /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
         p->raised = 16;
     }
-    if (msg_drop && ((a2 >> 10) & 3) == 0 && p->y0 + p->box_h <= msg_bottom
+    if (msg_drop && !p->world && ((a2 >> 10) & 3) == 0 && p->y0 + p->box_h <= msg_bottom
         && (p->y0 >= msg_top || (p->y0 >= msg_top - 48 && p->x0 + p->box_w <= 72))) {
         p->start = view.shift_y + msg_drop + p->y0;   /* the window's contents and the speaker's portrait go down with it */
         p->raised = 16;
@@ -1001,7 +1038,7 @@ static void sprite_rows(void)
     struct obj_place p;
     int i;
     for (i = 0; i < 128; i++) {
-        if (obj_place(OAM + i * 4, &p)) {
+        if (obj_place(OAM + i * 4, OAM, &p)) {
             obj_start[i] = (int16_t)p.start;
             obj_end[i] = (int16_t)(p.start + p.box_h);
         } else {
@@ -1021,7 +1058,7 @@ static void sprite(struct row_state *R, int Y, const uint16_t *e, const uint16_t
     int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
     struct obj_place p;
 
-    if (!obj_place(e, &p))
+    if (!obj_place(e, oam, &p))
         return;
     width = p.width; height = p.height; box_w = p.box_w; box_h = p.box_h;
     x0 = p.x0; y0 = p.y0; raised = p.raised;
@@ -1037,7 +1074,7 @@ static void sprite(struct row_state *R, int Y, const uint16_t *e, const uint16_t
     tile = a2 & 0x3FF;
     prio = (a2 >> 10) & 3;
     if (page_shown && prio == 0) ui = 8;
-    if ((hud_at_edges || hud_apart) && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
+    if ((hud_at_edges || hud_apart) && !p.world && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
         int centre = x0 + box_w / 2;
         if (centre < 72 || centre >= HUD_SPLIT) ui = 8;
         if (centre < 72) place = 0;
@@ -1430,6 +1467,7 @@ static void keep_frame(void)
     memcpy(kept[n].oam, OAM, sizeof kept[n].oam);
     memcpy(kept[n].tiles, VRAM + 0x10000, sizeof kept[n].tiles);
     memcpy(kept[n].colours, PAL + 0x100, sizeof kept[n].colours);
+    memcpy(kept[n].world, world_now, sizeof kept[n].world);
 }
 
 static void take_view(const struct ss_view *requested)

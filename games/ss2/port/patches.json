@@ -251,6 +251,16 @@
    "why": "4:3 picture: sub_080072A0 hides a sprite part below line 160; on a taller view keep parts down to ss_sprite_bottom. Drawing only.",
    "find": "if ((u32)(objY + 64) > 224)",
    "replace": "if ((u32)(objY + 64) > (u32)(ss_sprite_bottom + 64))"
+  },
+  {
+   "why": "Wide and 4:3 pictures: sub_08008C1C starts a new sprite table each frame; the port's marks of which entries are the world's (ss_sprite_world_mark) start again with it. Drawing only.",
+   "find": "    gW8C1C_28C4 = 0;\n    switch (gW8C1C_128C.mode) {",
+   "replace": "    gW8C1C_28C4 = 0;\n    { extern void ss_sprite_world_reset(void); ss_sprite_world_reset(); }\n    switch (gW8C1C_128C.mode) {"
+  },
+  {
+   "why": "Wide and 4:3 pictures: sub_08009014 draws the queued requests of the world (players, enemies, NPCs, scene objects, field items) into the sprite table. The port marks the entries it adds as the world's, so that the renderer never takes one of them for the status display (priority 0 in the top 56 lines near a side) and moves it to an edge: a flying enemy there jumped 40 pixels up and sideways on a 4:3 picture and popped back when it left that corner. Drawing only.",
+   "find": "void sub_08009014(void) {\n    void *var_r4;\n\n    var_r4 = gUnk_030028C0;\n    if (var_r4 != NULL) {\n        do {\n            sub_08007AA4(var_r4);\n            var_r4 = M2C_FIELD(var_r4, void **, 4);\n        } while (var_r4 != NULL);\n    }\n}",
+   "replace": "void sub_08009014(void) {\n    void *var_r4;\n    u32 ssWorldFirst = root4CtxCount;\n\n    var_r4 = gUnk_030028C0;\n    if (var_r4 != NULL) {\n        do {\n            sub_08007AA4(var_r4);\n            var_r4 = M2C_FIELD(var_r4, void **, 4);\n        } while (var_r4 != NULL);\n    }\n    { extern void ss_sprite_world_mark(u32, u32); ss_sprite_world_mark(ssWorldFirst, root4CtxCount); }\n}"
   }
  ],
  "code_0805FB7C.c": [
@@ -265,9 +275,9 @@
    "replace": "        sub_0805C7B8(sub_08057AE8(0x15));"
   },
   {
-   "why": "Wide picture: sub_0805FC80 does not queue a field item's icon outside x -16..248. Queue it from -128 to 367; the sprite renderer still hides each part. Vertical limits unchanged. Drawing only.",
+   "why": "Wide and 4:3 pictures: sub_0805FC80 does not queue a field item's icon outside x -16..248 or y -16..168. Queue it from x -128 to 367 and, on a taller view, from as high as its 16 lines can still reach the rows above the console's picture (160 - ss_sprite_bottom - 16; -16 as on the console otherwise) down to ss_sprite_bottom + 8: an item above the console's top showed only once it was 16 lines from it. The sprite renderer still hides each part. Drawing only.",
    "find": "if (((u32)(screenX + 16) << 16) > 0x1080000 || screenY < -16 || screenY > 168)",
-   "replace": "if (((u32)(screenX + 128) << 16) > 0x1EF0000 || screenY < -16 || (int)screenY > ss_sprite_bottom + 8)"
+   "replace": "if (((u32)(screenX + 128) << 16) > 0x1EF0000 || (int)screenY < (ss_sprite_bottom > 160 ? 160 - ss_sprite_bottom - 16 : -16) || (int)screenY > ss_sprite_bottom + 8)"
   },
   {
    "why": "Wide picture: sub_0806171C keeps the screen x of the experience number unsigned, so a number left of the console's first column is never drawn. Signed x lets it show in the left margin. Drawing only.",
@@ -402,6 +412,11 @@
    "why": "Restored Multiplayer Audio: accepted remote breakable-object damage uses the original material cue 29/2A/2B. HP slot is object+10, resource pointer is slot+10. Skip zero damage, dead states, absent records and unknown materials.",
    "find": "                        if (state != 0xC) {\n                            gRxGs->slot[src->target].hp -= src->amount;",
    "replace": "                        if (state != 0xC) {\n                            if (src->amount != 0 && src->target < *(u32 *)(gRxGameState + 0x48)) {\n                                const u8 *record = *(const u8 **)((u8 *)&gRxGs->slot[src->target] + 0x10);\n                                if (record != 0 && record[7] <= 2) ss_remote_sfx_event(record[7] + 0x29);\n                            }\n                            gRxGs->slot[src->target].hp -= src->amount;"
+  },
+  {
+   "why": "Wide and 4:3 pictures: the name over a player (ss2_08065BD0) is drawn straight into the sprite table, priority 0. Near the top of the field its first or last letters passed for the status display and were moved to the corner of the picture. Mark its entries as the world's (see code_08006D24.c, sub_08009014). Drawing only.",
+   "find": "                draw66(player + 2, x - sub_0801A638(player + 2) * 4, y - 0x30);",
+   "replace": "                {\n                    extern u32 ssOamUsed66 asm(\"gUnk_030028B4\");\n                    extern void ss_sprite_world_mark(u32, u32);\n                    u32 ssWorldFirst = ssOamUsed66;\n                    draw66(player + 2, x - sub_0801A638(player + 2) * 4, y - 0x30);\n                    ss_sprite_world_mark(ssWorldFirst, ssOamUsed66);\n                }"
   }
  ],
  "code_08067B4C.c": [
