@@ -1206,7 +1206,9 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     page_shown = view.world && wide && (IO16(0) & 7) == 0 && page_open();
     hud_at_edges = view.world && wide && (IO16(0) & 7) == 0 && !page_shown;
     hud_apart = hud_wanted && view.world && (IO16(0) & 7) == 0 && !(wide ? page_shown : page_open());
-    hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0;
+    /* A menu page drawn over a field map (Status, Objects: the marble layer passes for a map) keeps the status
+     * display with the page, as the PC picture does: only the field itself raises it. */
+    hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !ss_frontend_picture();
     for (Y = 0; Y < view.height; Y++) {
         uint32_t *out = pixels + Y * pitch_pixels;
         uint8_t *calm = still + Y * view.width;
