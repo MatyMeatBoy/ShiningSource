@@ -38,6 +38,24 @@
  *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
  *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
  *                   frames F to T. Off, the cost is one test per stage.
+ *                   Its clock is the processor's counter on x86 and ARM64; elsewhere (ARMv7) milliseconds of the
+ *                   platform, which make every single time a whole millisecond but keep means right over many frames.
+ *   SS_PROF_CLOCK=counter  on ARMv7 read the generic timer's virtual counter instead (microseconds and better).
+ *                   Only where the kernel lets programs read it: elsewhere the first reading ends the program
+ *                   (an illegal instruction), so a test tries it once on its own before relying on it.
+ *   SS_FRAMELOG=path  one CSV line per game frame (the same stages as SS_PROF, which it needs not): frame,
+ *                   interval_us (from the previous frame's start), logic_us, sound_us, net_us, blank_us, extras_us,
+ *                   ppu_us (the picture, find_flicker included), finish_us (finish_picture, the link screen),
+ *                   present_us (inside the platform's present, its wait for the next frame included), presented
+ *                   (1 the frame's picture was shown, 0 not), late (the platform said it was behind), view (the
+ *                   picture's width; 0 without a window and without SS_TEST_RENDER). A line reports the stages that ran between two frame
+ *                   starts: the frame's game part and the previous frame's picture. Lines starting with # are
+ *                   notes (the clock). Kept in memory, written every 600 frames and at exit. Unset, it costs a test.
+ *   SS_PICTURE=M[:F]  with a window (capacity tests): 0, frames are neither drawn nor shown, and since the platform
+ *                   is not called it does not pace them either (events are still handled, the sound still goes to
+ *                   its device): the game and its sound as fast as the machine runs them. 2, drawn and finished
+ *                   as for the window, not shown, not paced. 1 is normal. With :F only up to frame F, normal from
+ *                   then on (quickly to a scene, then real time). The game plays the same whatever M is.
  *   SS_TEST_RENDER=W  without a window (SS_FRAMES): draw and finish every frame W columns wide all the same, as a
  *                   window of that width would, and print one hash over all those pictures at the end. Measures
  *                   the picture's cost at full speed and proves that two builds draw the same.
@@ -76,6 +94,8 @@ static unsigned long picture_count;
 static uint32_t frame_pixels[SS_MAX_VIEW_W * SS_SCREEN_H + SS_SCREEN_W * SS_HUD_ROWS];
 static const char *input_script;
 static int windowed, forced_width;
+static int picture_mode = 1;            /* SS_PICTURE: 1 normal, 0 neither drawn nor shown, 2 drawn, not shown */
+static unsigned long picture_until;     /* ... up to this frame (0: always) */
 
 unsigned long ss_frame_number(void)
 {
@@ -103,13 +123,16 @@ uint32_t ss_frame_hash(void)
  * what ran inside it. Times are kept per frame in a histogram of 16 steps to the octave, so a percentile is
  * good to about 3%. The clock is the processor's counter; its rate is taken from the milliseconds of the run. */
 enum { PROF_STEPS = 16 * 44 };
-static int prof_on = -1;
+static int prof_on = -1, prof_report_on;
 static unsigned long prof_from, prof_to = ~0ul;
 static uint64_t prof_frame[SS_PROF_STAGES], prof_sum[SS_PROF_STAGES], prof_most[SS_PROF_STAGES], prof_first_tick, prof_last_tick;
 static unsigned long prof_most_at[SS_PROF_STAGES];
 static uint32_t prof_count[SS_PROF_STAGES], prof_steps[SS_PROF_STAGES][PROF_STEPS], prof_first_ms, prof_last_ms;
 static struct { int stage; uint64_t from, inner; } prof_open[8];
 static int prof_depth;
+#if defined(__arm__)
+static int prof_counter;                /* SS_PROF_CLOCK=counter */
+#endif
 
 static uint64_t prof_clock(void)
 {
@@ -120,8 +143,130 @@ static uint64_t prof_clock(void)
     __asm__ volatile("mrs %0, cntvct_el0" : "=r"(value));
     return value;
 #else
-    return 0;
+#if defined(__arm__)
+    if (prof_counter) {
+        uint32_t low, high;
+        __asm__ volatile("mrrc p15, 1, %0, %1, c14" : "=r"(low), "=r"(high));     /* CNTVCT */
+        return (uint64_t)high << 32 | low;
+    }
 #endif
+    return (uint64_t)ss_plat_ticks_ms() * 1000u;    /* no counter: milliseconds, as microseconds */
+#endif
+}
+
+static const char *prof_clock_name(void)
+{
+#if defined(__x86_64__) || defined(__i386__)
+    return "tsc";
+#elif defined(__aarch64__)
+    return "cntvct";
+#else
+#if defined(__arm__)
+    if (prof_counter)
+        return "cntvct32";
+#endif
+    return "ms";
+#endif
+}
+
+/* ---- frame log (SS_FRAMELOG, see the top of this file) ----
+ * A frame's times are kept in clock ticks and turned into microseconds when a batch is written, with the clock's
+ * rate measured against the platform's milliseconds from the first frame to then (a batch is 600 frames, ten
+ * seconds: the rate is good to a thousandth from the first batch on). */
+enum { FRAMELOG_BATCH = 600 };
+static FILE *framelog_file;
+static struct framelog_line {
+    uint32_t frame;
+    uint16_t view;
+    uint8_t presented, late;
+    uint64_t interval, stage[SS_PROF_STAGES];
+} framelog_lines[FRAMELOG_BATCH];
+static int framelog_count;
+static uint64_t framelog_last_tick, framelog_first_tick;
+static uint32_t framelog_first_ms;
+static int framelog_presented, framelog_late, framelog_view;  /* what the picture part of the frame did */
+
+static void framelog_write(void)
+{
+    static char text[FRAMELOG_BATCH * 120 + 256];
+    uint64_t now = prof_clock();
+    uint32_t ms = ss_plat_ticks_ms() - framelog_first_ms;
+    double per_us = 1.0;
+    int i, used = 0;
+    if (!framelog_file)
+        return;
+    if (ms >= 200 && now > framelog_first_tick)
+        per_us = (double)(now - framelog_first_tick) / ((double)ms * 1000.0);
+    if (per_us <= 0)
+        per_us = 1.0;
+    for (i = 0; i < framelog_count; i++) {
+        const struct framelog_line *line = &framelog_lines[i];
+        unsigned us[SS_PROF_STAGES + 1];
+        int stage;
+        us[SS_PROF_STAGES] = (unsigned)((double)line->interval / per_us);
+        for (stage = 0; stage < SS_PROF_STAGES; stage++)
+            us[stage] = (unsigned)((double)line->stage[stage] / per_us);
+        used += snprintf(text + used, sizeof text - (size_t)used, "%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u,%u%c", (unsigned)line->frame,
+                         us[SS_PROF_STAGES], us[SS_PROF_LOGIC], us[SS_PROF_SOUND], us[SS_PROF_NET], us[SS_PROF_BLANK], us[SS_PROF_EXTRAS],
+                         us[SS_PROF_RENDER] + us[SS_PROF_FLICKER], us[SS_PROF_FINISH], us[SS_PROF_PRESENT], line->presented, line->late,
+                         line->view, 10);
+        if (used > (int)sizeof text - 200)
+            break;                      /* (cannot happen: a line is far shorter than 120 characters) */
+    }
+    if (used > 0)
+        fwrite(text, 1, (size_t)used, framelog_file);
+    framelog_count = 0;
+}
+
+static void framelog_end(void)
+{
+    char note[120];
+    uint32_t ms = ss_plat_ticks_ms() - framelog_first_ms;
+    framelog_write();
+    if (framelog_file) {
+        int length = snprintf(note, sizeof note, "# end frame %lu, %u ms since the first frame%c", frame_count, (unsigned)ms, 10);
+        fwrite(note, 1, (size_t)length, framelog_file);
+        fclose(framelog_file);
+        framelog_file = NULL;
+    }
+}
+
+static void framelog_open(const char *path)
+{
+    char head[200];
+    int length;
+    framelog_file = fopen(path, "wb");
+    if (!framelog_file)
+        return;
+    length = snprintf(head, sizeof head, "# SS_FRAMELOG clock %s%cframe,interval_us,logic_us,sound_us,net_us,blank_us,extras_us,ppu_us,"
+                      "finish_us,present_us,presented,late,view%c", prof_clock_name(), 10, 10);
+    fwrite(head, 1, (size_t)length, framelog_file);
+    atexit(framelog_end);
+}
+
+/* The frame starts: the times of the one before go to the log. */
+static void framelog_frame(unsigned long frame, uint64_t now)
+{
+    struct framelog_line *line;
+    if (!framelog_file)
+        return;
+    if (!framelog_first_tick) {
+        framelog_first_tick = now ? now : 1;
+        framelog_first_ms = ss_plat_ticks_ms();
+        framelog_last_tick = now;
+        return;                         /* nothing before the first frame to report */
+    }
+    line = &framelog_lines[framelog_count++];
+    line->frame = (uint32_t)frame;
+    line->interval = now - framelog_last_tick;
+    memcpy(line->stage, prof_frame, sizeof line->stage);
+    line->presented = (uint8_t)framelog_presented;
+    line->late = (uint8_t)framelog_late;
+    line->view = (uint16_t)framelog_view;
+    framelog_last_tick = now;
+    framelog_presented = framelog_late = 0;
+    if (framelog_count == FRAMELOG_BATCH)
+        framelog_write();
 }
 
 static int prof_step(uint64_t value)
@@ -180,17 +325,25 @@ void ss_prof(int stage, int begin)
         if (!prof_on)
             return;
         text = getenv("SS_PROF");
-        prof_on = text && *text && *text != '0';
+        prof_report_on = text && *text && *text != '0';
+#if defined(__arm__)
+        prof_counter = getenv("SS_PROF_CLOCK") && !memcmp(getenv("SS_PROF_CLOCK"), "counter", 8);
+#endif
+        if (getenv("SS_FRAMELOG") && *getenv("SS_FRAMELOG"))
+            framelog_open(getenv("SS_FRAMELOG"));
+        prof_on = prof_report_on || framelog_file;
         if (!prof_on)
             return;
-        colon = text;
-        while (*colon && *colon != ':')
-            colon++;
-        if (*colon == ':') {
-            prof_from = strtoul(text, NULL, 10);
-            prof_to = strtoul(colon + 1, NULL, 10);
+        if (prof_report_on) {
+            colon = text;
+            while (*colon && *colon != ':')
+                colon++;
+            if (*colon == ':') {
+                prof_from = strtoul(text, NULL, 10);
+                prof_to = strtoul(colon + 1, NULL, 10);
+            }
+            atexit(prof_report);
         }
-        atexit(prof_report);
     }
     now = prof_clock();
     if (begin) {
@@ -214,7 +367,9 @@ static void prof_frame_end(unsigned long frame)
     int stage;
     if (prof_on <= 0)
         return;
-    if (frame >= prof_from && frame <= prof_to) {
+    if (framelog_file)
+        framelog_frame(frame, prof_clock());
+    if (prof_report_on && frame >= prof_from && frame <= prof_to) {
         prof_last_tick = prof_clock();
         prof_last_ms = ss_plat_ticks_ms();
         if (!prof_first_tick) {
@@ -1172,6 +1327,11 @@ void VBlankIntrWait(void)
         REG_KEYINPUT = 0x03FF;          /* no button held */
         windowed = !frame_limit;
         couch_picture = getenv("SS_COUCH_SEAT") != NULL;
+        text = getenv("SS_PICTURE");          /* capacity tests, see the top of this file */
+        if (text && (text[0] == '0' || text[0] == '2')) {
+            picture_mode = text[0] - '0';
+            picture_until = text[1] == ':' ? strtoul(text + 2, NULL, 10) : 0;
+        }
         text = getenv("SS_TEST_RENDER");
         test_render = text && frame_limit ? (int)strtoul(text, NULL, 10) : 0;
         if (test_render) {
@@ -1219,6 +1379,7 @@ void VBlankIntrWait(void)
             for (i = 0; i < SS_SCREEN_W * SS_HUD_ROWS; i++)
                 picture_hash = (picture_hash ^ ss_ppu_hud()[i]) * 16777619u;
         picture_count++;
+        framelog_view = test_render;
     }
     if (dump_at && frame_count == dump_at)
         dump_video();
@@ -1282,7 +1443,26 @@ void VBlankIntrWait(void)
             static struct ss_skip_view skip = { 0, NULL, 1, 0 };
             static int late, left_out;
             const int language = (int)ss_game_language_current() << SS_PRESENT_LANG_SHIFT;
-            if (skip.present && late && left_out < 3) {
+            framelog_view = width;
+            if (picture_mode != 1 && (!picture_until || frame_count < picture_until)) {
+                /* SS_PICTURE=0 or 2 (capacity tests): the platform is not asked to show or wait */
+                if (picture_mode == 2) {
+                    ss_prof(SS_PROF_RENDER, 1);
+                    ss_ppu_render(pixels, width, &view);
+                    ss_prof(SS_PROF_RENDER, 0);
+                    ss_prof(SS_PROF_FINISH, 1);
+                    finish_picture(pixels, width);
+                    ss_link_screen_draw(pixels, width);
+                    ss_prof(SS_PROF_FINISH, 0);
+                } else {
+                    ss_ppu_unseen(&view);
+                }
+                ss_prof(SS_PROF_PRESENT, 1);
+                ss_plat_pump();
+                ss_prof(SS_PROF_PRESENT, 0);
+                held = 0;
+                late = 0;
+            } else if (skip.present && late && left_out < 3) {
                 /* The machine is more than a frame behind: this frame goes by without its picture, so that the
                  * game keeps its speed. At most three in a row: a quarter of the pictures is always shown. */
                 left_out++;
@@ -1292,6 +1472,7 @@ void VBlankIntrWait(void)
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;
+                framelog_late = late != 0;
             } else if (skip.present) {
                 int present_width = width | language;
                 int frontend = width <= SS_SCREEN_W ? 0 :
@@ -1317,6 +1498,8 @@ void VBlankIntrWait(void)
                 ss_prof(SS_PROF_PRESENT, 0);
                 late = held & SS_PRESENT_LATE;
                 held &= (uint16_t)~SS_PRESENT_LATE;
+                framelog_presented = 1;
+                framelog_late = late != 0;
             } else if (ss_net_active()) {
                 /* A scene being skipped online. Alone the game runs as fast as the machine allows; with other
                  * players it keeps its normal speed: the game counts its waits for them in frames, and run fast

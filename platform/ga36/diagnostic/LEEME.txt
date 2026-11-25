@@ -1,0 +1,28 @@
+SHININGSOURCE GA36 - DIAGNOSTICO (una sola vez, automatico)
+
+Que hacer
+1. Conecta la consola al cargador y dejala sobre la mesa.
+2. En Ports abre "ShiningSource GA36 - Diagnostico". Solo una vez.
+3. Espera unos 15 minutos (como maximo unos 17). La pantalla mostrara el juego
+   arrancando varias veces, a veces sin imagen o en negro: es normal.
+4. No apagues ni pulses el boton de encendido. Al terminar vuelve sola al menu.
+5. Pulsar botones es opcional y util: todo lo que pulses queda registrado para
+   preparar el mapa de controles. No hace falta pulsar nada.
+6. Despues saca la tarjeta y entrega la carpeta completa
+   shiningsourcega36/diagnostico-NNN (el numero mas alto) sin modificarla.
+
+Que se registra
+- El sistema: procesador y frecuencias, memoria, pantalla (/dev/fb0), sonido,
+  dispositivos de entrada, temperatura, velocidad de escritura de la tarjeta.
+- Unos 25 casos del juego con una partida grabada de prueba: arranque, juego a
+  velocidad normal en vista ancha (320) y clasica (240), capacidad maxima sin
+  limite de velocidad, sonido, calculo puro, determinismo (hashes), guardado,
+  un nucleo frente a cuatro, regulador de frecuencia, y una prueba larga en el
+  campo de batalla. Cada caso tiene un limite de tiempo: si uno falla o se
+  cuelga, se detiene y el diagnostico sigue con el siguiente.
+- status.txt dice que casos terminaron; summary.txt resume FPS por caso.
+
+Tu partida
+- Tu partida guardada no se toca. Cada caso usa una carpeta temporal propia; la
+  prueba de guardado trabaja sobre una copia que se borra al terminar.
+- No se conecta a internet: solo se anota si hay red.
