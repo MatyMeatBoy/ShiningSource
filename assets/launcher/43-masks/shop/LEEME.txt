@@ -17,3 +17,19 @@ Versiones (2026-11-25):
   Copia: base-A-fundido.png.
 - sin-fundido.png: el borrador sintetizado anterior (flat_synth), descartado por verse "a IA".
 - sintetico-con-fundido.png: ese borrador con fundido a negro arriba y abajo.
+
+Para la opcion C (pintar bien con PixelBuddy), entradas nuevas sacadas de la memoria de video del juego:
+- fondo-limpio-240x136.png (y -x3): el fondo de la tienda SOLO, sin HUD, menus ni vendedoras (capa BG3). Mide 240x136:
+  el juego no tiene mas arte fuera de eso (se reviso el mapa completo de 256x256: lo demas esta vacio). El hueco del
+  centro es donde el juego dibuja a las vendedoras: es del original, no se pinta.
+- base-limpia.png (320x240, y -x3): ese fondo en su lugar del lienzo Flat (40,40) + las 22 columnas aprobadas por lado.
+  Magenta = pintar. Negro dentro del cuadro de la consola = partes vacias del original, NO se pintan.
+- mascara-limpia.png: blanco = pintar (solo fuera del cuadro de 240x160 de la consola), negro = conservar.
+
+La escena (para el pedido): interior de una tienda de pueblo, pintura suave de tonos crema, gris y madera, vista
+frontal con punto de fuga al centro un poco arriba del medio. Izquierda: farol colgado de una viga diagonal, pared
+de yeso clara, mesa/estanteria baja de madera con jarrones blancos, sacos en el suelo. Derecha: estanteria alta de
+madera con jarros, puerta/pared oscura, cajas, barril. Abajo: piso de piedra gris que se abre hacia el espectador.
+Arriba: pedir continuar la pared y las vigas del techo (no cielo ni pueblo); abajo: continuar el piso de piedra hacia
+el espectador con la misma perspectiva (las lineas del piso salen del punto de fuga); los lados: seguir las columnas
+aprobadas. Misma paleta, mismo grano y tamano de pixel nativo, sin inventar personajes, texto ni interfaz.
