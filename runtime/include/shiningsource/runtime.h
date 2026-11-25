@@ -21,9 +21,10 @@ int ss_memory_init(const char *rom_path, const char **error);
 #define SS_SCREEN_H 160
 
 #define SS_MAX_VIEW_W 480
+#define SS_MAX_VIEW_H 240
 #define SS_WIDE_16_9_W (SS_SCREEN_H * 16 / 9)
 
-/* How a picture wider than the console's 240 pixels is composed (see core/ppu.c). */
+/* How a picture wider (or taller) than the console's 240 x 160 pixels is composed (see core/ppu.c). */
 struct ss_bg_source {
     const uint16_t *map;        /* full tile map of this background (screen entries), or NULL */
     int width, height;          /* in tiles */
@@ -31,14 +32,27 @@ struct ss_bg_source {
 };
 struct ss_view {
     int width;                  /* 240..SS_MAX_VIEW_W */
+    int height;                 /* 160..SS_MAX_VIEW_H; 0 means 160 */
     int world;                  /* the scene has source maps: sprites move with the view */
     int shift;                  /* view column where native x = 0 lands */
+    int shift_y;                /* view row where native y = 0 lands: (height - 160) / 2 */
     int hud_rows;               /* top lines whose halves go to the edges of the visible picture */
     int hud_left, hud_right;    /* those edges, as view columns */
+    int map_top, map_bottom;    /* view rows the field's tallest map covers (0 and 0: all of them) */
     int transparent_outside;   /* the host supplies the backdrop outside the map */
     int menu_background;       /* continue the shared Items and Status texture outside the native view */
     struct ss_bg_source bg[4];
 };
+/* The 4:3 canvas: ss_plat_view_width() may pack a height above the width (width = r & 0xFFFF, height = r >> 16,
+ * 0 meaning 160). ss_plat_present is then given that height in bits 24..31 of its width argument (the flags below
+ * take bits 16..23): `width | flags | (uint32_t)height << 24`, only when the height is not 160. The pixels are
+ * width x height, the status display's layer (SS_PRESENT_HUD) follows them. */
+#define SS_VIEW_SIZE_WIDTH(r)  ((int)((uint32_t)(r) & 0xFFFFu))
+#define SS_VIEW_SIZE_HEIGHT(r) (((uint32_t)(r) >> 16) ? (int)((uint32_t)(r) >> 16) : SS_SCREEN_H)
+enum { SS_PRESENT_HEIGHT_SHIFT = 24 };
+/* The lowest row (native y) the game's sprite builders keep a sprite part at: 160 as on the console, more with a
+ * taller canvas (games/<game>/port/patches.json reads it; drawing only). */
+extern int ss_sprite_bottom;
 
 /* Draw the current frame into 32-bit ARGB pixels, `view->width` wide (240 when view is NULL). */
 /* Exit code with which the game asks to be started again (its SoftReset). */
@@ -49,16 +63,17 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *vie
  * nothing during the frame (then the registers themselves are the whole frame's). */
 enum { SS_LINE_REGISTERS = 0x58 };
 const uint8_t *ss_line_registers(int y);
-/* Shining Soul engine: describe the field scene's maps for a picture `width` wide. 0 if not a field scene. */
-int ss_field_view(struct ss_view *view, int width);
+/* Shining Soul engine: describe the field scene's maps for a picture `width` x `height`. 0 if not a field scene. */
+int ss_field_view(struct ss_view *view, int width, int height);
 
 /* ---- services every platform provides to the core ---- */
 
 /* Window and sound device. */
 int ss_plat_video_init(const char *title);
-/* Width the picture should have to fill the window at a whole-number scale (240..SS_MAX_VIEW_W). */
+/* Width the picture should have to fill the window at a whole-number scale (240..SS_MAX_VIEW_W); a 4:3 canvas
+ * packs its height above it (SS_VIEW_SIZE_WIDTH / SS_VIEW_SIZE_HEIGHT). */
 int ss_plat_view_width(void);
-/* Show one `width` x 160 ARGB frame, wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order).
+/* Show one `width` x 160 ARGB frame (x height, see SS_PRESENT_HEIGHT_SHIFT),wait for the next 1/59.7275 s, return the held buttons (KEYINPUT bit order).
  * A machine that cannot draw every picture in time: when the platform is more than a frame behind the game's clock
  * it sets SS_PRESENT_LATE in what it returns, and the next frame may then be given without a picture (`width` 0):
  * the platform does everything else of a frame (events, buttons, the clock) and shows nothing new. The game keeps

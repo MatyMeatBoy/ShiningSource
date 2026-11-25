@@ -42,15 +42,21 @@ static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int 
     return checked < 6 || wrong * 16 <= checked;
 }
 
-/* Fill `view` for a picture `width` pixels wide. Returns 1 when the scene has source maps (a field scene). */
-int ss_field_view(struct ss_view *view, int width)
+/* Fill `view` for a picture `width` x `height` pixels. Returns 1 when the scene has source maps (a field scene).
+ * Either way the view says where the console's picture sits in it (shift, shift_y). */
+int ss_field_view(struct ss_view *view, int width, int height)
 {
     int scroll_x = (int16_t)RD16(STATE + 0x7C), scroll_y = (int16_t)RD16(STATE + 0x7E);
     int offset_x = (int16_t)RD16(STATE + 0x84), offset_y = (int16_t)RD16(STATE + 0x86);
-    int i, found = 0, widest = 0, extra, origin;
+    int i, found = 0, widest = 0, tallest = 0, extra, origin;
 
     memset(view, 0, sizeof *view);
+    if (height < SS_SCREEN_H) height = SS_SCREEN_H;
+    if (height > SS_MAX_VIEW_H) height = SS_MAX_VIEW_H;
     view->width = width;
+    view->height = height;
+    view->shift_y = (height - SS_SCREEN_H) / 2;
+    view->map_bottom = height;
     if ((IO16(0) & 7) != 0)
         return 0;
     for (i = 0; i < 4; i++) {
@@ -75,6 +81,8 @@ int ss_field_view(struct ss_view *view, int width)
         view->bg[bg].scroll_y = y;
         if (map_w * 8 > widest)
             widest = map_w * 8;
+        if (map_h * 8 > tallest)
+            tallest = map_h * 8;
         found = 1;
     }
     if (!found)
@@ -99,6 +107,20 @@ int ss_field_view(struct ss_view *view, int width)
                 view->hud_right = widest - origin;
             if (view->hud_left > view->shift) view->hud_left = view->shift;                      /* never into the console's own columns */
             if (view->hud_right < view->shift + SS_SCREEN_W) view->hud_right = view->shift + SS_SCREEN_W;
+            break;
+        }
+    }
+    /* The same above and below in a taller view (the 4:3 canvas): the console's 160 lines stay in the middle
+     * (shift_y), and the rows past the tallest map are black: map_top and map_bottom are the rows it covers. */
+    for (i = 0; i < 4 && height > SS_SCREEN_H; i++) {
+        if (view->bg[i].map && view->bg[i].height * 8 == tallest) {
+            origin = view->bg[i].scroll_y - view->shift_y;      /* world y of the view's top row */
+            if (origin < 0)
+                view->map_top = -origin;
+            if (origin + height > tallest)
+                view->map_bottom = tallest - origin;
+            if (view->map_top > view->shift_y) view->map_top = view->shift_y;
+            if (view->map_bottom < view->shift_y + SS_SCREEN_H) view->map_bottom = view->shift_y + SS_SCREEN_H;
             break;
         }
     }
