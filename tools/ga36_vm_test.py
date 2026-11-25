@@ -65,7 +65,8 @@ LOADER = 'libarmhf/ld-linux-armhf.so.3'
 PANEL_BYTES = 640 * 480 * 2
 OUTBOX_PORT = 'ga36.outbox'
 HASH_LINE = re.compile(r'^\s*frame\s+(\d+)\s+hash\s+([0-9A-Fa-f]{8})', re.M)
-DEFAULT_TIMEOUT = {'smoke': 900, 'hash': 1800, 'diag': 3600, 'bench': 3600, 'no-rom-selftest': 300}
+# Generous: with the host busy (other VMs, builds) the guest kernel alone took 2 minutes to reach PCI probing.
+DEFAULT_TIMEOUT = {'smoke': 2400, 'hash': 2400, 'diag': 5400, 'bench': 5400, 'no-rom-selftest': 1500}
 
 
 # ---- initramfs (newc cpio; copied from Dynabrothers1+2/tools/r36s_vm/run.py) ----
