@@ -1,9 +1,15 @@
-/* Native ARMv7 Android host. The localized guest object owns the rebased game,
+/* Native ARMv7 host for Android and for armhf Linux (GA36 handheld, glibc).
+ * The localized guest object owns the rebased game,
  * custom libc and coroutines; only ss_guest_entry/ss_guest_rom cross the link.
- * Both sides use Android's ARM softfp ABI. Static bridge stubs switch services
+ * Both sides use one float ABI: Android's softfp, or hard float on armhf Linux
+ * (tools/build_ga36.py builds the guest for arm-linux-gnueabihf). The stubs
+ * below never touch VFP registers, so d0-d7 arguments/results pass through.
+ * Static bridge stubs switch services
  * back to the real SDL thread stack before entering Android libraries or JNI.
  * No fixed mappings, executable allocations or low-address trampolines are used.
- * SS_ANDROID32_HEADLESS omits SDL and accepts ROM argv[1] for Bionic ARM tests. */
+ * SS_ANDROID32_HEADLESS omits SDL and accepts ROM argv[1] for Bionic ARM tests.
+ * On Linux the ROM is argv[1] or SHININGSOURCE_ROM; shiningsource.env and
+ * shiningsource.test.env in the current folder add settings. */
 #define _GNU_SOURCE
 #include "../guest/bridge.h"
 #include "shiningsource/runtime.h"
@@ -27,6 +33,12 @@
 #define SS_HOST_VERSION "development"
 #endif
 _Static_assert(sizeof(void *) == 4, "Android native32 host requires 32-bit pointers");
+#if !defined(__ANDROID__) && !defined(__ARM_PCS_VFP)
+#error "armhf Linux host: the guest from tools/build_ga36.py passes doubles in VFP registers (-mfloat-abi=hard)"
+#endif
+#if defined(__ANDROID__) && defined(__ARM_PCS_VFP)
+#error "Android host: the guest from tools/build_android32.py uses softfp"
+#endif
 void ss_guest_entry(const uint32_t *bridge, uint32_t stack_low, uint32_t stack_high);
 extern const char *ss_guest_rom;
 #define PTR(value) ((void *)(uintptr_t)(value))
@@ -149,7 +161,8 @@ int ss_net_active(void) { return guest_option ? guest_option(SS_OPTION_ONLINE, 0
 
 /* PC-relative literals keep all stubs position-independent without executable
  * allocations or Android text relocations. All bridge arguments fit r0-r3;
- * softfp double arguments/results also travel in these registers. */
+ * softfp double arguments/results also travel in these registers, hard-float
+ * ones in d0/d1, which these stubs leave untouched. */
 uint32_t ss32_host_sp __attribute__((visibility("hidden")));
 void ss32_enter_guest(const uint32_t *table, uint32_t low, uint32_t high) __attribute__((noreturn));
 __asm__(
@@ -269,7 +282,12 @@ int main(int argc, char **argv)
 {
     uint32_t stack_base;
     const char *rom;
-#ifndef SS_ANDROID32_HEADLESS
+#if !defined(SS_ANDROID32_HEADLESS) && !defined(__ANDROID__)
+    /* armhf Linux: the launcher changes into the game folder first. */
+    read_settings("shiningsource.env");
+    read_settings("shiningsource.test.env");
+    rom = argc > 1 ? argv[1] : SDL_getenv("SHININGSOURCE_ROM");
+#elif !defined(SS_ANDROID32_HEADLESS)
     static char rom_path[4096];
     const char *folder = SDL_GetAndroidExternalStoragePath();
     (void)argc; (void)argv;
@@ -286,8 +304,16 @@ int main(int argc, char **argv)
 #else
     rom = argc > 1 ? argv[1] : getenv("SHININGSOURCE_ROM");
 #endif
-    fprintf(stderr, "ShiningSource %s; armeabi-v7a; pointer %u; page %ld; native rebased guest\n",
-            SS_HOST_VERSION, (unsigned)sizeof(void *), sysconf(_SC_PAGESIZE));
+    fprintf(stderr, "ShiningSource %s; %s; pointer %u; page %ld; native rebased guest\n",
+            SS_HOST_VERSION,
+#ifdef __ANDROID__
+            "armeabi-v7a",
+#elif defined(__ARM_PCS_VFP)
+            "armhf linux",
+#else
+            "armel linux",
+#endif
+            (unsigned)sizeof(void *), sysconf(_SC_PAGESIZE));
 #ifdef __ANDROID__
     {
         char maker[PROP_VALUE_MAX] = "", model[PROP_VALUE_MAX] = "", release[PROP_VALUE_MAX] = "", api[PROP_VALUE_MAX] = "";
