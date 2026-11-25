@@ -261,6 +261,56 @@
    "why": "Wide and 4:3 pictures: sub_08009014 draws the queued requests of the world (players, enemies, NPCs, scene objects, field items) into the sprite table. The port marks the entries it adds as the world's, so that the renderer never takes one of them for the status display (priority 0 in the top 56 lines near a side) and moves it to an edge: a flying enemy there jumped 40 pixels up and sideways on a 4:3 picture and popped back when it left that corner. Drawing only.",
    "find": "void sub_08009014(void) {\n    void *var_r4;\n\n    var_r4 = gUnk_030028C0;\n    if (var_r4 != NULL) {\n        do {\n            sub_08007AA4(var_r4);\n            var_r4 = M2C_FIELD(var_r4, void **, 4);\n        } while (var_r4 != NULL);\n    }\n}",
    "replace": "void sub_08009014(void) {\n    void *var_r4;\n    u32 ssWorldFirst = root4CtxCount;\n\n    var_r4 = gUnk_030028C0;\n    if (var_r4 != NULL) {\n        do {\n            sub_08007AA4(var_r4);\n            var_r4 = M2C_FIELD(var_r4, void **, 4);\n        } while (var_r4 != NULL);\n    }\n    { extern void ss_sprite_world_mark(u32, u32); ss_sprite_world_mark(ssWorldFirst, root4CtxCount); }\n}"
+  },
+  {
+   "why": "4:3 picture: declarations for the true y of each sprite part (ss_sprite_true_y, below). Declaration only.",
+   "find": "extern int ss_sprite_bottom;\n",
+   "replace": "extern int ss_sprite_bottom;\nextern void ss_sprite_true_y(u32 entry, s32 y);\nextern u8 ssOamShadow[] asm(\"gUnk_03001330\");\n"
+  },
+  {
+   "why": "4:3 picture: the sprite table keeps a part's y in 8 bits, and on a 240-row view lines 192..199 (below the console's picture) and -64..-57 (above it) are the same 8 bits; the renderer guessed, and an NPC just below the console's picture showed above it, at the top of the canvas, for a few frames (the castle courtyard). The renderer is told the whole y of each part it keeps (runtime/core/ppu.c, obj_y). Drawing only.",
+   "find": "                dest->x = objX;\n                dest->y = objY;\n",
+   "replace": "                dest->x = objX;\n                dest->y = objY;\n                ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "            objY = src->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "            objY = src->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        dest->paletteNum = context->palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        dest->paletteNum = context->palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        }\n        vram += size;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        }\n        vram += size;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        }\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        }\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        dest->objMode = mode;\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        dest->objMode = mode;\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "            objY = obj->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "            objY = obj->y;\n            objY += y;\n            objX += x;\n        } while (0);\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        if ((u32)(objX + 128) > 495 || objY > ss_sprite_bottom || objY < -64)\n        {\n            dest->size = 0;\n            dest->shape = 0;\n            objY = 160;\n        }\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        dest->objMode = objMode;\n        vram += size;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        dest->objMode = objMode;\n        vram += size;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
+  },
+  {
+   "why": "4:3 picture: same for the next sprite renderer (see the first ss_sprite_true_y entry). Drawing only.",
+   "find": "        dest->mosaic = mosaic;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n",
+   "replace": "        dest->mosaic = mosaic;\n        dest->priority = priority;\n        dest->paletteNum = palettes[dest->paletteNum];\n        dest->x = objX;\n        dest->y = objY;\n        ss_sprite_true_y((u32)((u8 *)dest - ssOamShadow) >> 3, objY);\n"
   }
  ],
  "code_0805FB7C.c": [

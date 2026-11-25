@@ -101,6 +101,19 @@ int ss_sprite_bottom = SS_SCREEN_H;
  * it left that corner. The game copies the table it built into the sprite table at the vertical blank, before
  * the picture is drawn, and only starts the next one after it. */
 static uint8_t world_now[128];
+/* The whole y of each entry the game's sprite renderers kept (ss_sprite_true_y; y_known 0: not told). The table
+ * has 8 bits for it, and on a tall view the game keeps parts from -64 down to ss_sprite_bottom (199 on 240 rows):
+ * 192..199 and -64..-57 share their 8 bits. */
+static int16_t y_now[128];
+static uint8_t y_known_now[128];
+
+void ss_sprite_true_y(uint32_t entry, int32_t y)
+{
+    if (entry < 128) {
+        y_now[entry] = (int16_t)y;
+        y_known_now[entry] = 1;
+    }
+}
 
 void ss_sprite_world_mark(uint32_t first, uint32_t end)
 {
@@ -113,6 +126,7 @@ void ss_sprite_world_mark(uint32_t first, uint32_t end)
 void ss_sprite_world_reset(void)
 {
     memset(world_now, 0, sizeof world_now);
+    memset(y_known_now, 0, sizeof y_known_now);
 }
 
 /* The status display as a layer of its own (ss_ppu_hud_layer). A window larger than the picture shows every
@@ -586,7 +600,8 @@ struct track {
 static struct track tracks[TRACKS];
 /* the sprite table, sprite tiles and sprite colours of the last frames, to draw from (and which entries were the
  * world's, world_now) */
-static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; uint8_t world[128]; } kept[KEPT];
+static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; uint8_t world[128];
+                int16_t y[128]; uint8_t y_known[128]; } kept[KEPT];
 
 /* Whether entry `e` of sprite table `oam` (this frame's or a kept one) was drawn for the world. */
 static int obj_world(const uint16_t *e, const uint16_t *oam)
@@ -637,6 +652,22 @@ static int obj_y(const uint16_t *e, int box_h)
         return y - 256;
     if ((e[0] & 0xC3FF) == 0x00A0 && !(e[1] & 0xC000))
         return OBJ_HIDDEN;
+    {
+        /* the renderer that wrote the entry said where it is (patches.json): believe it while the 8 bits agree */
+        const int16_t *known_y = NULL;
+        const uint8_t *known = NULL;
+        int n, i = -1;
+        if (e >= OAM && e < OAM + 512) {
+            i = (int)(e - OAM) / 4; known_y = y_now; known = y_known_now;
+        } else {
+            for (n = 0; n < KEPT; n++)
+                if (e >= kept[n].oam && e < kept[n].oam + 512) {
+                    i = (int)(e - kept[n].oam) / 4; known_y = kept[n].y; known = kept[n].y_known;
+                }
+        }
+        if (i >= 0 && known[i] && (known_y[i] & 255) == y)
+            return known_y[i];
+    }
     top = -view.shift_y;
     bottom = H + view.shift_y;
     below = (y + box_h < bottom ? y + box_h : bottom) - y;
@@ -1468,6 +1499,8 @@ static void keep_frame(void)
     memcpy(kept[n].tiles, VRAM + 0x10000, sizeof kept[n].tiles);
     memcpy(kept[n].colours, PAL + 0x100, sizeof kept[n].colours);
     memcpy(kept[n].world, world_now, sizeof kept[n].world);
+    memcpy(kept[n].y, y_now, sizeof kept[n].y);
+    memcpy(kept[n].y_known, y_known_now, sizeof kept[n].y_known);
 }
 
 static void take_view(const struct ss_view *requested)
