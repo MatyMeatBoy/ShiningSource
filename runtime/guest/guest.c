@@ -116,6 +116,20 @@ int ss_plat_video_init(const char *title)
     return SS_HOST(SS_B_VIDEO_INIT, int (*)(uint32_t))((uint32_t)(uintptr_t)title);
 }
 
+/* Run work(context, index) for every index below count, on as many cores as the host has; returns when all are
+ * done. The pieces must not touch each other's data, nor call the host (its services share one stack). A host
+ * without the service runs them here, one after the other: the result is the same. */
+void ss_plat_parallel(void (*work)(void *context, int index), void *context, int count)
+{
+    int i;
+    if (ss_bridge[SS_B_PARALLEL] && count > 1) {
+        SS_HOST(SS_B_PARALLEL, void (*)(uint32_t, uint32_t, int))((uint32_t)(uintptr_t)work, (uint32_t)(uintptr_t)context, count);
+        return;
+    }
+    for (i = 0; i < count; i++)
+        work(context, i);
+}
+
 int ss_plat_view_width(void)
 {
     return SS_HOST(SS_B_VIEW_WIDTH, int (*)(void))();

@@ -865,6 +865,13 @@ static void draw_border(void)
     SDL_RenderFillRect(renderer, &box);
 }
 
+/* No worker threads on this platform: the pieces one after the other (runtime.h). */
+void ss_plat_parallel(void (*work)(void *context, int index), void *context, int count)
+{
+    for (int i = 0; i < count; i++)
+        work(context, i);
+}
+
 int ss_plat_view_width(void)
 {
     int w = 0, h = 0, scale, width;

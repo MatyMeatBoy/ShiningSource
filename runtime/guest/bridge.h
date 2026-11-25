@@ -37,6 +37,8 @@ enum {
     SS_B_OVERLAY,           /* void (int darkness, u32 text) */
     SS_B_ACHIEVEMENTS,      /* void (int run_flags)                              once per frame; SS_RUN_* of runtime.h */
     SS_B_OPTION_HOOK,       /* void (u32 function)                               the image's int (int which, int value), SS_OPTION_* */
+    SS_B_PARALLEL,          /* void (u32 function, u32 context, int count)      run the image's void (u32 context, int index)
+                                                                                    for every index on the host's cores; 0: none */
     SS_B_COUNT
 };
 #define SS_BRIDGE_VERSION 7u

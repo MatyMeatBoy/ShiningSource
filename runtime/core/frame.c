@@ -1106,44 +1106,44 @@ const uint8_t *ss_ppu_still(void);       /* core/ppu.c: per pixel of the last pi
 
 static int couch_picture;
 
-static void finish_picture(uint32_t *pixels, int width, int height)
-{
-    /* The last four pictures, as they were drawn. They are kept in a ring: the newest takes the place of the
-     * oldest and `newest` moves on, so a frame costs one copy of the picture, not four. */
-    static uint32_t past[4][SS_MAX_VIEW_W * SS_MAX_VIEW_H];
-    static uint8_t calm[SS_MAX_VIEW_W * SS_MAX_VIEW_H];    /* for how many frames in a row the pixel has shown something that stayed in place */
-    const uint8_t *restrict still = ss_ppu_still();
-    static int past_width, shade, newest;
-    int count = width * height, i, wanted;
-    unsigned long light = 0, sampled = 0;
-    uint32_t *restrict now_at = pixels, *restrict oldest;
-    const uint32_t *restrict a_at, *restrict b_at, *restrict c_at;
+/* finish_picture's work in independent ranges of pixels, for ss_plat_parallel. A range starts on a multiple of 4
+ * pixels, so the brightness samples (every fourth pixel of the picture) are the same as in one pass. */
+enum { FINISH_PIECES = 16 };
+static struct {
+    uint32_t *pixels, *oldest;
+    const uint32_t *a, *b, *c;
+    const uint8_t *still;
+    uint8_t *calm;
+    int count, piece;
+    uint32_t shade;
+    unsigned long light[FINISH_PIECES], sampled[FINISH_PIECES];
+} finish_job;
 
-    if (smooth < 0)
-        smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
-    if (past_width != width + (height << 16)) {     /* the window changed: nothing to compare with */
-        for (i = 0; i < 4; i++)
-            memcpy(past[i], pixels, (size_t)count * 4);
-        memset(calm, 0, sizeof calm);
-        past_width = width + (height << 16);
-    }
-    a_at = past[newest];
-    b_at = past[(newest + 1) & 3];
-    c_at = past[(newest + 2) & 3];
-    oldest = past[(newest + 3) & 3];
-    newest = (newest + 3) & 3;
+static void finish_piece(void *unused, int index)
+{
+    uint32_t *restrict now_at = finish_job.pixels, *restrict oldest = finish_job.oldest;
+    const uint32_t *restrict a_at = finish_job.a, *restrict b_at = finish_job.b, *restrict c_at = finish_job.c;
+    const uint8_t *restrict still = finish_job.still;
+    uint8_t *restrict calm = finish_job.calm;
+    int from = index * finish_job.piece, to = from + finish_job.piece, i;
+    unsigned long light = 0, sampled = 0;
+    const int smooth_on = smooth != 0;
+    (void)unused;
+    if (to > finish_job.count) to = finish_job.count;
     /* the brightness of the game's part of the picture, from every fourth pixel as drawn */
-    for (i = 0; i < count; i += 4) {
-        uint32_t now = pixels[i];
+    for (i = from; i < to; i += 4) {
+        uint32_t now = now_at[i];
         if (now >> 24) {                /* not a side column: there is nothing of the game's there */
             light += ((now >> 16) & 255) + ((now >> 8) & 255) * 2 + (now & 255);
             sampled += 4;
         }
     }
+    finish_job.light[index] = light;
+    finish_job.sampled[index] = sampled;
     /* No branch in this loop, and no pointer shares memory with another: the compiler turns it into a few
      * instructions for several pixels at a time. Every pixel is written, most with its own value. A pixel is only
      * mixed where what it shows has stayed in place for the frames compared: something that moved is not blinking. */
-    for (i = 0; i < count; i++) {
+    for (i = from; i < to; i++) {
         uint32_t now = now_at[i], a = a_at[i], b = b_at[i], c = c_at[i], d = oldest[i], other, mixed;
         unsigned game = (now >> 24) != 0, was = calm[i];
         unsigned quiet = game ? (still[i] ? (was < 8 ? was + 1 : 8) : 0) : was;    /* a side column keeps its count */
@@ -1153,7 +1153,53 @@ static void finish_picture(uint32_t *pixels, int width, int height)
                 : ((quiet >= 5) & (now == a) & (now != b) & (b == c) & (now == d)) ? b : now;
         mixed = 0xFF000000u | (((now >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + (now & other & 0x010101));
         oldest[i] = now;
-        now_at[i] = ((smooth != 0) & (other != now) & ((other >> 24) != 0) & game) ? mixed : now;
+        now_at[i] = (smooth_on & (other != now) & ((other >> 24) != 0) & game) ? mixed : now;
+    }
+}
+
+static void finish_shade_piece(void *unused, int index)
+{
+    uint32_t *restrict pixels = finish_job.pixels;
+    int from = index * finish_job.piece, to = from + finish_job.piece, i;
+    const uint32_t shade = finish_job.shade << 24;
+    (void)unused;
+    if (to > finish_job.count) to = finish_job.count;
+    for (i = from; i < to; i++)
+        pixels[i] = (pixels[i] >> 24) ? pixels[i] : shade;     /* black, as strong as the picture is dark */
+}
+
+static void finish_picture(uint32_t *pixels, int width, int height)
+{
+    /* The last four pictures, as they were drawn. They are kept in a ring: the newest takes the place of the
+     * oldest and `newest` moves on, so a frame costs one copy of the picture, not four. */
+    static uint32_t past[4][SS_MAX_VIEW_W * SS_MAX_VIEW_H];
+    static uint8_t calm[SS_MAX_VIEW_W * SS_MAX_VIEW_H];    /* for how many frames in a row the pixel has shown something that stayed in place */
+    static int past_width, shade, newest;
+    int count = width * height, i, wanted;
+    unsigned long light = 0, sampled = 0;
+
+    if (smooth < 0)
+        smooth = !(getenv("SS_SMOOTH") && getenv("SS_SMOOTH")[0] == '0');
+    if (past_width != width + (height << 16)) {     /* the window changed: nothing to compare with */
+        for (i = 0; i < 4; i++)
+            memcpy(past[i], pixels, (size_t)count * 4);
+        memset(calm, 0, sizeof calm);
+        past_width = width + (height << 16);
+    }
+    finish_job.pixels = pixels;
+    finish_job.a = past[newest];
+    finish_job.b = past[(newest + 1) & 3];
+    finish_job.c = past[(newest + 2) & 3];
+    finish_job.oldest = past[(newest + 3) & 3];
+    newest = (newest + 3) & 3;
+    finish_job.still = ss_ppu_still();
+    finish_job.calm = calm;
+    finish_job.count = count;
+    finish_job.piece = ((count + FINISH_PIECES - 1) / FINISH_PIECES + 3) & ~3;
+    ss_plat_parallel(finish_piece, NULL, FINISH_PIECES);
+    for (i = 0; i < FINISH_PIECES; i++) {
+        light += finish_job.light[i];
+        sampled += finish_job.sampled[i];
     }
     /* How dark the sides are follows how bright the game's picture is as a whole (not its brightest point, which
      * stays until the last moment of a fade): black when the picture is black, clear from a moderately lit
@@ -1165,9 +1211,10 @@ static void finish_picture(uint32_t *pixels, int width, int height)
     }
     if (wanted > shade) shade = wanted - shade > 8 ? shade + 8 : wanted;
     else shade = shade - wanted > 8 ? shade - 8 : wanted;
-    if (shade && !couch_picture)
-        for (i = 0; i < count; i++)
-            pixels[i] = (pixels[i] >> 24) ? pixels[i] : (uint32_t)shade << 24;  /* black, as strong as the picture is dark */
+    if (shade && !couch_picture) {
+        finish_job.shade = (uint32_t)shade;
+        ss_plat_parallel(finish_shade_piece, NULL, FINISH_PIECES);
+    }
 }
 
 static void picture_report(void)

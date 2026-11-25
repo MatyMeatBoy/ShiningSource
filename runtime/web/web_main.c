@@ -155,6 +155,7 @@ void ss_net_join_anchor(int on) { (void)on; }
 int ss_net_join_place(int *where) { (void)where; return 0; }
 int ss_net_join_first_init(void) { return 0; }
 void ss_plat_net_wait(int milliseconds) { emscripten_sleep((unsigned)milliseconds); }
+void ss_plat_parallel(void (*work)(void *, int), void *context, int count) { for (int i = 0; i < count; i++) work(context, i); }
 uint32_t ss_plat_ticks_ms(void) { return (uint32_t)emscripten_get_now(); }
 
 /* ---- saves ----

@@ -83,6 +83,10 @@ enum { SS_PRESENT_LATE = 0x8000 };
 /* core/ppu.c: a frame goes by without being drawn; the renderer still has to see its sprites (see find_alternating). */
 struct ss_view;
 void ss_ppu_unseen(const struct ss_view *view);
+/* Run work(context, index) for index 0 .. count - 1 and return when all are done: on the host's cores where the
+ * platform has them (the GA36 and ARMv7 Android hosts), else one after the other. The pieces must be independent
+ * and must not call a platform service. */
+void ss_plat_parallel(void (*work)(void *context, int index), void *context, int count);
 /* Play one game frame of 48 kHz stereo samples. */
 void ss_plat_audio(const int16_t *samples, int frames);
 /* Skip scene (core/scene.c). ss_skip_update is called once a frame with the buttons the player holds and returns

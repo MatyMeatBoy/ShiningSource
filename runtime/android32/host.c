@@ -23,6 +23,8 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/mman.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <ucontext.h>
 #ifdef __ANDROID__
 #include <sys/system_properties.h>
@@ -191,6 +193,90 @@ static SERVICE void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds
 static SERVICE void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static SERVICE uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
 static SERVICE void b_achievements(int flags) { (void)flags; }
+/* SS_B_PARALLEL: the image's work(context, index) for every index, on this thread and up to three workers (one
+ * per further core; SS_THREADS=N uses N threads in all, 1 = this one alone). An index is taken by whoever is free.
+ * The workers wait on a condition between calls; a call returns when every worker has checked in, so the next
+ * call never meets a worker still busy with this one. The work never calls back into the host (runtime.h). */
+enum { POOL_MAX = 3 };
+static pthread_t pool_threads_storage[POOL_MAX];
+static pthread_mutex_t pool_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pool_wake = PTHREAD_COND_INITIALIZER, pool_done = PTHREAD_COND_INITIALIZER;
+static void (*pool_work)(uint32_t, int);
+static uint32_t pool_context;
+static int pool_count, pool_size = -1, pool_busy;
+static unsigned pool_generation;
+static atomic_int pool_next;
+
+static void pool_run(void)
+{
+    int i;
+    while ((i = atomic_fetch_add(&pool_next, 1)) < pool_count)
+        pool_work(pool_context, i);
+}
+
+static void *pool_main(void *unused)
+{
+    unsigned seen = 0;
+    (void)unused;
+    pthread_mutex_lock(&pool_lock);
+    for (;;) {
+        while (pool_generation == seen)
+            pthread_cond_wait(&pool_wake, &pool_lock);
+        seen = pool_generation;
+        pthread_mutex_unlock(&pool_lock);
+        pool_run();
+        pthread_mutex_lock(&pool_lock);
+        if (--pool_busy == 0)
+            pthread_cond_signal(&pool_done);
+    }
+    return NULL;
+}
+
+static void pool_start(void)
+{
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    const char *wanted = getenv("SS_THREADS");
+    int n = (int)(cores > 1 ? cores - 1 : 0), i;
+    if (wanted && *wanted)
+        n = atoi(wanted) - 1;
+    if (n < 0) n = 0;
+    if (n > POOL_MAX) n = POOL_MAX;
+    pool_size = 0;
+    for (i = 0; i < n; i++) {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024);
+        if (pthread_create(&pool_threads_storage[i], &attr, pool_main, NULL) == 0)
+            pool_size++;
+        pthread_attr_destroy(&attr);
+    }
+    fprintf(stderr, "host32: %d thread(s) for the picture (%ld core(s))%c", pool_size + 1, cores, 10);
+}
+
+static SERVICE void b_parallel(uint32_t function, uint32_t context, int count)
+{
+    if (pool_size < 0)
+        pool_start();
+    pool_work = (void (*)(uint32_t, int))(uintptr_t)function;
+    pool_context = context;
+    pool_count = count;
+    atomic_store(&pool_next, 0);
+    if (pool_size == 0 || count < 2) {
+        pool_run();
+        return;
+    }
+    pthread_mutex_lock(&pool_lock);
+    pool_busy = pool_size;
+    pool_generation++;
+    pthread_cond_broadcast(&pool_wake);
+    pthread_mutex_unlock(&pool_lock);
+    pool_run();
+    pthread_mutex_lock(&pool_lock);
+    while (pool_busy)
+        pthread_cond_wait(&pool_done, &pool_lock);
+    pthread_mutex_unlock(&pool_lock);
+}
+
 static SERVICE void b_option_hook(uint32_t function) { guest_option = (int (*)(int, int))(uintptr_t)function; }
 void ss_frame_set_smooth(int on) { if (guest_option) guest_option(SS_OPTION_SMOOTH, on); }
 void ss_frame_set_view(int width) { if (guest_option) guest_option(SS_OPTION_VIEW, width); }
@@ -246,7 +332,7 @@ STUB(b_getenv) STUB(b_exit) STUB(b_video_init) STUB(b_present) STUB(b_audio) STU
 STUB(b_stack_free) STUB(b_stack_bounds) STUB(b_pow) STUB(b_sin) STUB(b_cos) STUB(b_fmod)
 STUB(b_view_width) STUB(b_pump) STUB(b_net_open) STUB(b_net_send) STUB(b_net_recv)
 STUB(b_net_wait) STUB(b_net_farewell) STUB(b_ticks) STUB(b_status) STUB(b_overlay)
-STUB(b_achievements) STUB(b_option_hook)
+STUB(b_achievements) STUB(b_option_hook) STUB(b_parallel)
 #define ENTRY(index, function) do { extern void ss32_##function(void); \
     bridge[index] = (uint32_t)(uintptr_t)ss32_##function; } while (0)
 static void setup_bridge(void)
@@ -259,7 +345,7 @@ static void setup_bridge(void)
     ENTRY(SS_B_VIEW_WIDTH, b_view_width); ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open);
     ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv); ENTRY(SS_B_NET_WAIT, b_net_wait);
     ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status);
-    ENTRY(SS_B_OVERLAY, b_overlay); ENTRY(SS_B_ACHIEVEMENTS, b_achievements); ENTRY(SS_B_OPTION_HOOK, b_option_hook);
+    ENTRY(SS_B_OVERLAY, b_overlay); ENTRY(SS_B_ACHIEVEMENTS, b_achievements); ENTRY(SS_B_OPTION_HOOK, b_option_hook); ENTRY(SS_B_PARALLEL, b_parallel);
 }
 #ifndef SS_ANDROID32_HEADLESS
 static void read_settings(const char *path)
