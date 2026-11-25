@@ -68,20 +68,33 @@ uint16_t ArcTan2(int16_t x, int16_t y)
     return (uint16_t)(0xC000 - bios_arctan((x << 14) / y));
 }
 
+/* The game hands the copy routines an address in the first 64 KiB now and then: its link queue (gUnk_03006300)
+ * is a null pointer in single player, and the player's data is still queued to it now and then. On the console
+ * that is the BIOS: writes are ignored and the copy goes on. The port does the same on every platform: a
+ * destination there takes nothing and a source there reads as zero (as the fault handlers of the PC builds do
+ * for the game's own accesses). Without it the ARM builds, which have no such handler, stopped. */
+enum { STRAY_END = 0x10000 };
+static int stray(const void *address)
+{
+    return (uintptr_t)address < STRAY_END;
+}
+
 void CpuSet(const void *source, void *destination, uint32_t control)
 {
     uint32_t count = control & 0x1FFFFF, i;
-    int fill = (control >> 24) & 1;
+    int fill = (control >> 24) & 1, from_stray = stray(source);
+    if (stray(destination))
+        return;
     if (control & (1u << 26)) {
         const uint32_t *s = source;
         uint32_t *d = destination;
         for (i = 0; i < count; i++)
-            d[i] = fill ? s[0] : s[i];
+            d[i] = from_stray ? 0 : fill ? s[0] : s[i];
     } else {
         const uint16_t *s = source;
         uint16_t *d = destination;
         for (i = 0; i < count; i++)
-            d[i] = fill ? s[0] : s[i];
+            d[i] = from_stray ? 0 : fill ? s[0] : s[i];
     }
 }
 
@@ -90,9 +103,11 @@ void CpuFastSet(const void *source, void *destination, uint32_t control)
     uint32_t count = ((control & 0x1FFFFF) + 7) & ~7u, i;
     const uint32_t *s = source;
     uint32_t *d = destination;
-    int fill = (control >> 24) & 1;
+    int fill = (control >> 24) & 1, from_stray = stray(source);
+    if (stray(destination))
+        return;
     for (i = 0; i < count; i++)
-        d[i] = fill ? s[0] : s[i];
+        d[i] = from_stray ? 0 : fill ? s[0] : s[i];
 }
 
 void LZ77UnCompWram(const uint8_t *source, uint8_t *destination)
