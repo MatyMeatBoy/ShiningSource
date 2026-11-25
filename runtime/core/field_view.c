@@ -16,20 +16,21 @@
 #define RD32(a) (*(const uint32_t *)(uintptr_t)(a))
 #define IO16(o) RD16(SS_IO + (o))
 
-enum { STATE = 0x03003170, LAYER_SIZE = 0x18 };
+enum { STATE = 0x03003170, LAYER_SIZE = 0x18, NEAR = 16 };
 
 /* Is the hardware layer really showing this map? The engine copies the visible part of the map into the layer's
  * 32 x 32 tile ring, so tile (tx, ty) of the map sits at ring position (tx mod 32, ty mod 32). A menu drawn
  * on the same layer (status, items) leaves the field's records in place but fills the ring with its own tiles;
  * reading the map then would draw the field's tiles where the menu is. Every tile on screen is compared; the
  * engine itself changes a few (doors, switches), so a small part may differ. (The console's own columns are
- * drawn from the ring in any case, see ppu.c: this only decides whether the sides continue the field.) */
-static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int scroll_x, int scroll_y)
+ * drawn from the ring in any case, see ppu.c: this only decides whether the sides continue the field.)
+ * `sure`: yes only when it can be told (a ring of 32, enough of the map on screen). */
+static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int scroll_x, int scroll_y, int sure)
 {
     const uint16_t *ring = (const uint16_t *)(uintptr_t)(SS_VRAM + ((IO16(0x08 + bg * 2) >> 8) & 31) * 0x800u);
     int sx, sy, checked = 0, wrong = 0;
     if (IO16(0x08 + bg * 2) & 0xC000)
-        return 1;                       /* larger hardware maps are not rings of 32: not judged */
+        return !sure;                   /* larger hardware maps are not rings of 32: not judged */
     for (sy = 0; sy < 20; sy++) {
         for (sx = 0; sx < 30; sx++) {
             int tx = (scroll_x >> 3) + sx, ty = (scroll_y >> 3) + sy;
@@ -39,7 +40,7 @@ static int shows_its_map(int bg, const uint16_t *map, int map_w, int map_h, int 
             wrong += ring[(ty & 31) * 32 + (tx & 31)] != map[ty * map_w + tx];
         }
     }
-    return checked < 6 || wrong * 16 <= checked;
+    return checked < 6 ? !sure : wrong * 16 <= checked;
 }
 
 /* Fill `view` for a picture `width` x `height` pixels. Returns 1 when the scene has source maps (a field scene).
@@ -70,9 +71,22 @@ int ss_field_view(struct ss_view *view, int width, int height)
         y = (int16_t)RD16(layer + 0x0A) + (relative ? scroll_y : 0);
         x += offset_x + (int16_t)RD16(layer + 0x04);
         y += offset_y + (int16_t)RD16(layer + 0x06);
-        if (((x ^ IO16(0x10 + bg * 4)) & 0xFF) || ((y ^ IO16(0x12 + bg * 4)) & 0xFF))
-            continue;                   /* not where the game put it this frame */
-        if (!shows_its_map(bg, (const uint16_t *)(uintptr_t)data, map_w, map_h, x, y))
+        if (((x ^ IO16(0x10 + bg * 4)) & 0xFF) || ((y ^ IO16(0x12 + bg * 4)) & 0xFF)) {
+            /* Not where the game put it this frame. At the start of a change of map the game stops writing the
+             * scroll registers while its camera still follows the player into the door for a frame or two: the
+             * layer then still shows its map, a few pixels from the camera, where the registers say. That
+             * position is taken if the layer's ring holds the map there; otherwise the layer is not used (a
+             * scene that drives it some other way). Without it those frames lost the wide view: the status
+             * display jumped back to the console's place and the platform's background showed around the
+             * picture for a moment, just before the picture went black. */
+            int dx = (int8_t)((IO16(0x10 + bg * 4) - x) & 0xFF), dy = (int8_t)((IO16(0x12 + bg * 4) - y) & 0xFF);
+            if (dx < -NEAR || dx > NEAR || dy < -NEAR || dy > NEAR ||
+                !shows_its_map(bg, (const uint16_t *)(uintptr_t)data, map_w, map_h, x + dx, y + dy, 1))
+                continue;
+            x += dx;
+            y += dy;
+        }
+        if (!shows_its_map(bg, (const uint16_t *)(uintptr_t)data, map_w, map_h, x, y, 0))
             return 0;                   /* a menu took the layer over: the whole scene keeps the console's picture */
         view->bg[bg].map = (const uint16_t *)(uintptr_t)data;
         view->bg[bg].width = map_w;
