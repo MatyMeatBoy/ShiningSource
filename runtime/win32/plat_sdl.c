@@ -3123,13 +3123,22 @@ static void canvas_decor_update(int width, int height)
         canvas_rect.h = SS_SCREEN_H;
         if (key.mode == CANVAS_SCENE && height > SS_SCREEN_H && y0 <= 0 && x0 <= 0 &&
             (key.scene == SS_PRESENT_WIDE_SHOP || key.scene == SS_PRESENT_WIDE_SHOP_INSPECT || key.scene == SS_PRESENT_WIDE_INSPECT)) {
-            /* a shop's status display is at the top edge of a tall frame (core/ppu.c shop_hud; on the canvas an item's
-             * details in a shop come here as SS_PRESENT_WIDE_INSPECT, wide_scene_for_output): the frame is shown from
-             * its top down to the console's last line, transparent but for the display */
+            /* a shop's status display is at the top edge of a tall frame and its message window at the bottom one
+             * (core/ppu.c menu_hud, find_shop_message; on the canvas an item's details in a shop come here as
+             * SS_PRESENT_WIDE_INSPECT, wide_scene_for_output): the whole frame is shown, transparent but for the
+             * console's picture, the display and the window */
             canvas_rect.x = 0;
             canvas_rect.y = 0;
             canvas_rect.w = canvas_w;
-            canvas_rect.h = top + SS_SCREEN_H;
+            canvas_rect.h = canvas_h;
+        }
+        if (key.mode == CANVAS_NATIVE && wide_native_menu && height > SS_SCREEN_H && y0 <= 0 && x0 <= 0) {
+            /* Objects and Status on a tall frame: their marble covers it and their status display is at its top
+             * edge (core/ppu.c menu_hud): all of it is shown */
+            canvas_rect.x = 0;
+            canvas_rect.y = 0;
+            canvas_rect.w = canvas_w;
+            canvas_rect.h = canvas_h;
         }
     }
     if (canvas_decor_id && !memcmp(&key, &canvas_key, sizeof key))

@@ -84,13 +84,23 @@ static int hud_raise;           /* ... and its lines to the top edge of a tall v
  * lines msg_top..msg_bottom-1 of the backgrounds without a source map (and the speaker's portrait) are shown
  * msg_drop rows lower. 0: no window this frame. */
 static int msg_top, msg_bottom, msg_drop;
-/* A shop on a tall view (the 4:3 canvas): its status display (the gauges, the money and the bank, native lines
- * 0..SHOP_HUD_ROWS-1 of backgrounds 0 and 2) goes to the top edge of the view, as the field's does, its gauges to
- * the left edge and its money to the right one; under it the shop's own picture then shows. shop_split[y]: the
- * first column of line y that goes right (see find_shop_hud). shop_hud 0: not this frame. */
-enum { SHOP_HUD_ROWS = 16 };
-static int shop_hud;
-static int shop_split[SHOP_HUD_ROWS];
+/* The backgrounds whose message window lines go down (msg_drop): on the field all without a source map; in a shop
+ * all but its picture (menu_layers). */
+static int msg_layers;
+static int msg_shop;            /* the window is a shop's: its keeper's portrait stays with the shop's picture */
+/* A shop (any kind: items, weapons, armour, storage, appraisal, the smith; shelves or an item's details) or
+ * Objects and Status on a tall view (the 4:3 canvas): its status display (the gauges, the money and the bank or
+ * the experience, native lines 0..MENU_HUD_ROWS-1 of the backgrounds in menu_layers) goes to the top edge of the
+ * view, as the field's does, its gauges to the left edge and the rest to the right one; under it the scene's own
+ * picture then shows. menu_split[y]: the first column of line y that goes right (see find_menu_hud). menu_hud 0:
+ * not this frame. */
+enum { MENU_HUD_ROWS = 16 };
+static int menu_hud, menu_layers;
+static int menu_split[MENU_HUD_ROWS];
+/* Rows left free above a status display raised to the top edge of a tall view (hud_raise, menu_hud), so that it
+ * does not touch the edge of the screen: HUD_MARGIN when the view has room above the console's lines, else 0. */
+enum { HUD_MARGIN = 2 };
+static int raise_top;
 
 int ss_sprite_bottom = SS_SCREEN_H;
 
@@ -280,18 +290,69 @@ static int window_row(const uint8_t *map, int scroll_x, int scroll_y, int ty)
     return 0;
 }
 
+/* A shop's message window ("Welcome!", the item's name) on a tall view goes down to the bottom edge, as the
+ * field's does: it is the band at the console's last lines where a background of the shop's menu (menu_layers)
+ * covers whole lines, the window with its dark surround: the console's last SHOP_MESSAGE_ROWS lines at most (an
+ * item's details panel right above it covers whole lines too, and stays). Its lines of those backgrounds (and the sprites inside
+ * it) are shown msg_drop rows lower; the shop's picture, the keeper's portrait and the panels stay. */
+enum { SHOP_MESSAGE_ROWS = 24 };
+static void find_shop_message(void)
+{
+    uint16_t part[W];
+    int n, y, x, top = H, bottom = 0;
+    for (y = H - 1; y >= H / 2; y--) {
+        int whole = 0;
+        for (n = 0; n < 4 && !whole; n++) {
+            uint16_t cnt = IO16(0x08 + n * 2);
+            int size = cnt >> 14;
+            if (!(menu_layers >> n & 1))
+                continue;
+            hardware_span(part, W, IO16(0x10 + n * 4) & 511, y + (IO16(0x12 + n * 4) & 511), VRAM + ((cnt >> 2) & 3) * 0x4000,
+                          VRAM + ((cnt >> 8) & 31) * 0x800, (size & 1) ? 512 : 256, (size & 2) ? 512 : 256, cnt & 0x80);
+            for (x = 0; x < W && part[x]; x++)
+                ;
+            whole = x == W;
+        }
+        if (whole) {
+            if (!bottom)
+                bottom = y + 1;
+            top = y;
+        } else if (bottom) {
+            break;
+        }
+    }
+    if (bottom < H - 8 || bottom - top < 16)
+        return;
+    if (top < H - SHOP_MESSAGE_ROWS)
+        top = H - SHOP_MESSAGE_ROWS;    /* an item's details panel joins the band: only the window goes */
+    msg_top = top;
+    msg_bottom = bottom;
+    msg_drop = view.height - view.shift_y - msg_bottom;
+    msg_layers = menu_layers;
+    msg_shop = 1;
+    if (msg_drop <= 0)
+        msg_top = msg_bottom = msg_drop = msg_layers = msg_shop = 0;
+}
+
 /* What of a field scene's interface sits at the console's bottom edge: the message window, the label of the
  * ring menu and the like. It is the lowest run of rows with interface in the lower half of the picture, if it
  * reaches the last lines (a window in the middle of the screen stays where it is). A window may be drawn on
  * several backgrounds without a source map (its fill on one, its frame and text on another) and the console's
  * window feature, so a row counts when any of them shows something there. Sets msg_top/msg_bottom/msg_drop. */
-static void find_message_window(void)
+static void find_message_window(int frontend)
 {
     int n, ty, last = -1, first, rows = 0;
     uint8_t window[20] = {0};
-    msg_top = msg_bottom = msg_drop = 0;
+    msg_top = msg_bottom = msg_drop = msg_layers = msg_shop = 0;
+    if (menu_hud && (frontend == SS_PRESENT_WIDE_SHOP || frontend == SS_PRESENT_WIDE_SHOP_INSPECT)) {
+        find_shop_message();
+        return;
+    }
     if (!hud_raise)
         return;
+    for (n = 0; n < 4; n++)
+        if (!view.bg[n].map)
+            msg_layers |= 1 << n;
     for (n = 0; n < 4; n++) {
         uint16_t cnt = IO16(0x08 + n * 2);
         const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
@@ -346,15 +407,16 @@ static void raised_hud_line(struct row_state *R, uint16_t *dst, int y, const uin
     }
 }
 
-/* Line y (native) of the shop's status display in background n, raised to row y of a tall view (shop_hud). */
-static void raised_shop_line(struct row_state *R, uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
+/* Line y (native) of a shop's or a menu's status display in background n, raised to row raise_top + y of a tall
+ * view (menu_hud). */
+static void raised_menu_line(struct row_state *R, uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
                              int width, int height, int scroll_x, int scroll_y, int colour256)
 {
     uint16_t part[W];                   /* on the stack: rows are drawn on several cores */
     int x, right = view.width - W;
     hardware_span(part, W, scroll_x, y + scroll_y, chars, map, width, height, colour256);
     for (x = 0; x < W; x++) {
-        int X = x < shop_split[y] ? x : x + right;
+        int X = x < menu_split[y] ? x : x + right;
         if (part[x]) {
             dst[X] = part[x];
             raised_px[X] = 1;
@@ -362,27 +424,88 @@ static void raised_shop_line(struct row_state *R, uint16_t *dst, int y, const ui
     }
 }
 
-/* Is this frame a shop (its shelves, or an item's details) whose status display goes to the top of a tall view?
- * Its layout: backgrounds 0 (the gauges and the numbers), 2 (the money and the bank, then the shop's panels; the
- * details show its lower half) and 3 (the shop) as the shop task sets them. A line goes right from where the money
- * begins on it; a line without money from where the field's display parts (the bank's number alone). */
-static int find_shop_hud(int frontend)
+/* Is this frame a shop (any kind, its shelves or an item's details) or Objects or Status (an item's details too),
+ * whose status display goes to the top of a tall view? Every one of them is the game's item menu task
+ * (core/scene.c ss_frontend_picture) with its status display in the top MENU_HUD_ROWS lines of the backgrounds
+ * over its picture: the gauges, the money and the bank (shops, Objects) or the experience (Status). The kinds set
+ * different backgrounds (the storage shows background 1 too, Status uses other ones), so it is told from the
+ * layers themselves, not from one layout: the picture is the background that covers all of those lines (the
+ * shop's room) or the marble (view.menu_background); the others that show something there carry the display.
+ * Sets menu_layers and menu_split:
+ * a line goes right from where a background that has nothing on the left half begins on it (the money and the
+ * bank, the experience's label); a line without one from the first thing after a gap of 8 empty columns past the
+ * middle (a number alone), else not at all (the gauges reach column 178, past the field's HUD_SPLIT). */
+static int find_menu_hud(int frontend)
 {
-    uint16_t cnt = IO16(0x0C);
-    const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
-    const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
     uint16_t part[W];
-    int y, x, scroll_y = IO16(0x1A) & 511;
-    if (view.world || view.shift_y < SHOP_HUD_ROWS || (IO16(0) & 0x0F07) != 0x0D00 || IO16(0x08) != 0x1c08 || cnt != 0x9a01 ||
-        IO16(0x10) || IO16(0x12) || IO16(0x18) || (scroll_y & 255) ||
-        (frontend != SS_PRESENT_WIDE_SHOP && frontend != SS_PRESENT_WIDE_SHOP_INSPECT))
+    uint8_t any[MENU_HUD_ROWS][W];
+    int n, y, x, layers = 0, right_layers = 0, found = 0;
+    uint16_t display = IO16(0);
+    if (view.shift_y < MENU_HUD_ROWS + HUD_MARGIN || (display & 7) || (display & 0x80) ||
+        (frontend != SS_PRESENT_WIDE_SHOP && frontend != SS_PRESENT_WIDE_SHOP_INSPECT &&
+         frontend != SS_PRESENT_WIDE_MARBLE && frontend != SS_PRESENT_WIDE_INSPECT))
         return 0;
-    for (y = 0; y < SHOP_HUD_ROWS; y++) {
-        hardware_span(part, W, 0, y + scroll_y, chars, map, 256, 512, 0);
-        for (x = 0; x < W && !part[x]; x++)
-            ;
-        shop_split[y] = x < W ? x : HUD_SPLIT;
+    memset(any, 0, sizeof any);
+    for (n = 0; n < 4; n++) {
+        uint16_t cnt = IO16(0x08 + n * 2);
+        const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
+        const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
+        int size = cnt >> 14, width = (size & 1) ? 512 : 256, height = (size & 2) ? 512 : 256;
+        int scroll_x = IO16(0x10 + n * 4) & 511, scroll_y = IO16(0x12 + n * 4) & 511;
+        int full = 1, shows = 0, left = 0;
+        if (!(display & (0x100 << n)) || view.bg[n].map || (view.menu_background && n == 3))
+            continue;
+        for (y = 0; y < MENU_HUD_ROWS; y++) {
+            hardware_span(part, W, scroll_x, y + scroll_y, chars, map, width, height, cnt & 0x80);
+            for (x = 0; x < W; x++) {
+                if (!part[x]) {
+                    full = 0;
+                    continue;
+                }
+                shows = 1;
+                if (x < W / 2)
+                    left = 1;
+            }
+        }
+        if (full || !shows)
+            continue;                   /* the picture under the menu, or nothing of the display */
+        if (scroll_x || (scroll_y & 255))
+            return 0;                   /* not the menu's layout (a layer on its way in or out) */
+        layers |= 1 << n;
+        if (!left)
+            right_layers |= 1 << n;
+        for (y = 0; y < MENU_HUD_ROWS; y++) {
+            hardware_span(part, W, 0, y + scroll_y, chars, map, width, height, cnt & 0x80);
+            for (x = 0; x < W; x++)
+                if (part[x])
+                    any[y][x] |= (uint8_t)(right_layers >> n & 1 ? 2 : 1);
+        }
+        found = 1;
     }
+    if (!found)
+        return 0;
+    for (y = 0; y < MENU_HUD_ROWS; y++) {
+        int split = W, gap = 0;
+        for (x = 0; x < W && !(any[y][x] & 2); x++)
+            ;
+        if (x < W) {
+            split = x;
+        } else {
+            for (x = 0; x < W; x++) {
+                if (!any[y][x]) {
+                    gap++;
+                    continue;
+                }
+                if (x >= W / 2 && gap >= 8) {
+                    split = x;
+                    break;
+                }
+                gap = 0;
+            }
+        }
+        menu_split[y] = split;
+    }
+    menu_layers = layers;
     return 1;
 }
 
@@ -445,11 +568,12 @@ static void text_background(struct row_state *R, int n, int Y)
             source_span(dst + to, view.width - to, to - view.shift + source->scroll_x, wy, source, chars, colour256);
         return;
     }
-    if (msg_drop) {
+    if (msg_drop && (msg_layers >> n & 1)) {
         int lowered = y - msg_drop;     /* the message window's line shown on this row, if it is one of them */
         if (lowered >= msg_top && lowered < msg_bottom) {
             memset(dst, 0, (size_t)view.width * sizeof *dst);
-            hardware_span(dst + view.shift, W, scroll_x, lowered + scroll_y, chars, map, width, height, colour256);
+            hardware_span(dst + (view.world ? view.shift : (view.width - W) / 2), W, scroll_x, lowered + scroll_y,
+                          chars, map, width, height, colour256);
             return;
         }
         if (native_row && y >= msg_top && y < msg_bottom) {
@@ -457,17 +581,17 @@ static void text_background(struct row_state *R, int n, int Y)
             return;
         }
     }
-    if (shop_hud && (n == 0 || n == 2) && Y < view.shift_y + SHOP_HUD_ROWS) {
-        /* a shop's status display: gone from its native lines, at the top edge of the view instead */
+    if (menu_hud && (menu_layers >> n & 1) && Y < view.shift_y + MENU_HUD_ROWS) {
+        /* a shop's or a menu's status display: gone from its native lines, at the top edge of the view instead */
         memset(dst, 0, (size_t)view.width * sizeof *dst);
-        if (Y < SHOP_HUD_ROWS)
-            raised_shop_line(R, dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        if (Y >= raise_top && Y - raise_top < MENU_HUD_ROWS)
+            raised_menu_line(R, dst, Y - raise_top, chars, map, width, height, scroll_x, scroll_y, colour256);
         return;
     }
     if (!native_row) {                  /* nothing of the console's picture here, but maybe the raised status display */
         memset(dst, 0, (size_t)view.width * sizeof *dst);
-        if (hud_raise && Y < HUD_BAND)
-            raised_hud_line(R, dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        if (hud_raise && Y >= raise_top && Y - raise_top < HUD_BAND)
+            raised_hud_line(R, dst, Y - raise_top, chars, map, width, height, scroll_x, scroll_y, colour256);
         return;
     }
     split = 0;
@@ -481,8 +605,8 @@ static void text_background(struct row_state *R, int n, int Y)
         /* A tall view: the status display's lines are at the top edge, so its line here has gone up; the line
          * raised to this row (if it is one of the display's) is drawn instead. */
         memset(dst, 0, (size_t)view.width * sizeof *dst);
-        if (Y < HUD_BAND)
-            raised_hud_line(R, dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+        if (Y >= raise_top && Y - raise_top < HUD_BAND)
+            raised_hud_line(R, dst, Y - raise_top, chars, map, width, height, scroll_x, scroll_y, colour256);
         return;
     }
     if (split && hud_apart) {           /* the whole line belongs to the status display: into its layer */
@@ -505,8 +629,8 @@ static void text_background(struct row_state *R, int n, int Y)
         hardware_span(dst + X, run, x + scroll_x, y + scroll_y, chars, map, width, height, colour256);
         X += run;
     }
-    if (hud_raise && Y < HUD_BAND)      /* what stays in the middle, and the display's raised line over it */
-        raised_hud_line(R, dst, Y, chars, map, width, height, scroll_x, scroll_y, colour256);
+    if (hud_raise && Y >= raise_top && Y - raise_top < HUD_BAND)    /* what stays in the middle, and the display's raised line over it */
+        raised_hud_line(R, dst, Y - raise_top, chars, map, width, height, scroll_x, scroll_y, colour256);
 }
 
 static void affine_background(struct row_state *R, int n, int Y)
@@ -841,8 +965,8 @@ static void mark_lines(const uint16_t *e)
     for (h += y; y < h; y++) {
         if (y + view.shift_y >= 0 && y + view.shift_y < view.height)
             two_pictures[y + view.shift_y] = 1;
-        if (view.shift_y && y >= 0 && y < HUD_BAND)
-            two_pictures[y] = 1;        /* the status display's sprites may be raised to the top (hud_raise) */
+        if (view.shift_y && y >= 0 && y < HUD_BAND && y + raise_top < view.height)
+            two_pictures[y + raise_top] = 1;    /* the status display's sprites may be raised to the top (hud_raise) */
     }
 }
 
@@ -1050,11 +1174,11 @@ static int obj_place(const uint16_t *e, const uint16_t *oam, struct obj_place *p
     p->world = obj_world(e, oam);       /* drawn for the world: never the status display or the message's contents */
     if (hud_raise && !p->world && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
         && (p->x0 + p->box_w / 2 < 72 || p->x0 + p->box_w / 2 >= HUD_SPLIT)) {
-        p->start = p->y0;               /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
+        p->start = raise_top + p->y0;   /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
         p->raised = 16;
     }
     if (msg_drop && !p->world && ((a2 >> 10) & 3) == 0 && p->y0 + p->box_h <= msg_bottom
-        && (p->y0 >= msg_top || (p->y0 >= msg_top - 48 && p->x0 + p->box_w <= 72))) {
+        && (p->y0 >= msg_top || (!msg_shop && p->y0 >= msg_top - 48 && p->x0 + p->box_w <= 72))) {
         p->start = view.shift_y + msg_drop + p->y0;   /* the window's contents and the speaker's portrait go down with it */
         p->raised = 16;
     }
@@ -1098,6 +1222,9 @@ static void sprite(struct row_state *R, int Y, const uint16_t *e, const uint16_t
         return;
     if (page_shown && (Y < view.shift_y || Y >= view.shift_y + H))
         return;                         /* a page is the console's picture: nothing of it above or below it */
+    if (msg_shop && row_lowered && !raised)
+        return;                         /* where a shop's window has gone down only what went with it shows (a sprite the
+                                         * game keeps under the console's last line would show through it) */
     /* where this sprite goes in the view: sprites of a scene with a source map with the world, the icons of
      * the status display to their edge, anything else centred */
     place = view.world ? view.shift : extra / 2;
@@ -1301,7 +1428,7 @@ static uint16_t compose(struct row_state *R, int X, int Y, const struct obj_line
     uint16_t top_colour = PAL[0], second_colour = PAL[0];
     int obj_visible, semi = 0, edge_blended = 0;
     /* window rows are native too: rows above and below take the edge line's; the raised status display its own */
-    int y = (raised_px[X] || (obj->flags[X] & 16)) ? Y : Y - view.shift_y;
+    int y = (raised_px[X] || (obj->flags[X] & 16)) ? Y - raise_top : Y - view.shift_y;
     if (row_lowered)
         y = Y - view.shift_y - msg_drop;    /* the message window's own lines, windows included */
     else if (msg_drop && Y - view.shift_y >= msg_top && Y - view.shift_y < msg_bottom)
@@ -1603,7 +1730,8 @@ static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels,
             uint32_t colour;
             uint16_t pixel;
             if (!view.world && !view.menu_background && wide && !raised_px[X] &&
-                (!native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
+                (row_lowered ? X < (view.width - W) / 2 || X >= (view.width + W) / 2
+                             : !native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 calm[X] = 0;
                 continue;
@@ -1655,8 +1783,9 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
      * display with the page, as the PC picture does: only the field itself raises it. */
     frontend = ss_frontend_picture();
     hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !frontend;
-    shop_hud = find_shop_hud(frontend);
-    find_message_window();
+    raise_top = view.shift_y >= MENU_HUD_ROWS + HUD_MARGIN ? HUD_MARGIN : 0;
+    menu_hud = find_menu_hud(frontend);
+    find_message_window(frontend);
     sprite_rows();
     if (hud_apart) {
         /* the status display's own layer is drawn with state shared by the rows (hud_line): one band */
