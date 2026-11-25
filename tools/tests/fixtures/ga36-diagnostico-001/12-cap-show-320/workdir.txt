@@ -1,0 +1,4 @@
+total 4
+drwxr-xr-x    2 player   player          60 Jun 21 15:46 .
+drwxr-xr-x    3 player   player          60 Jun 21 15:46 ..
+-rw-r--r--    1 player   player         231 Jun 21 15:46 case.env

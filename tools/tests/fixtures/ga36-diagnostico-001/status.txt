@@ -1,0 +1,52 @@
+START ShiningSource GA36 diagnostico v1 uptime 114.36
+GAME /home/player/ports/shiningsourcega36
+HEADLESS yes
+WORK /dev/shm/ssdiag.377
+END census 0 117.39
+BEGIN clock-probe
+END clock-probe 127 1.2
+CLOCK ms
+BEGIN boot
+END boot 127 1.2
+BEGIN play-paced-320
+END play-paced-320 127 1.2
+BEGIN hash-headless
+END hash-headless 127 1.2
+BEGIN cap-headless
+END cap-headless 127 1.2
+BEGIN cap-render-320
+END cap-render-320 127 1.2
+BEGIN play-paced-240
+END play-paced-240 127 1.2
+BEGIN cap-render-240
+END cap-render-240 127 1.2
+BEGIN cap-nopic-alsa
+END cap-nopic-alsa 127 1.2
+BEGIN cap-nopic-dummy
+END cap-nopic-dummy 127 1.2
+BEGIN cap-noshow-320
+END cap-noshow-320 127 1.2
+BEGIN cap-show-320
+END cap-show-320 127 1.2
+BEGIN hash-sdl
+END hash-sdl 127 1.2
+BEGIN stability-320
+END stability-320 127 1.2
+BEGIN audio-disk
+END audio-disk 127 1.2
+BEGIN save-tmpfs
+END save-tmpfs 127 1.2
+BEGIN save-card
+END save-card 127 1.2
+BEGIN cores-pinned-320
+END cores-pinned-320 127 1.2
+SKIP gov-performance-320 not-writable
+BEGIN cap-show-240
+END cap-show-240 127 1.2
+BEGIN cap-render-480
+END cap-render-480 127 1.2
+BEGIN play-paced-320-noskip
+END play-paced-320-noskip 127 1.2
+BEGIN town-320
+END town-320 127 1.2
+END 0

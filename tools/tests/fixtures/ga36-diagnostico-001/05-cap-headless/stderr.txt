@@ -1,0 +1,1 @@
+/home/player/ports/ShiningSource GA36 - Diagnostico.sh: exec: line 58: /libarmhf/ld-linux-armhf.so.3: not found
