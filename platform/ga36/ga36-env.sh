@@ -43,6 +43,9 @@ fi
 # SS_CANVAS=240x160 shows the console's picture alone, 480x320 in the middle;
 # an empty SS_CANVAS gives the earlier wide picture (SS_FB_VIEW, 320x160).
 export SS_CANVAS="${SS_CANVAS-320x240}"
+# GA36 face buttons: the bottom one is the GBA's A and the right one its B (SDL buttons, in KEYINPUT order:
+# A B Select Start Right Left Up Down R L). A binding the player saves in the options still wins.
+export SS_PAD="${SS_PAD-0,1,4,6,14,13,11,12,10,9}"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-offscreen}"
 export SDL_AUDIO_DRIVER="${SDL_AUDIO_DRIVER:-alsa}"
 
