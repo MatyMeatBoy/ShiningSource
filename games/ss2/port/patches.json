@@ -343,6 +343,41 @@
    "why": "Quality of life, experimental: the same for the R bar (quick items) in sub_08060E44, whose selection only this machine keeps.",
    "find": "                if (++mgr->sel >= pl->f78)\n                    mgr->sel = 0;\n                pl->f26 = 0;",
    "replace": "                {\n                    extern int ss_qol_bar_back(int bar);\n                    int qolSteps = ss_qol_bar_back(1) && pl->f78 > 1 ? pl->f78 - 1 : 1;\n                    while (qolSteps-- > 0)\n                        if (++mgr->sel >= pl->f78)\n                            mgr->sel = 0;\n                }\n                pl->f26 = 0;"
+  },
+  {
+   "why": "Wide and 4:3 pictures: SS_HUD(call) marks the sprite table entries a call adds as the status display's (ss_sprite_hud_mark). On a field only marked sprites go to the picture's edges and up to the top of a tall view. Declarations only.",
+   "find": "extern int ss_sprite_bottom;\n",
+   "replace": "extern int ss_sprite_bottom;\nextern u32 ssOamUsedHud asm(\"gUnk_030028B4\");\nextern void ss_sprite_hud_mark(u32 first, u32 end);\n#define SS_HUD(call) do { u32 ssHudFirst = ssOamUsedHud; call; ss_sprite_hud_mark(ssHudFirst, ssOamUsedHud); } while (0)\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: the L bar of the status display (sub_080605D0, its frame and cursor through HudDraw63, also the R bar's) and its item icons are the status display's sprites: mark them (SS_HUD). Popups, damage and experience numbers, names and effects near the top corners are not marked and stay with the world. Drawing only.",
+   "find": "    hudSprite63(x, y, anim, frame, 0, obj->attr, obj->f8, obj->f0);\n",
+   "replace": "    SS_HUD(hudSprite63(x, y, anim, frame, 0, obj->attr, obj->f8, obj->f0));\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: same for the bars' item icons and counts (hudItem63). Drawing only.",
+   "find": "                    hudItem63(hudPos63[k - base].x + offset,\n                              py[k - base].x + 0x10, &mgr->slots[k], 8);\n",
+   "replace": "                    SS_HUD(hudItem63(hudPos63[k - base].x + offset,\n                              py[k - base].x + 0x10, &mgr->slots[k], 8));\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: same for the bars' item icons and counts (hudItem63). Drawing only.",
+   "find": "                hudItem63(hudPos63[k - base].x + offset,\n                          py[k - base].x + 0x10, &mgr->slots[k], 8);\n",
+   "replace": "                SS_HUD(hudItem63(hudPos63[k - base].x + offset,\n                          py[k - base].x + 0x10, &mgr->slots[k], 8));\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: same for the bars' item icons and counts (hudItemE63). Drawing only.",
+   "find": "                        hudItemE63(px[end - -~i].x + (0xF0 - (7 - slide) * 8),\n                                   py[end - -~i].x + 0x10, found, 0);\n",
+   "replace": "                        SS_HUD(hudItemE63(px[end - -~i].x + (0xF0 - (7 - slide) * 8),\n                                   py[end - -~i].x + 0x10, found, 0));\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: same for the bars' item icons and counts (hudItemE63). Drawing only.",
+   "find": "                    hudItemE63(hudPosE63[2 - (end - -~i)].x + (0xF0 - (7 - slide) * 8),\n                               ((struct HudPos63 *)&hudPosE63[0].y)[2 - (end - -~i)].x + 0x10,\n                               &mgr->bag[mgr->list[i] - 1], 0);\n",
+   "replace": "                    SS_HUD(hudItemE63(hudPosE63[2 - (end - -~i)].x + (0xF0 - (7 - slide) * 8),\n                               ((struct HudPos63 *)&hudPosE63[0].y)[2 - (end - -~i)].x + 0x10,\n                               &mgr->bag[mgr->list[i] - 1], 0));\n"
+  },
+  {
+   "why": "Wide and 4:3 pictures: same for the bars' item icons and counts (hudNumberE63). Drawing only.",
+   "find": "                        hudNumberE63(px[end - -~i].x + (0xF0 - (7 - slide) * 8),\n                                     py[end - -~i].x + 0x18, (s16)n, 0);\n",
+   "replace": "                        SS_HUD(hudNumberE63(px[end - -~i].x + (0xF0 - (7 - slide) * 8),\n                                     py[end - -~i].x + 0x18, (s16)n, 0));\n"
   }
  ],
  "code_08017F7C.c": [

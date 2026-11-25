@@ -59,6 +59,9 @@ extern int ss_sprite_bottom;
  * display and moved to an edge of a wide or tall picture. Drawing only. */
 void ss_sprite_world_mark(uint32_t first, uint32_t end);
 void ss_sprite_world_reset(void);
+/* The entries first .. end-1 the status display's own code draws (patches.json, SS_HUD in code_0805FB7C.c): on a
+ * field only these are moved with the status display. Cleared with the world marks. Drawing only. */
+void ss_sprite_hud_mark(uint32_t first, uint32_t end);
 /* The whole y of sprite table entry `entry` (of the table being built) as the game's sprite renderer computed it:
  * the table keeps 8 bits, and on a tall view some values below and above the console's picture share them.
  * Cleared with the world marks. Drawing only. */

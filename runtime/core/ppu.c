@@ -130,7 +130,19 @@ void ss_sprite_world_mark(uint32_t first, uint32_t end)
     if (end > 128)
         end = 128;
     for (; first < end; first++)
-        world_now[first] = 1;
+        world_now[first] |= 1;
+}
+
+/* The entries the status display's own code drew (ss_sprite_hud_mark: the L and R bars, their icons and counts):
+ * bit 2 of world_now. On a field only these go to the edges of a wide picture and up to the top of a tall one;
+ * a popup ("x1" of a pickup), a damage or experience number or an effect drawn straight into the table near a top
+ * corner has the status display's place and priority too, and went there, jumping back when it left the corner. */
+void ss_sprite_hud_mark(uint32_t first, uint32_t end)
+{
+    if (end > 128)
+        end = 128;
+    for (; first < end; first++)
+        world_now[first] |= 2;
 }
 
 void ss_sprite_world_reset(void)
@@ -727,7 +739,8 @@ static struct track tracks[TRACKS];
 static struct { uint16_t oam[512]; uint8_t tiles[0x8000]; uint16_t colours[256]; uint8_t world[128];
                 int16_t y[128]; uint8_t y_known[128]; } kept[KEPT];
 
-/* Whether entry `e` of sprite table `oam` (this frame's or a kept one) was drawn for the world. */
+/* How entry `e` of sprite table `oam` (this frame's or a kept one) was marked: 1 drawn for the world, 2 by the
+ * status display's code. */
 static int obj_world(const uint16_t *e, const uint16_t *oam)
 {
     int n, i = (int)((e - oam) / 4);
@@ -1146,7 +1159,9 @@ static void find_alternating(void)
 /* Where a sprite table entry goes this frame: its size, its box, its first view row (`start`: the entry covers
  * view rows start .. start + box_h - 1) and whether it was raised to the top or lowered with the message window.
  * 0 if the entry shows nothing. sprite(R, ) and the per-frame row ranges (sprite_rows) both use it, so they agree. */
-struct obj_place { int width, height, box_w, box_h, x0, y0, start, raised, world; };
+struct obj_place { int width, height, box_w, box_h, x0, y0, start, raised, world, status; };
+/* this frame only sprites the status display's code marked are taken for it (a field), else every unmarked one */
+static int hud_marked_only;
 static int obj_place(const uint16_t *e, const uint16_t *oam, struct obj_place *p)
 {
     uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
@@ -1172,7 +1187,9 @@ static int obj_place(const uint16_t *e, const uint16_t *oam, struct obj_place *p
     p->start = view.shift_y + p->y0;
     p->raised = 0;
     p->world = obj_world(e, oam);       /* drawn for the world: never the status display or the message's contents */
-    if (hud_raise && !p->world && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
+    p->status = hud_marked_only ? (p->world & 2) != 0 : !(p->world & 1);
+    p->world &= 1;
+    if (hud_raise && p->status && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
         && (p->x0 + p->box_w / 2 < 72 || p->x0 + p->box_w / 2 >= HUD_SPLIT)) {
         p->start = raise_top + p->y0;   /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
         p->raised = 16;
@@ -1232,7 +1249,7 @@ static void sprite(struct row_state *R, int Y, const uint16_t *e, const uint16_t
     tile = a2 & 0x3FF;
     prio = (a2 >> 10) & 3;
     if (page_shown && prio == 0) ui = 8;
-    if ((hud_at_edges || hud_apart) && !p.world && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
+    if ((hud_at_edges || hud_apart) && p.status && prio == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND) {
         int centre = x0 + box_w / 2;
         if (centre < 72 || centre >= HUD_SPLIT) ui = 8;
         if (centre < 72) place = 0;
@@ -1785,6 +1802,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !frontend;
     raise_top = view.shift_y >= MENU_HUD_ROWS + HUD_MARGIN ? HUD_MARGIN : 0;
     menu_hud = find_menu_hud(frontend);
+    hud_marked_only = view.world && !frontend;
     find_message_window(frontend);
     sprite_rows();
     if (hud_apart) {
