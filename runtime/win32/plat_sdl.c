@@ -3022,7 +3022,13 @@ static void canvas_build(const struct canvas_key *key)
     const size_t count = (size_t)canvas_w * (size_t)canvas_h;
     const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
     memcpy(canvas_decor, canvas_base, count * sizeof *canvas_decor);
-    if (key->mode == CANVAS_PLAIN && key->light < 256) {
+    if (key->mode == CANVAS_PLAIN) {
+        /* Flat: a picture without art of its own (the introduction's book and the other sequences, loading
+         * screens) is framed by black, its own edges fading into it (canvas_edge_fade); the Soul field's dots
+         * around it looked like noise on the handheld. */
+        for (size_t i = 0; i < count; i++)
+            canvas_decor[i] = 0xff000000u;
+    } else if (key->mode == CANVAS_PLAIN && key->light < 256) {
         for (size_t i = 0; i < count; i++)
             canvas_decor[i] = wide_mix(0xff000000u, canvas_base[i], (unsigned)key->light);
     } else if (key->mode == CANVAS_FADE) {
@@ -3149,6 +3155,37 @@ static void canvas_decor_update(int width, int height)
         canvas_decor_id = 1;
 }
 
+/* A console-sized picture without art around it (CANVAS_PLAIN on the canvas): a copy whose outer CANVAS_FADE
+ * pixels fade into the black around it, as a film's frame does into a dark room; NULL when the picture is not
+ * one of those (it is then shown as it is). Only the copy changes, never the game's picture. */
+enum { CANVAS_FADE_EDGE = 8 };
+static const uint32_t *canvas_frame;    /* the frame being shown (ss_plat_present), for the renderer's copy */
+static const uint32_t *canvas_edge_fade(const uint32_t *pixels, int stride, int w, int h)
+{
+    static uint32_t copy[SS_SCREEN_W * SS_SCREEN_H];
+    static unsigned ramp[CANVAS_FADE_EDGE];
+    if (canvas_key.mode != CANVAS_PLAIN || w > SS_SCREEN_W || h > SS_SCREEN_H || w < 2 * CANVAS_FADE_EDGE
+        || h < 2 * CANVAS_FADE_EDGE)
+        return NULL;
+    if (!ramp[CANVAS_FADE_EDGE - 1])
+        for (int d = 0; d < CANVAS_FADE_EDGE; d++) {
+            double t = (d + 1.0) / (CANVAS_FADE_EDGE + 1.0);
+            ramp[d] = (unsigned)(t * t * (3.0 - 2.0 * t) * 256.0 + 0.5);   /* smooth step: no visible band */
+        }
+    for (int y = 0; y < h; y++) {
+        const uint32_t *in = pixels + (size_t)y * (size_t)stride;
+        uint32_t *out = copy + (size_t)y * (size_t)w;
+        int dy = y < h - 1 - y ? y : h - 1 - y;
+        unsigned fy = dy < CANVAS_FADE_EDGE ? ramp[dy] : 256;
+        for (int x = 0; x < w; x++) {
+            int dx = x < w - 1 - x ? x : w - 1 - x;
+            unsigned f = fy * (dx < CANVAS_FADE_EDGE ? ramp[dx] : 256) >> 8;
+            out[x] = f >= 256 ? in[x] : wide_mix(0xff000000u, ss_fb_over(in[x], 0xff000000u), f);
+        }
+    }
+    return copy;
+}
+
 /* The canvas through the renderer: the decor, the shown part of the frame, and what goes over them. */
 static void show_canvas(int width, int height)
 {
@@ -3173,6 +3210,15 @@ static void show_canvas(int width, int height)
     }
     source = (SDL_FRect){ (float)(canvas_rect.x - x0), (float)(canvas_rect.y - y0), (float)canvas_rect.w, (float)canvas_rect.h };
     target = (SDL_FRect){ (float)canvas_rect.x, (float)canvas_rect.y, (float)canvas_rect.w, (float)canvas_rect.h };
+    {
+        const uint32_t *faded = !canvas_frame ? NULL
+            : canvas_edge_fade(canvas_frame + (size_t)(canvas_rect.y - y0) * (size_t)width + (size_t)(canvas_rect.x - x0),
+                               width, canvas_rect.w, canvas_rect.h);
+        if (faded) {
+            SDL_Rect part = { (int)source.x, (int)source.y, canvas_rect.w, canvas_rect.h };
+            SDL_UpdateTexture(texture, &part, faded, canvas_rect.w * 4);
+        }
+    }
     SDL_RenderTexture(renderer, texture, &source, &target);
     draw_hud(&inside, canvas_w, canvas_h);
     draw_notice(0, draw_overlay(canvas_w, canvas_h, 0, 0, canvas_w), canvas_w);
@@ -3307,9 +3353,12 @@ static int fb_direct(const uint32_t *pixels, int width, int height)
         canvas_decor_update(width, height);
         if (!canvas_decor)
             return 0;
-        return ss_fb_present_canvas(canvas_decor, canvas_w, canvas_h, canvas_decor_id,
-                                    pixels + (size_t)(canvas_rect.y - y0) * (size_t)width + (size_t)(canvas_rect.x - x0), width,
-                                    canvas_rect.x, canvas_rect.y, canvas_rect.w, canvas_rect.h);
+        {
+            const uint32_t *shown = pixels + (size_t)(canvas_rect.y - y0) * (size_t)width + (size_t)(canvas_rect.x - x0);
+            const uint32_t *faded = canvas_edge_fade(shown, width, canvas_rect.w, canvas_rect.h);
+            return ss_fb_present_canvas(canvas_decor, canvas_w, canvas_h, canvas_decor_id, faded ? faded : shown,
+                                        faded ? canvas_rect.w : width, canvas_rect.x, canvas_rect.y, canvas_rect.w, canvas_rect.h);
+        }
     }
     if (width > SS_SCREEN_W && wide_native_menu && (!option_wide_pro || !sides_field))
         return 0;                       /* only the middle is shown then */
@@ -3365,6 +3414,7 @@ uint16_t ss_plat_present(const uint32_t *pixels, int packed)
         width = SS_MAX_VIEW_W;
     update.w = width;
     update.h = height;
+    canvas_frame = pixels;
     if (!window)
         return 0;
     if (frameskip < 0) {
