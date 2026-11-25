@@ -863,44 +863,80 @@ static void find_alternating(void)
 
 /* One sprite on line y, into `line`. `oam` is the sprite table it belongs to (for its rotation), `tiles` its
  * graphics, `colours` its palette if it is drawn from a past frame (NULL: this frame's, looked up later). */
+/* Where a sprite table entry goes this frame: its size, its box, its first view row (`start`: the entry covers
+ * view rows start .. start + box_h - 1) and whether it was raised to the top or lowered with the message window.
+ * 0 if the entry shows nothing. sprite() and the per-frame row ranges (sprite_rows) both use it, so they agree. */
+struct obj_place { int width, height, box_w, box_h, x0, y0, start, raised; };
+static int obj_place(const uint16_t *e, struct obj_place *p)
+{
+    uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
+    int affine = a0 & 0x100, shape = a0 >> 14, extra = view.width - W;
+
+    if ((!affine && (a0 & 0x200)) || shape == 3)
+        return 0;
+    p->width = obj_sizes[shape][a1 >> 14][0];
+    p->height = obj_sizes[shape][a1 >> 14][1];
+    p->box_w = p->width;
+    p->box_h = p->height;
+    if (affine && (a0 & 0x200)) {
+        p->box_w *= 2;
+        p->box_h *= 2;
+    }
+    p->y0 = obj_y(e, p->box_h);
+    if (p->y0 == OBJ_HIDDEN)
+        return 0;
+    p->x0 = a1 & 511;
+    /* On the console anything from 240 up is off screen or a wrapped negative position. With a wider view a
+     * sprite just right of 240 is visible, so only the top of the range is read as negative. */
+    if (p->x0 >= (extra ? 512 - 128 : 240)) p->x0 -= 512;
+    p->start = view.shift_y + p->y0;
+    p->raised = 0;
+    if (hud_raise && ((a2 >> 10) & 3) == 0 && p->y0 >= 0 && p->y0 + p->box_h <= HUD_BAND
+        && (p->x0 + p->box_w / 2 < 72 || p->x0 + p->box_w / 2 >= HUD_SPLIT)) {
+        p->start = p->y0;               /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
+        p->raised = 16;
+    }
+    if (msg_drop && ((a2 >> 10) & 3) == 0 && p->y0 + p->box_h <= msg_bottom
+        && (p->y0 >= msg_top || (p->y0 >= msg_top - 48 && p->x0 + p->box_w <= 72))) {
+        p->start = view.shift_y + msg_drop + p->y0;   /* the window's contents and the speaker's portrait go down with it */
+        p->raised = 16;
+    }
+    return 1;
+}
+
+/* The view rows each entry of this frame's sprite table covers (empty when it shows nothing): a row only looks
+ * at the entries that reach it. */
+static int16_t obj_start[128], obj_end[128];
+static void sprite_rows(void)
+{
+    struct obj_place p;
+    int i;
+    for (i = 0; i < 128; i++) {
+        if (obj_place(OAM + i * 4, &p)) {
+            obj_start[i] = (int16_t)p.start;
+            obj_end[i] = (int16_t)(p.start + p.box_h);
+        } else {
+            obj_start[i] = obj_end[i] = 0;
+        }
+    }
+}
+
 static void sprite(int Y, const uint16_t *e, const uint16_t *oam, const uint8_t *tiles, const uint16_t *colours, int moved, struct obj_line *line)
 {
     uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
     uint16_t dispcnt = IO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
-    int affine = a0 & 0x100, mode = (a0 >> 10) & 3, shape = a0 >> 14;
+    int affine = a0 & 0x100, mode = (a0 >> 10) & 3;
     int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width, ui = 0;
-    int raised = 0;
+    int raised;
     int32_t pa = 0x100, pb = 0, pc = 0, pd = 0x100;
+    struct obj_place p;
 
-    if ((!affine && (a0 & 0x200)) || shape == 3)
+    if (!obj_place(e, &p))
         return;
-    width = obj_sizes[shape][a1 >> 14][0];
-    height = obj_sizes[shape][a1 >> 14][1];
-    box_w = width;
-    box_h = height;
-    if (affine && (a0 & 0x200)) {
-        box_w *= 2;
-        box_h *= 2;
-    }
-    y0 = obj_y(e, box_h);
-    if (y0 == OBJ_HIDDEN)
-        return;
-    x0 = a1 & 511;
-    /* On the console anything from 240 up is off screen or a wrapped negative position. With a wider view a
-     * sprite just right of 240 is visible, so only the top of the range is read as negative. */
-    if (x0 >= (extra ? 512 - 128 : 240)) x0 -= 512;
-    row = Y - view.shift_y - y0;
-    if (hud_raise && ((a2 >> 10) & 3) == 0 && y0 >= 0 && y0 + box_h <= HUD_BAND
-        && (x0 + box_w / 2 < 72 || x0 + box_w / 2 >= HUD_SPLIT)) {
-        row = Y - y0;                   /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
-        raised = 16;
-    }
-    if (msg_drop && ((a2 >> 10) & 3) == 0 && y0 + box_h <= msg_bottom
-        && (y0 >= msg_top || (y0 >= msg_top - 48 && x0 + box_w <= 72))) {
-        row = Y - view.shift_y - msg_drop - y0;   /* the window's contents and the speaker's portrait go down with it */
-        raised = 16;
-    }
+    width = p.width; height = p.height; box_w = p.box_w; box_h = p.box_h;
+    x0 = p.x0; y0 = p.y0; raised = p.raised;
+    row = Y - p.start;
     if (row < 0 || row >= box_h)
         return;
     if (page_shown && (Y < view.shift_y || Y >= view.shift_y + H))
@@ -981,7 +1017,8 @@ static void sprites(int y, int two)
         memset(hud_other.flags, 0, W);
     }
     for (i = 127; i >= 0; i--)
-        sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_now);
+        if (y >= obj_start[i] && y < obj_end[i])
+            sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_now);
     if (!two)
         return;
     /* The other frame's sprites: this frame's without those that alternate, and those that are hidden now, each
@@ -991,7 +1028,7 @@ static void sprites(int y, int two)
     memset(obj_other.prio, 4, sizeof obj_other.prio);
     memset(obj_other.flags, 0, sizeof obj_other.flags);
     for (i = 127; i >= 0; i--) {
-        if (!only_now[i])
+        if (!only_now[i] && y >= obj_start[i] && y < obj_end[i])
             sprite(y, OAM + i * 4, OAM, VRAM + 0x10000, NULL, obj_moved[i] ? 4 : 0, &obj_other);
         for (n = 0; n < copy_count; n++)
             if (copies[n].index == i)
@@ -1190,6 +1227,46 @@ static uint16_t compose(int X, int Y, const struct obj_line *obj, int *moved)
     return top_colour;
 }
 
+/* compose() for the common pixel, in fewer steps: a row without the display's windows, with no edge fade, inside
+ * the map, and a pixel whose front-most layer needs no second one (no semi-transparent sprite, no alpha blend).
+ * Returns 0 for any other pixel, which compose() then draws: the result is the same either way. */
+static inline int compose_plain(int X, const struct obj_line *obj, uint16_t *colour_out, int *moved)
+{
+    int p = ((line.dispcnt & 0x1000) && obj->colour[X]) ? obj->prio[X] : -1;
+    int n = line.count - 1, top = LAYER_BACKDROP;
+    uint16_t colour = PAL[0];
+    for (;;) {
+        if (p >= 0 && (n < 0 || line.order_prio[n] >= p)) {
+            top = LAYER_OBJ;
+            colour = (obj->colour[X] & 0x8000) ? (uint16_t)(obj->colour[X] & 0x7FFF) : PAL[obj->colour[X] - 1];
+            break;
+        }
+        if (n < 0)
+            break;
+        {
+            int bg = line.order[n--];
+            uint16_t index = line_bg[bg][X];
+            if (index) {
+                top = bg;
+                colour = PAL[index - 1];
+                break;
+            }
+        }
+    }
+    if (top == LAYER_OBJ && (obj->flags[X] & 1))
+        return 0;                       /* a semi-transparent sprite: blended with what is under it */
+    if (line.bldcnt & (1 << top)) {
+        switch ((line.bldcnt >> 6) & 3) {
+        case 1: return 0;               /* alpha blend with the layer under it */
+        case 2: colour = fade(colour, line.evy, 1); break;
+        case 3: colour = fade(colour, line.evy, 0); break;
+        }
+    }
+    *moved = top == LAYER_OBJ ? obj->flags[X] & 4 : top < 4 ? line.moved[top] : 0;
+    *colour_out = colour;
+    return 1;
+}
+
 /* One pixel of the status display's layer with the sprites of `obj`: 0 where the display has nothing, else its
  * colour with the line's windows and fades, as compose does it for the picture. What is under the display is not
  * known here (the platform puts the layer over the picture at another size), so where the game blends the
@@ -1321,6 +1398,7 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
      * display with the page, as the PC picture does: only the field itself raises it. */
     hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !ss_frontend_picture();
     find_message_window();
+    sprite_rows();
     for (Y = 0; Y < view.height; Y++) {
         uint32_t *out = pixels + Y * pitch_pixels;
         uint8_t *calm = still + Y * view.width;
@@ -1381,19 +1459,27 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
         if (line.dispcnt & 0x1000) sprites(Y, two);
         if (hud_apart && native_row && y < HUD_BAND)
             hud_row(y, two);
+        /* compose_plain serves this row's pixels when nothing of the row needs the full rules */
+        int plain_row = !line.windows && !edge_row && Y >= view.map_top && Y < view.map_bottom;
         for (X = 0; X < view.width; X++) {
             int moved, moved_other;
             uint32_t colour;
+            uint16_t pixel;
             if (!view.world && !view.menu_background && wide && (!native_row || (native_x(X, y) < 0 && y >= view.hud_rows))) {
                 out[X] = 0x00000000u;     /* transparent: the platform shows its own field there */       /* side bars of a scene that keeps the console's composition */
                 calm[X] = 0;
                 continue;
             }
-            uint16_t pixel = compose(X, Y, &obj_now, &moved);
+            if (!(plain_row && !edge_darkness[X] && !(view.world && (X < view.hud_left || X >= view.hud_right))
+                  && compose_plain(X, &obj_now, &pixel, &moved)))
+                pixel = compose(X, Y, &obj_now, &moved);
             colour = (moved & COMPOSE_TRANSPARENT) ? 0 : to_rgb(pixel);
             if (two && (obj_now.colour[X] != obj_other.colour[X] || obj_now.prio[X] != obj_other.prio[X] || obj_now.flags[X] != obj_other.flags[X])) {
                 /* something alternates here: half of this frame's picture, half of the other frame's */
-                uint16_t other_pixel = compose(X, Y, &obj_other, &moved_other);
+                uint16_t other_pixel;
+                if (!(plain_row && !edge_darkness[X] && !(view.world && (X < view.hud_left || X >= view.hud_right))
+                      && compose_plain(X, &obj_other, &other_pixel, &moved_other)))
+                    other_pixel = compose(X, Y, &obj_other, &moved_other);
                 uint32_t other = (moved_other & COMPOSE_TRANSPARENT) ? 0 : to_rgb(other_pixel);
                 if (colour && other)
                     colour = 0xFF000000u | (((colour >> 1) & 0x7F7F7F) + ((other >> 1) & 0x7F7F7F) + ((colour | other) & 0x010101));
