@@ -238,7 +238,11 @@ def panel_bytes(args):
 
 
 def body_smoke(args, pkg):
-    extra = {'SS_FBDEV': '/run/fb.bin', 'SS_QUIT': str(args.frames), 'SS_FB_SHOT': str(max(1, args.frames - 10))}
+    kms = getattr(args, 'kms', False)
+    extra = {'SS_FBDEV': '/dev/fb0' if kms else '/run/fb.bin', 'SS_QUIT': str(args.frames),
+             'SS_FB_SHOT': str(max(1, args.frames - 10))}
+    if kms:
+        extra['SS_KMS_ANY'] = '1'
     if args.input:
         extra['SS_INPUT_FILE'] = '/lab/input.txt'
     env = program_env(args, extra)
@@ -246,7 +250,12 @@ def body_smoke(args, pkg):
         run = f'cd /lab/{pkg.game_dir} && {direct_command(pkg, "ss2_ga36", f"--game roms/{args.rom_name}")}'
     else:
         run = f'cd /lab && sh {shell_quote("./" + LAUNCHER)}'
-    return f'''dd if=/dev/zero of=/run/fb.bin bs={panel_bytes(args)} count=1 2>/dev/null
+    # --kms: a virtio-gpu display, so the program drives a real DRM device (page flips, mode setting)
+    prepare = ('{ modprobe virtio_pci; modprobe -v virtio-gpu; sleep 2; ls -l /dev/dri /dev/fb0; ls /sys/class/drm; dmesg | grep -i -E \"virtio|drm|pci\" | tail -15; }'
+               ' > /run/out/kms-devices.txt 2>&1'
+               if kms else '')
+    return f'''{prepare}
+dd if=/dev/zero of=/run/fb.bin bs={panel_bytes(args)} count=1 2>/dev/null
 ( {exports(env).replace(chr(10), '; ')}{run} ) > /run/out/program.log 2>&1
 code=$?
 echo "GA36_EXIT=$code"
@@ -364,6 +373,9 @@ def run_vm(args, initrd):
         command += ['-accel', 'tcg,thread=single', '-icount', 'shift=0,sleep=off,align=off',
                     '-rtc', 'base=2026-01-01T00:00:00,clock=vm', '-seed', '1']
         append += ' norandmaps'
+    if getattr(args, 'kms', False):
+        command[command.index('virt')] = 'virt,highmem=off'
+        command += ['-device', 'virtio-gpu-pci,xres=640,yres=480']
     command += ['-display', 'none', '-serial', 'stdio', '-monitor', 'none', '-nic', 'none', '-no-reboot',
                 '-device', 'virtio-serial-device',
                 '-chardev', f'file,id=outbox,path={outbox.resolve().as_posix()}',
@@ -576,6 +588,8 @@ def main():
     modes['smoke'].add_argument('--direct', action='store_true',
                                 help='start ss2_ga36 through the loader instead of the launcher script')
     modes['smoke'].add_argument('--input', type=Path, help='SS_INPUT_FILE script')
+    modes['smoke'].add_argument('--kms', action='store_true',
+                                help='give the VM a virtio-gpu display and the program /dev/fb0 (tests the KMS path)')
     modes['hash'].add_argument('--frames', type=int, required=True)
     modes['hash'].add_argument('--input', type=Path, help='SS_INPUT_FILE script')
     modes['hash'].add_argument('--compare', type=Path, help='reference text with "frame N hash H" lines')

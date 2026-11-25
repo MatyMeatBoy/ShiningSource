@@ -45,7 +45,7 @@ static double fb_refresh_hz = -1.0;
 static unsigned long fb_vsync_waits, fb_vsync_missed;
 /* The 4:3 canvas. What each page last received: the decor's id and the rectangle written over it; a page whose
  * decor is current gets only the rectangle. */
-static struct { unsigned id; int valid, canvas_w, canvas_h, scale, x, y, w, h; } fb_canvas[2];
+static struct { unsigned id; int valid, canvas_w, canvas_h, scale, x, y, w, h; } fb_canvas[3];
 
 int ss_fb_active(void) { return fb_map || fb_shadow; }
 int ss_fb_width(void) { return (int)fb_var.xres; }
@@ -102,9 +102,403 @@ static void fatal_signal(int sig)
     raise(sig);
 }
 
+/* ---- the display through DRM/KMS (preferred over /dev/fb0 when the kernel has it) ----
+ * The framebuffer device of a DRM driver is one page the panel scans while it is written: frames part across the
+ * screen, and nothing says when the panel shows a frame. Through KMS the program owns three buffers: it draws in a
+ * free one and the display switches to it at the start of a refresh (a page flip), so a frame is never seen half
+ * written. A thread takes the flips' completions: a frame finished while another waits for its refresh replaces
+ * the one queued after it (the newest is shown). When the panel paces the game (ss_fb_vsync) the game waits instead
+ * while a frame is queued, so it runs at the panel's rate with one frame of slack against a slow frame.
+ * The GA36's panel came up at 55.13 Hz; the console's rate is 59.73 Hz. If the panel is not near 59.73 Hz the same
+ * mode with its pixel clock scaled to 59.73 Hz is tried (SS_KMS_HZ=N asks for N Hz instead, SS_KMS_HZ=0 keeps
+ * the panel's mode) and kept only if the measured rate is then within 58.5..61.5 Hz. SS_KMS=0: /dev/fb0 only. */
+#if defined(__has_include)
+#if __has_include(<libdrm/drm.h>)
+#include <libdrm/drm.h>
+#define SS_KMS_BUILD 1
+#endif
+#endif
+#ifdef SS_KMS_BUILD
+#include <poll.h>
+#include <pthread.h>
+
+enum { KMS_BUFFERS = 3 };
+static int kms_fd = -1, kms_on, kms_thread_on, kms_shown, kms_pending = -1, kms_queued = -1;
+static uint32_t kms_crtc, kms_conn;
+static struct drm_mode_crtc kms_saved;          /* what the screen showed before: restored at the end */
+static struct drm_mode_modeinfo kms_mode;
+static struct { uint32_t handle, fb, pitch; uint64_t size; uint8_t *map; } kms_buf[KMS_BUFFERS];
+static pthread_mutex_t kms_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t kms_cond = PTHREAD_COND_INITIALIZER;
+static pthread_t kms_thread;
+static unsigned long kms_replaced;              /* frames replaced in the queue before the panel showed them */
+
+static int kms_flip(int buffer)
+{
+    struct drm_mode_crtc_page_flip flip;
+    memset(&flip, 0, sizeof flip);
+    flip.crtc_id = kms_crtc;
+    flip.fb_id = kms_buf[buffer].fb;
+    flip.flags = DRM_MODE_PAGE_FLIP_EVENT;
+    flip.user_data = (uint64_t)buffer;
+    return ioctl(kms_fd, DRM_IOCTL_MODE_PAGE_FLIP, &flip) == 0;
+}
+
+static int kms_set(const struct drm_mode_modeinfo *mode, int buffer)
+{
+    struct drm_mode_crtc crtc;
+    memset(&crtc, 0, sizeof crtc);
+    crtc.crtc_id = kms_crtc;
+    crtc.fb_id = kms_buf[buffer].fb;
+    crtc.set_connectors_ptr = (uint64_t)(uintptr_t)&kms_conn;
+    crtc.count_connectors = 1;
+    crtc.mode = *mode;
+    crtc.mode_valid = 1;
+    return ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &crtc) == 0;
+}
+
+/* Flip completions within `ms`: their count, and the time of the last one (the display's own monotonic clock). */
+static int kms_events(int ms, uint64_t *when)
+{
+    struct pollfd wait = { kms_fd, POLLIN, 0 };
+    char buffer[512];
+    ssize_t got;
+    int flips = 0;
+    if (poll(&wait, 1, ms) <= 0)
+        return 0;
+    got = read(kms_fd, buffer, sizeof buffer);
+    for (ssize_t at = 0; got > 0 && at + (ssize_t)sizeof(struct drm_event) <= got;) {
+        const struct drm_event *event = (const struct drm_event *)(buffer + at);
+        if (event->length < sizeof *event)
+            break;
+        if (event->type == DRM_EVENT_FLIP_COMPLETE && at + (ssize_t)sizeof(struct drm_event_vblank) <= got) {
+            const struct drm_event_vblank *flip = (const struct drm_event_vblank *)event;
+            *when = (uint64_t)flip->tv_sec * 1000000000u + (uint64_t)flip->tv_usec * 1000u;
+            flips++;
+        }
+        at += event->length;
+    }
+    return flips;
+}
+
+/* The refresh rate by a dozen flips between two black buffers (the median interval); 0 if they do not come back. */
+static double kms_measure(void)
+{
+    uint64_t times[14], gaps[13];
+    int n = 0, buffer = !kms_shown;
+    for (int i = 0; i < 14; i++) {
+        uint64_t when = 0;
+        if (!kms_flip(buffer) || !kms_events(250, &when))
+            break;
+        times[n++] = when;
+        kms_shown = buffer;
+        buffer = !buffer;
+    }
+    if (n < 6)
+        return 0.0;
+    for (int i = 1; i < n; i++)
+        gaps[i - 1] = times[i] - times[i - 1];
+    for (int i = 1; i < n - 1; i++)
+        for (int j = i; j > 0 && gaps[j] < gaps[j - 1]; j--) {
+            uint64_t t = gaps[j]; gaps[j] = gaps[j - 1]; gaps[j - 1] = t;
+        }
+    return gaps[(n - 1) / 2] ? 1e9 / (double)gaps[(n - 1) / 2] : 0.0;
+}
+
+static void *kms_loop(void *unused)
+{
+    (void)unused;
+    while (kms_thread_on) {
+        uint64_t when = 0;
+        if (!kms_events(100, &when))
+            continue;
+        pthread_mutex_lock(&kms_lock);
+        if (kms_pending >= 0) {
+            kms_shown = kms_pending;
+            kms_pending = -1;
+        }
+        if (kms_queued >= 0) {
+            if (kms_flip(kms_queued))
+                kms_pending = kms_queued;
+            kms_queued = -1;
+        }
+        pthread_cond_broadcast(&kms_cond);
+        pthread_mutex_unlock(&kms_lock);
+    }
+    return NULL;
+}
+
+/* The connected connector, its CRTC, the mode on screen now; buffers; the rate. 1 when the display is ours. */
+static int kms_open(void)
+{
+    uint32_t connectors[16], crtcs[8], encoders[16];
+    struct drm_mode_card_res res;
+    char path[32];
+    double hz, wanted = 59.7275;
+    const char *text = getenv("SS_KMS_HZ");
+    int found = 0, fd = -1;
+    /* SS_KMS_ANY=1 (tests: a virtual GPU without a window says its screen is not connected) takes any screen */
+    const int any_screen = getenv("SS_KMS_ANY") && getenv("SS_KMS_ANY")[0] == '1';
+    for (int card = 0; card < 4 && !found; card++) {
+        snprintf(path, sizeof path, "/dev/dri/card%d", card);
+        if (fd >= 0)
+            close(fd);
+        fd = open(path, O_RDWR | O_CLOEXEC);
+        if (fd < 0) {
+            if (errno != ENOENT || card == 0)
+                fprintf(stderr, "kms: %s: %s\n", path, strerror(errno));
+            continue;
+        }
+        errno = 0;
+        memset(&res, 0, sizeof res);
+        if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) != 0 || !res.count_crtcs || !res.count_connectors) {
+            fprintf(stderr, "kms: %s: no display here (%s)\n", path, errno ? strerror(errno) : "no CRTC or connector");
+            continue;
+        }
+        if (res.count_connectors > 16) res.count_connectors = 16;
+        if (res.count_crtcs > 8) res.count_crtcs = 8;
+        if (res.count_encoders > 16) res.count_encoders = 16;
+        res.count_fbs = 0;
+        res.fb_id_ptr = 0;
+        res.connector_id_ptr = (uint64_t)(uintptr_t)connectors;
+        res.crtc_id_ptr = (uint64_t)(uintptr_t)crtcs;
+        res.encoder_id_ptr = (uint64_t)(uintptr_t)encoders;
+        if (ioctl(fd, DRM_IOCTL_MODE_GETRESOURCES, &res) != 0) {
+            fprintf(stderr, "kms: %s: resources unreadable (%s)\n", path, strerror(errno));
+            continue;
+        }
+        fprintf(stderr, "kms: %s: %u connector(s), %u CRTC(s)\n", path, res.count_connectors, res.count_crtcs);
+        for (uint32_t i = 0; i < res.count_connectors && i < 16 && !found; i++) {
+            struct drm_mode_get_connector conn;
+            struct drm_mode_modeinfo modes[64];
+            struct drm_mode_get_encoder enc;
+            uint32_t count;
+            memset(&conn, 0, sizeof conn);
+            conn.connector_id = connectors[i];
+            if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) != 0 || !conn.count_modes
+                || (conn.connection != 1 && !any_screen)) {
+                fprintf(stderr, "kms: %s: connector %u, status %u, %u modes: not used\n", path, connectors[i],
+                        conn.connection, conn.count_modes);
+                continue;
+            }
+            count = conn.count_modes > 64 ? 64 : conn.count_modes;
+            memset(&conn, 0, sizeof conn);
+            conn.connector_id = connectors[i];
+            conn.count_modes = count;
+            conn.modes_ptr = (uint64_t)(uintptr_t)modes;
+            if (ioctl(fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) != 0 || !conn.count_modes || conn.count_modes > 64) {
+                fprintf(stderr, "kms: %s: connector %u: its modes could not be read (%s, %u)\n", path, connectors[i],
+                        strerror(errno), conn.count_modes);
+                continue;
+            }
+            memset(&enc, 0, sizeof enc);
+            enc.encoder_id = conn.encoder_id;
+            kms_crtc = 0;
+            if (conn.encoder_id && ioctl(fd, DRM_IOCTL_MODE_GETENCODER, &enc) == 0)
+                kms_crtc = enc.crtc_id;
+            for (uint32_t c = 0; !kms_crtc && c < res.count_crtcs && c < 8; c++)
+                if (!conn.encoder_id || (enc.possible_crtcs >> c & 1))
+                    kms_crtc = crtcs[c];
+            if (!kms_crtc) {
+                fprintf(stderr, "kms: %s: connector %u has no CRTC\n", path, connectors[i]);
+                continue;
+            }
+            kms_conn = connectors[i];
+            memset(&kms_saved, 0, sizeof kms_saved);
+            kms_saved.crtc_id = kms_crtc;
+            ioctl(fd, DRM_IOCTL_MODE_GETCRTC, &kms_saved);
+            kms_mode = modes[0];
+            for (uint32_t m = 0; m < conn.count_modes; m++)
+                if (modes[m].type & DRM_MODE_TYPE_PREFERRED) { kms_mode = modes[m]; break; }
+            if (kms_saved.mode_valid)
+                kms_mode = kms_saved.mode;
+            found = 1;
+        }
+    }
+    if (!found) {
+        if (fd >= 0)
+            close(fd);
+        fprintf(stderr, "kms: no display with a connected screen in /dev/dri: the framebuffer device instead\n");
+        return 0;
+    }
+    kms_fd = fd;
+    ioctl(fd, DRM_IOCTL_SET_MASTER, 0);     /* (the first program to open the card is its master already) */
+    for (int i = 0; i < KMS_BUFFERS; i++) {
+        struct drm_mode_create_dumb create;
+        struct drm_mode_fb_cmd cmd;
+        struct drm_mode_map_dumb map;
+        void *where;
+        memset(&create, 0, sizeof create);
+        create.width = kms_mode.hdisplay;
+        create.height = kms_mode.vdisplay;
+        create.bpp = 32;
+        if (ioctl(fd, DRM_IOCTL_MODE_CREATE_DUMB, &create) != 0)
+            goto refused;
+        kms_buf[i].handle = create.handle;
+        kms_buf[i].pitch = create.pitch;
+        kms_buf[i].size = create.size;
+        memset(&cmd, 0, sizeof cmd);
+        cmd.width = kms_mode.hdisplay;
+        cmd.height = kms_mode.vdisplay;
+        cmd.pitch = create.pitch;
+        cmd.bpp = 32;
+        cmd.depth = 24;
+        cmd.handle = create.handle;
+        if (ioctl(fd, DRM_IOCTL_MODE_ADDFB, &cmd) != 0)
+            goto refused;
+        kms_buf[i].fb = cmd.fb_id;
+        memset(&map, 0, sizeof map);
+        map.handle = create.handle;
+        if (ioctl(fd, DRM_IOCTL_MODE_MAP_DUMB, &map) != 0)
+            goto refused;
+        where = mmap(NULL, (size_t)create.size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, (off_t)map.offset);
+        if (where == MAP_FAILED)
+            goto refused;
+        kms_buf[i].map = where;
+        memset(where, 0, (size_t)create.size);
+    }
+    if (kms_buf[0].pitch != kms_buf[1].pitch || kms_buf[0].pitch != kms_buf[2].pitch || !kms_set(&kms_mode, 0))
+        goto refused;
+    kms_shown = 0;
+    hz = kms_measure();
+    fprintf(stderr, "kms: %s, %ux%u \"%s\", panel %.2f Hz (clock %u kHz)\n", path, kms_mode.hdisplay, kms_mode.vdisplay,
+            kms_mode.name, hz, kms_mode.clock);
+    if (text && *text)
+        wanted = atof(text);
+    if (hz > 1.0 && wanted > 1.0 && (hz < 58.5 || hz > 61.5)) {
+        struct drm_mode_modeinfo faster = kms_mode;
+        double got;
+        faster.clock = (uint32_t)((double)kms_mode.clock * wanted / hz + 0.5);
+        faster.vrefresh = (uint32_t)(wanted + 0.5);
+        snprintf(faster.name, sizeof faster.name, "%ux%u@%.0f", faster.hdisplay, faster.vdisplay, wanted);
+        if (!kms_set(&faster, kms_shown)) {
+            fprintf(stderr, "kms: the %u kHz mode for %.2f Hz was refused (%s): the panel stays at %.2f Hz\n", faster.clock,
+                    wanted, strerror(errno), hz);
+        } else if ((got = kms_measure()) >= 58.5 && got <= 61.5) {
+            fprintf(stderr, "kms: the panel now refreshes at %.2f Hz (clock %u kHz)\n", got, faster.clock);
+            kms_mode = faster;
+            hz = got;
+        } else {
+            fprintf(stderr, "kms: asked %.2f Hz at %u kHz, measured %.2f Hz: back to the panel's mode\n", wanted, faster.clock, got);
+            kms_set(&kms_mode, kms_shown);
+            hz = kms_measure();
+        }
+    }
+    if (hz <= 1.0)
+        goto refused;
+    fb_period_ns = (uint64_t)(1e9 / hz);
+    fb_refresh_hz = hz;
+    kms_thread_on = 1;
+    if (pthread_create(&kms_thread, NULL, kms_loop, NULL) != 0) {
+        kms_thread_on = 0;
+        goto refused;
+    }
+    kms_on = 1;
+    return 1;
+refused:
+    fprintf(stderr, "kms: %s cannot be driven (%s): the framebuffer device instead\n", path, strerror(errno));
+    if (kms_saved.mode_valid && kms_saved.fb_id) {
+        struct drm_mode_crtc back = kms_saved;
+        back.set_connectors_ptr = (uint64_t)(uintptr_t)&kms_conn;
+        back.count_connectors = 1;
+        ioctl(fd, DRM_IOCTL_MODE_SETCRTC, &back);
+    }
+    for (int i = 0; i < KMS_BUFFERS; i++)
+        if (kms_buf[i].map) {
+            munmap(kms_buf[i].map, (size_t)kms_buf[i].size);
+            kms_buf[i].map = NULL;
+        }
+    close(fd);
+    kms_fd = -1;
+    fb_refresh_hz = -1.0;
+    fb_period_ns = 0;
+    return 0;
+}
+
+/* The buffer to draw in. Paced by the panel: wait while a frame is queued (it goes out at the next refresh). */
+static int kms_begin(void)
+{
+    int page = 0;
+    pthread_mutex_lock(&kms_lock);
+    while (fb_vsync && kms_queued >= 0 && kms_thread_on) {
+        struct timespec until;
+        clock_gettime(CLOCK_REALTIME, &until);
+        until.tv_nsec += 100000000;
+        if (until.tv_nsec >= 1000000000) { until.tv_sec++; until.tv_nsec -= 1000000000; }
+        if (pthread_cond_timedwait(&kms_cond, &kms_lock, &until) != 0)
+            break;
+    }
+    if (kms_queued >= 0) {
+        page = kms_queued;                      /* the newer frame replaces it before it was seen */
+        kms_queued = -1;
+        kms_replaced++;
+    } else {
+        while (page == kms_shown || page == kms_pending)
+            page++;
+    }
+    pthread_mutex_unlock(&kms_lock);
+    return page;
+}
+
+static void kms_end(int page)
+{
+    pthread_mutex_lock(&kms_lock);
+    if (kms_pending < 0) {
+        if (kms_flip(page))
+            kms_pending = page;
+        else if (kms_set(&kms_mode, page))    /* (a flip refused: shown at once) */
+            kms_shown = page;
+    } else {
+        kms_queued = page;
+    }
+    pthread_mutex_unlock(&kms_lock);
+}
+
+static void kms_close(void)
+{
+    if (!kms_on)
+        return;
+    kms_thread_on = 0;
+    pthread_join(kms_thread, NULL);
+    fprintf(stderr, "kms: %lu frames replaced before the panel showed them\n", kms_replaced);
+    if (kms_saved.mode_valid && kms_saved.fb_id) {
+        struct drm_mode_crtc back = kms_saved;
+        back.set_connectors_ptr = (uint64_t)(uintptr_t)&kms_conn;
+        back.count_connectors = 1;
+        ioctl(kms_fd, DRM_IOCTL_MODE_SETCRTC, &back);
+    }
+    for (int i = 0; i < KMS_BUFFERS; i++)
+        if (kms_buf[i].map)
+            munmap(kms_buf[i].map, (size_t)kms_buf[i].size);
+    close(kms_fd);
+    kms_fd = -1;
+    kms_on = 0;
+}
+#else
+enum { KMS_BUFFERS = 2 };
+static const int kms_on = 0;
+static int kms_open(void) { return 0; }
+static int kms_begin(void) { return 0; }
+static void kms_end(int page) { (void)page; }
+static void kms_close(void) {}
+static struct { uint8_t *map; } kms_buf[1];
+#endif
+
+#ifdef SS_KMS_BUILD
+static unsigned kms_mode_width(void) { return kms_mode.hdisplay; }
+static unsigned kms_mode_height(void) { return kms_mode.vdisplay; }
+static unsigned kms_pitch(void) { return kms_buf[0].pitch; }
+#else
+static unsigned kms_mode_width(void) { return 0; }
+static unsigned kms_mode_height(void) { return 0; }
+static unsigned kms_pitch(void) { return 0; }
+#endif
+
 /* ---- the framebuffer ---- */
 static uint8_t *page_base(int page)
 {
+    if (kms_on)
+        return kms_buf[page].map;
     if (fb_shadow)
         return fb_shadow;
     return fb_map + (size_t)(fb_pages > 1 ? (uint32_t)page * fb_var.yres : fb_var.yoffset) * fb_fix.line_length
@@ -137,6 +531,23 @@ int ss_fb_open(void)
         return 1;
     if (!path || !*path)
         return 0;
+    text = getenv("SS_KMS");
+    if (!(text && text[0] == '0') && stat(path, &st) == 0 && !S_ISREG(st.st_mode) && kms_open()) {
+        memset(&fb_var, 0, sizeof fb_var);
+        memset(&fb_fix, 0, sizeof fb_fix);
+        fb_var.xres = fb_var.xres_virtual = kms_mode_width();
+        fb_var.yres = fb_var.yres_virtual = kms_mode_height();
+        fb_var.bits_per_pixel = 32;
+        fb_var.red.offset = 16;
+        fb_fix.line_length = kms_pitch();
+        fb_bytes = 4;
+        fb_format = SS_FB_XRGB8888;
+        fb_pages = KMS_BUFFERS;
+        fb_map = kms_buf[0].map;
+        fb_map_size = 0;
+        fd = -1;
+        goto ready;
+    }
     fd = open(path, O_RDWR | O_CLOEXEC);
     if (fd < 0 || fstat(fd, &st) != 0) {
         fprintf(stderr, "fbdev: cannot open %s: %s\n", path, strerror(errno));
@@ -206,6 +617,7 @@ int ss_fb_open(void)
         fprintf(stderr, "fbdev: %s cannot be mapped (%s): written instead\n", path, strerror(errno));
     }
     fb_fd = fd;
+ready:
     text = getenv("SS_FB_VIEW");
     fb_view = text && atoi(text) > 0 ? atoi(text) : VIEW_DEFAULT;
     if (fb_view < VIEW_MIN) fb_view = VIEW_MIN;
@@ -218,7 +630,7 @@ int ss_fb_open(void)
     {
         int scale_x = (int)fb_var.xres / fb_view, scale_y = (int)fb_var.yres / PICTURE_H;
         fprintf(stderr, "fbdev: %s %ux%u, %u bpp, line %u, scale %d, view %d%s%s\n", path, fb_var.xres, fb_var.yres, fb_var.bits_per_pixel,
-                fb_fix.line_length, scale_x < scale_y ? scale_x : scale_y, fb_view, fb_pages > 1 ? ", 2 pages" : "",
+                fb_fix.line_length, scale_x < scale_y ? scale_x : scale_y, fb_view, kms_on ? ", 3 buffers by KMS" : fb_pages > 1 ? ", 2 pages" : "",
                 fb_is_file ? ", file" : "");
     }
     /* the whole screen once: from then on a picture alone writes only itself and the borders stay black */
@@ -278,6 +690,8 @@ double ss_fb_refresh(void)
 {
     uint64_t gaps[9], from;
     int n = 0;
+    if (kms_on)
+        return fb_vsync ? fb_refresh_hz : 0.0;
     if (fb_refresh_hz >= 0.0)
         return fb_refresh_hz;
     fb_refresh_hz = 0.0;
@@ -321,6 +735,8 @@ void ss_fb_vsync(int on)
  * whole refresh late and halve the rate): it is written at once, maybe parted near the top. */
 static int frame_begin(void)
 {
+    if (kms_on)
+        return kms_begin();
     if (fb_vsync && fb_period_ns && fb_pages == 1) {
         uint64_t now = clock_ns();
         if (fb_vblank_ns && now - fb_vblank_ns > fb_period_ns + 1000000u) {
@@ -339,6 +755,13 @@ static int frame_begin(void)
 
 static void frame_end(int page)
 {
+    if (kms_on) {
+        kms_end(page);
+        fb_presented++;
+        if (fb_shot_at && fb_presented == fb_shot_at)
+            write_shot(page);
+        return;
+    }
     if (fb_shadow && pwrite(fb_fd, fb_shadow, (size_t)fb_fix.line_length * fb_var.yres, (off_t)fb_var.yoffset * fb_fix.line_length) < 0) {
         static int told;
         if (!told++)
@@ -516,6 +939,12 @@ void ss_fb_close(void)
         return;
     fprintf(stderr, "fbdev: %lu frames presented: %lu by the direct path (%lu with the canvas decor redrawn), %lu composed\n",
             fb_presented, fb_fast, fb_canvas_full, fb_generic);
+    if (kms_on) {
+        console_restore();
+        kms_close();
+        fb_map = NULL;
+        return;
+    }
     if (fb_period_ns)
         fprintf(stderr, "fbdev: %lu frames waited for the refresh, %lu came too late to wait\n", fb_vsync_waits, fb_vsync_missed);
     if (fb_pages > 1 && fb_var.yoffset != fb_first_yoffset) {
