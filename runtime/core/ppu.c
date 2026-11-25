@@ -45,6 +45,10 @@ static struct ss_view view;
 static int page_shown;          /* a full-screen page over the field, in a wide view */
 static int hud_at_edges;        /* this frame the field's status display goes to the edges of a wide view */
 static int hud_raise;           /* ... and its lines to the top edge of a tall view (by shift_y) */
+/* On a tall field view the message window goes down to the bottom edge, as the status display goes up: native
+ * lines msg_top..msg_bottom-1 of the backgrounds without a source map (and the speaker's portrait) are shown
+ * msg_drop rows lower. 0: no window this frame. */
+static int msg_top, msg_bottom, msg_drop, row_lowered;
 static uint8_t raised_px[MAXW]; /* on that row: a pixel of the raised status display (its windows are its own line's) */
 
 int ss_sprite_bottom = SS_SCREEN_H;
@@ -189,6 +193,58 @@ static int hud_split_line(const uint8_t *map, int scroll_x, int scroll_y, int y)
     return !((row[((HUD_SPLIT - 8 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((HUD_SPLIT + scroll_x) & 255) >> 3] & 0x3FF));
 }
 
+/* Does native tile row `ty` of this layer hold a window across the screen (left, middle and right)? */
+static int window_row(const uint8_t *map, int scroll_x, int scroll_y, int ty)
+{
+    const uint16_t *row = (const uint16_t *)(map + (((ty * 8 + scroll_y) & 255) >> 3) * 64);
+    return (row[((16 + scroll_x) & 255) >> 3] & 0x3FF) && (row[((224 + scroll_x) & 255) >> 3] & 0x3FF);
+}
+
+/* The message window of a field scene: the lowest run of window rows in the lower half of the console's
+ * picture. A window may be drawn on several backgrounds without a source map (its fill on one, its frame and
+ * text on another), so a row counts when any of them crosses the screen there. Sets msg_top/msg_bottom/msg_drop. */
+static void find_message_window(void)
+{
+    int n, ty, last = -1, first, rows = 0;
+    uint8_t window[20] = {0};
+    msg_top = msg_bottom = msg_drop = 0;
+    if (!hud_raise)
+        return;
+    for (n = 0; n < 4; n++) {
+        uint16_t cnt = IO16(0x08 + n * 2);
+        const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
+        int scroll_x = IO16(0x10 + n * 4), scroll_y = IO16(0x12 + n * 4);
+        if (view.bg[n].map || !(IO16(0) & (0x100 << n)) || (cnt & 0xC000))
+            continue;
+        for (ty = 10; ty < 20; ty++)
+            if (window_row(map, scroll_x, scroll_y, ty))
+                window[ty] = 1, rows++;
+    }
+    /* the window's inside is often the console's window feature (a box of the display's windows 0 or 1 that
+     * crosses the screen), with only the frame and the text in backgrounds */
+    for (n = 0; n < 2; n++) {
+        uint16_t h = IO16(0x40 + n * 2), v = IO16(0x44 + n * 2);
+        int left = h >> 8, right = h & 255, top = v >> 8, bottom = v & 255;
+        if (!(IO16(0) & (0x2000 << n)) || right - left < 200 || top < 80 || bottom > H || bottom <= top)
+            continue;
+        for (ty = top >> 3; ty < (bottom + 7) >> 3 && ty < 20; ty++)
+            window[ty] = 1, rows++;
+    }
+    if (!rows)
+        return;
+    for (ty = 19; ty >= 10 && last < 0; ty--)
+        if (window[ty])
+            last = ty;
+    for (first = last; first > 10 && window[first - 1]; first--)
+        ;
+    msg_top = first * 8;
+    msg_bottom = last * 8 + 8;
+    if (msg_bottom > H) msg_bottom = H;
+    msg_drop = view.height - view.shift_y - msg_bottom;
+    if (msg_drop <= 0 || msg_top < 80)
+        msg_top = msg_bottom = msg_drop = 0;
+}
+
 /* The status display's line y (native) of a background without a source map, its two groups at the side edges,
  * over what `dst` holds: the line raised to the top of a tall view (hud_raise). */
 static void raised_hud_line(uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
@@ -259,6 +315,18 @@ static void text_background(int n, int Y)
         if (to < view.width)
             source_span(dst + to, view.width - to, to - view.shift + source->scroll_x, wy, source, chars, colour256);
         return;
+    }
+    if (msg_drop) {
+        int lowered = y - msg_drop;     /* the message window's line shown on this row, if it is one of them */
+        if (lowered >= msg_top && lowered < msg_bottom) {
+            memset(dst, 0, (size_t)view.width * sizeof *dst);
+            hardware_span(dst + view.shift, W, scroll_x, lowered + scroll_y, chars, map, width, height, colour256);
+            return;
+        }
+        if (native_row && y >= msg_top && y < msg_bottom) {
+            memset(dst, 0, (size_t)view.width * sizeof *dst);       /* it has gone down */
+            return;
+        }
     }
     if (!native_row) {                  /* nothing of the console's picture here, but maybe the raised status display */
         memset(dst, 0, (size_t)view.width * sizeof *dst);
@@ -822,6 +890,11 @@ static void sprite(int Y, const uint16_t *e, const uint16_t *oam, const uint8_t 
         row = Y - y0;                   /* a sprite of the status display that goes to a side edge: and to the top (tall view) */
         raised = 16;
     }
+    if (msg_drop && ((a2 >> 10) & 3) == 0 && y0 + box_h <= msg_bottom
+        && (y0 >= msg_top || (y0 >= msg_top - 48 && x0 + box_w <= 72))) {
+        row = Y - view.shift_y - msg_drop - y0;   /* the window's contents and the speaker's portrait go down with it */
+        raised = 16;
+    }
     if (row < 0 || row >= box_h)
         return;
     if (page_shown && (Y < view.shift_y || Y >= view.shift_y + H))
@@ -964,6 +1037,8 @@ static struct {
 } line;
 
 static uint8_t edge_darkness[MAXW];
+static uint8_t edge_row_darkness[MAXH];    /* the same at the top and bottom ends of a map, on a taller view */
+static unsigned edge_row;                   /* edge_row_darkness of the row being drawn */
 
 /* Anchor the fade to the visible map when it ends inside the viewport. Otherwise
  * keep it at the viewport edge, within the extra columns on narrow displays. */
@@ -972,6 +1047,27 @@ static void prepare_edge_fade(void)
     int left = view.hud_left, right = view.hud_right;
     int left_extension = (view.width - W) / 2, right_extension = view.width - W - left_extension;
     memset(edge_darkness, 0, sizeof edge_darkness);
+    memset(edge_row_darkness, 0, sizeof edge_row_darkness);
+    edge_row = 0;
+    /* A taller view fades the map's first and last rows the same way, so a map that ends inside the canvas
+     * meets the black around it softly; the corners combine both fades and come out rounded. */
+    if (view.world && view.height > H && view.map_top >= 0 && view.map_bottom <= view.height
+        && view.map_bottom - view.map_top >= 2 * EDGE_FADE) {
+        int top = view.map_top, bottom = view.map_bottom;
+        int top_fade = top > 0 || view.shift_y >= EDGE_FADE ? EDGE_FADE : view.shift_y;
+        int bottom_fade = bottom < view.height || view.height - H - view.shift_y >= EDGE_FADE ? EDGE_FADE
+                          : view.height - H - view.shift_y;
+        memset(edge_row_darkness, 16, (size_t)top);
+        memset(edge_row_darkness + bottom, 16, (size_t)(view.height - bottom));
+        for (int d = 0; d < top_fade; d++) {
+            int remaining = top_fade - d;
+            edge_row_darkness[top + d] = (uint8_t)(remaining * remaining * 16 / (top_fade * top_fade));
+        }
+        for (int d = 0; d < bottom_fade; d++) {
+            int remaining = bottom_fade - d;
+            edge_row_darkness[bottom - 1 - d] = (uint8_t)(remaining * remaining * 16 / (bottom_fade * bottom_fade));
+        }
+    }
     if (!view.world || view.width <= W || left < 0 || left > view.width - W || right < left + W || right > view.width)
         return;
     int left_fade = left > 0 || left_extension >= EDGE_FADE ? EDGE_FADE : left_extension;
@@ -992,7 +1088,7 @@ static void prepare_edge_fade(void)
  * own colours and shows the same faded field through it as through an empty pixel. */
 static uint16_t edge_colour(uint16_t colour, int layer, int X, const struct obj_line *obj)
 {
-    unsigned darkness = edge_darkness[X];
+    unsigned column = edge_darkness[X], darkness = column + edge_row - column * edge_row / 16;
     if (!darkness)
         return colour;
     if (layer == LAYER_OBJ) {
@@ -1016,11 +1112,18 @@ static uint16_t compose(int X, int Y, const struct obj_line *obj, int *moved)
     int obj_visible, semi = 0, edge_blended = 0;
     /* window rows are native too: rows above and below take the edge line's; the raised status display its own */
     int y = (raised_px[X] || (obj->flags[X] & 16)) ? Y : Y - view.shift_y;
+    if (row_lowered)
+        y = Y - view.shift_y - msg_drop;    /* the message window's own lines, windows included */
+    else if (msg_drop && Y - view.shift_y >= msg_top && Y - view.shift_y < msg_bottom)
+        y = 0;                              /* where the window was: its window box has gone down with it */
     int outside = view.world && (X < view.hud_left || X >= view.hud_right || Y < view.map_top || Y >= view.map_bottom);
     if (y < 0) y = 0;
     if (y > H - 1) y = H - 1;
     if (outside)
         top_colour = second_colour = 0;     /* beside a map narrower than the view there is nothing: black, which continues the dark around the map */
+    /* Past the map's last row there is no background either: a layer without a source map (the message window's
+     * fill) would otherwise repeat its hardware ring there. Sprites still show. */
+    int past_map = outside && !row_lowered && (Y < view.map_top || Y >= view.map_bottom) && !raised_px[X] && !(obj->flags[X] & 16);
     if (line.windows) {
         /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
          * full-screen mask (the scene-change blackout) covers them too */
@@ -1037,6 +1140,8 @@ static uint16_t compose(int X, int Y, const struct obj_line *obj, int *moved)
         else
             mask = winout & 0x3F;
     }
+    if (past_map)
+        mask &= 0x10;
     obj_visible = (dispcnt & 0x1000) && (mask & 0x10) && obj->colour[X];
     /* The front-most pixel: the layers from the front, the sprite in front of the backgrounds of its own
      * priority, stopping at the first that shows something. The one under it is only looked for when a blend
@@ -1209,11 +1314,14 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     /* A menu page drawn over a field map (Status, Objects: the marble layer passes for a map) keeps the status
      * display with the page, as the PC picture does: only the field itself raises it. */
     hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !ss_frontend_picture();
+    find_message_window();
     for (Y = 0; Y < view.height; Y++) {
         uint32_t *out = pixels + Y * pitch_pixels;
         uint8_t *calm = still + Y * view.width;
         int two, native_row, line_y;
         y = Y - view.shift_y;           /* the console's line on this row */
+        edge_row = edge_row_darkness[Y];
+        row_lowered = msg_drop && y - msg_drop >= msg_top && y - msg_drop < msg_bottom;
         native_row = y >= 0 && y < H;
         line_y = y < 0 ? 0 : y >= H ? H - 1 : y;    /* the registers of the nearest line */
         if (view.shift_y)

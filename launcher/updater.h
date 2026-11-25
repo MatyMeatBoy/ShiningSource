@@ -101,7 +101,7 @@ public:
                 }
             }
         }
-        return "0.9.3";
+        return "0.9.4";
     }
 
 private:

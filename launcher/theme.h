@@ -244,7 +244,7 @@ static void chrome(SDL_Window *window, bool &running)
     draw->AddRectFilled(ImVec2(18, 11), ImVec2(46, 37), IM_COL32(72, 91, 60, 255), 7);
     draw->AddText(ImVec2(28, 13), brass, "II");
     draw->AddText(ImVec2(56, 14), cream, "ShiningSource");
-    draw->AddText(ImVec2(180, 14), IM_COL32(165, 175, 153, 255), "0.9.3");
+    draw->AddText(ImVec2(180, 14), IM_COL32(165, 175, 153, 255), "0.9.4");
     const char *labels[] = { "##minimize", "##maximize", "##close" };
     for (int i = 0; i < 3; ++i) {
         ImGui::SetCursorScreenPos(ImVec2(width - (3 - i) * chrome_width, 6));

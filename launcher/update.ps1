@@ -28,7 +28,7 @@ function Get-InstalledVersion($Root) {
         $installed = Get-UpdateVersion ([IO.File]::ReadAllText($marker).Trim())
         if ($installed) { return $installed }
     }
-    return [version]'0.9.3'
+    return [version]'0.9.4'
 }
 
 function Get-UpdateRelease {
