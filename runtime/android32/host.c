@@ -162,6 +162,17 @@ static SERVICE uint32_t b_present(uint32_t pixels, int width)
     presented_width = (uint32_t)width;
     if (crash_at && presented == (uint32_t)crash_at)
         *(volatile uint32_t *)crash_address = presented;
+    {   /* SS_TEST_STRAY=N: at present N read and write where nothing is mapped, as the game's stray accesses do */
+        static long stray_at = -1;
+        if (stray_at < 0)
+            stray_at = getenv("SS_TEST_STRAY") ? atol(getenv("SS_TEST_STRAY")) : 0;
+        if (stray_at && presented == (uint32_t)stray_at) {
+            volatile uint8_t *far = (volatile uint8_t *)(uintptr_t)(0x211A0066u + crash_address);
+            uint8_t seen = *far;
+            *far = 7;
+            fprintf(stderr, "test: stray read gave %u, write survived%c", (unsigned)seen, 10);
+        }
+    }
     return ss_plat_present(PTR(pixels), width);
 }
 static SERVICE int b_view_width(void) { return ss_plat_view_width(); }
@@ -385,8 +396,55 @@ static void fault_where(uint32_t address)
     fault_hex(address - (map.name_length ? map.base : map.low));
     fault_put(map.exec ? ", code)" : ")");
 }
+/* Stray accesses. The game reads and writes through pointers that lead nowhere now and then (an absent player's
+ * record, a link queue that only exists with a cable). On the console such an address is open bus: the read gives
+ * something meaningless and the write is lost, and the game goes on. The PC builds' fault handlers give the read
+ * zero and drop the write. Here a fault of the game's own code on an address nothing is mapped at gets a page of
+ * zeros mapped there, and the instruction runs again and reads zero. (What the game writes there stays for its
+ * next read of the same place; the PC builds drop it. The game only ever touches these places by mistake.) At
+ * most STRAY_PAGES pages: a game that wanders further is reported as a crash. */
+#ifndef MAP_FIXED_NOREPLACE
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+enum { STRAY_PAGES = 4096 };
+static unsigned stray_pages;
+#ifdef __ANDROID__
+static int stray_page(int number, const siginfo_t *info, const ucontext_t *context)
+{
+    (void)number; (void)info; (void)context;
+    return 0;                           /* the host is a library there: not yet (its code range is another) */
+}
+#else
+extern const char __executable_start[], etext[];
+static int stray_page(int number, const siginfo_t *info, const ucontext_t *context)
+{
+    uintptr_t address, page, pc;
+    void *got;
+    if (number != SIGSEGV || !info || info->si_code != SEGV_MAPERR || !context || stray_pages >= STRAY_PAGES)
+        return 0;
+    pc = (uintptr_t)context->uc_mcontext.arm_pc;
+    if (pc < (uintptr_t)__executable_start || pc >= (uintptr_t)etext)
+        return 0;                       /* only the program's own code (the game and the runtime) */
+    address = (uintptr_t)info->si_addr;
+    if (address < 0x10000u)
+        return 0;                       /* the kernel keeps the lowest pages unmapped; the guest's guards handle them */
+    page = address & ~(uintptr_t)4095;
+    got = mmap((void *)page, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE, -1, 0);
+    if (got == MAP_FAILED)
+        return 0;
+    if ((uintptr_t)got != page) {       /* an old kernel took the flag for a hint */
+        munmap(got, 4096);
+        return 0;
+    }
+    stray_pages++;
+    return 1;
+}
+#endif
+
 static void on_fault(int number, siginfo_t *info, void *raw)
 {
+    if (stray_page(number, info, raw))
+        return;                         /* the instruction runs again and finds zeros */
     static const char *const names[] = { "r0", "r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "r10", "fp", "ip" };
     const ucontext_t *context = raw;
     uint32_t regs[13], sp = 0, pc = 0, lr = 0, cpsr = 0;
