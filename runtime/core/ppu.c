@@ -287,7 +287,7 @@ static void find_message_window(void)
 static void raised_hud_line(struct row_state *R, uint16_t *dst, int y, const uint8_t *chars, const uint8_t *map,
                             int width, int height, int scroll_x, int scroll_y, int colour256)
 {
-    static uint16_t part[W];
+    uint16_t part[W];                   /* on the stack: rows are drawn on several cores */
     int x, right = view.width - W;
     if (!hud_split_line(map, scroll_x, scroll_y, y))
         return;                         /* a window or a message: it stays where the console has it */
