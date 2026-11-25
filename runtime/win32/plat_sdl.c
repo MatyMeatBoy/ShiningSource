@@ -120,6 +120,7 @@ static int classic = -1, border, border_style, sides_field = 1;     /* screen mo
 static int canvas_w, canvas_h;          /* SS_CANVAS: the fixed canvas, see "canvas" (0: the window decides) */
 enum { CANVAS_MAX_H = 2 * SS_SCREEN_H };
 static void read_canvas(void);
+static void preload_art(void);
 static void read_mode(void);
 enum { MENU_UP, MENU_DOWN, MENU_LEFT, MENU_RIGHT, MENU_OK, MENU_BACK, MENU_TOGGLE };
 static int menu_open;
@@ -542,6 +543,7 @@ int ss_plat_video_init(const char *title)
         if (classic && !getenv("SS_MODE"))
             ss_frame_set_view(0);
     }
+    preload_art();
     SDL_ShowWindow(window);
     SDL_RaiseWindow(window);                /* come to the front even when started from a console or a dialog */
     stat_start_ms[4] = process_age_ms();
@@ -2968,6 +2970,25 @@ static const SDL_Surface *flat_art(int scene, int width, int height)
         return files[i].surface;
     }
     return NULL;
+}
+
+/* Every scene's side art (and its Flat art on a canvas) is read now, before the first picture: decoding a PNG
+ * from a handheld's SD card the first time a scene appears held that frame up to a quarter of a second (GA36:
+ * 228 ms on entering the forest). The art is a few hundred kilobytes in all. */
+static void preload_art(void)
+{
+    static const int scenes[] = { SS_PRESENT_WIDE_LANGUAGE, SS_PRESENT_WIDE_TITLE, SS_PRESENT_WIDE_MARBLE,
+                                  SS_PRESENT_WIDE_SHOP, SS_PRESENT_WIDE_SHOP_INSPECT, SS_PRESENT_WIDE_SAVE,
+                                  SS_PRESENT_WIDE_FOREST };
+    const uint64_t from = SDL_GetTicksNS();
+    for (unsigned i = 0; i < sizeof scenes / sizeof scenes[0]; i++) {
+        wide_art(scenes[i], false);
+        if (canvas_w)
+            flat_art(scenes[i], canvas_w, canvas_h);
+    }
+    if (canvas_w)
+        canvas_memory();
+    fprintf(stderr, "video: scene art read in %u ms\n", (unsigned)((SDL_GetTicksNS() - from) / 1000000));
 }
 
 /* The seam between the console's picture and what surrounds it on the canvas: CANVAS_SEAM rows and columns next
