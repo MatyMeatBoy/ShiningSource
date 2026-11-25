@@ -20,6 +20,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #ifndef FBIO_WAITFORVSYNC
@@ -38,6 +39,10 @@ static unsigned fb_dirty;               /* pages whose borders may hold somethin
 static int fb_last_width, fb_last_scale;
 static unsigned long fb_fast, fb_generic, fb_presented, fb_shot_at, fb_canvas_full;
 static int tty_fd = -1, tty_mode = KD_TEXT;
+/* The panel's refresh (ss_fb_refresh): its period and when the last wait for it came back, in nanoseconds. */
+static uint64_t fb_period_ns, fb_vblank_ns;
+static double fb_refresh_hz = -1.0;
+static unsigned long fb_vsync_waits, fb_vsync_missed;
 /* The 4:3 canvas. What each page last received: the decor's id and the rectangle written over it; a page whose
  * decor is current gets only the rectangle. */
 static struct { unsigned id; int valid, canvas_w, canvas_h, scale, x, y, w, h; } fb_canvas[2];
@@ -207,7 +212,8 @@ int ss_fb_open(void)
     if (fb_view > VIEW_MAX) fb_view = VIEW_MAX;
     if (fb_view > (int)fb_var.xres && (int)fb_var.xres >= VIEW_MIN) fb_view = (int)fb_var.xres;
     fb_view &= ~1;
-    fb_vsync = getenv("SS_FB_VSYNC") && getenv("SS_FB_VSYNC")[0] == '1';
+    /* the refresh is waited for unless SS_FB_VSYNC=0 (a file has none); ss_fb_refresh decides whether it can be */
+    fb_vsync = !fb_is_file && !(getenv("SS_FB_VSYNC") && getenv("SS_FB_VSYNC")[0] == '0');
     fb_shot_at = getenv("SS_FB_SHOT") ? strtoul(getenv("SS_FB_SHOT"), NULL, 10) : 0;
     {
         int scale_x = (int)fb_var.xres / fb_view, scale_y = (int)fb_var.yres / PICTURE_H;
@@ -251,13 +257,80 @@ static void write_shot(int page)
             file ? "written to" : "could not be written to", fb_var.xres, fb_var.yres, fb_var.bits_per_pixel);
 }
 
-/* The page to draw in: the hidden one when flipping. A wait for the refresh first, if asked and possible. */
+static uint64_t clock_ns(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (uint64_t)now.tv_sec * 1000000000u + (uint64_t)now.tv_nsec;
+}
+
+static int wait_refresh(void)
+{
+    __u32 screen = 0;
+    return ioctl(fb_fd, FBIO_WAITFORVSYNC, &screen) == 0;
+}
+
+/* The panel's refresh rate in Hz, measured once over a few waits for it; 0 when it cannot be waited for (no
+ * FBIO_WAITFORVSYNC, SS_FB_VSYNC=0, a file) or the waits are not regular. From then on every frame waits for the
+ * refresh before it is written (one page: the frame is written while the panel shows the top rows, ahead of the
+ * scan) only when this returned a rate; ss_fb_vsync(0) turns the waits off (a rate the game cannot follow). */
+double ss_fb_refresh(void)
+{
+    uint64_t gaps[9], from;
+    int n = 0;
+    if (fb_refresh_hz >= 0.0)
+        return fb_refresh_hz;
+    fb_refresh_hz = 0.0;
+    if (!ss_fb_active() || !fb_vsync)
+        return 0.0;
+    if (!wait_refresh()) {
+        fprintf(stderr, "fbdev: no wait for the refresh (%s): frames are paced by the clock alone\n", strerror(errno));
+        fb_vsync = 0;
+        return 0.0;
+    }
+    from = clock_ns();
+    while (n < 9 && wait_refresh()) {
+        uint64_t now = clock_ns();
+        gaps[n++] = now - from;
+        from = now;
+    }
+    for (int i = 1; i < n; i++)          /* the median: one late wake-up does not count */
+        for (int j = i; j > 0 && gaps[j] < gaps[j - 1]; j--) {
+            uint64_t t = gaps[j]; gaps[j] = gaps[j - 1]; gaps[j - 1] = t;
+        }
+    if (n < 9 || gaps[4] < 5000000u || gaps[4] > 50000000u || gaps[2] * 10 < gaps[6] * 9) {
+        fprintf(stderr, "fbdev: the waits for the refresh are not regular (%d, median %.2f ms): no vsync\n", n,
+                n ? gaps[n / 2] / 1e6 : 0.0);
+        fb_vsync = 0;
+        return 0.0;
+    }
+    fb_period_ns = gaps[4];
+    fb_vblank_ns = from;
+    fb_refresh_hz = 1e9 / (double)fb_period_ns;
+    fprintf(stderr, "fbdev: the panel refreshes at %.2f Hz\n", fb_refresh_hz);
+    return fb_refresh_hz;
+}
+
+void ss_fb_vsync(int on)
+{
+    fb_vsync = on && fb_period_ns;
+}
+
+/* The page to draw in: the hidden one when flipping. With one page, a wait for the refresh first; a frame that comes
+ * more than a millisecond after the refresh it was meant for does not wait for the next one (that would show it a
+ * whole refresh late and halve the rate): it is written at once, maybe parted near the top. */
 static int frame_begin(void)
 {
-    if (fb_vsync && fb_pages == 1) {
-        __u32 screen = 0;
-        if (ioctl(fb_fd, FBIO_WAITFORVSYNC, &screen) != 0) {
-            fprintf(stderr, "fbdev: no wait for the refresh (%s): frames are paced by the clock alone\n", strerror(errno));
+    if (fb_vsync && fb_period_ns && fb_pages == 1) {
+        uint64_t now = clock_ns();
+        if (fb_vblank_ns && now - fb_vblank_ns > fb_period_ns + 1000000u) {
+            fb_vblank_ns += (now - fb_vblank_ns) / fb_period_ns * fb_period_ns;
+            fb_vsync_missed++;
+        } else if (wait_refresh()) {
+            fb_vblank_ns = clock_ns();
+            fb_vsync_waits++;
+        } else {
+            fprintf(stderr, "fbdev: the wait for the refresh failed (%s): frames are paced by the clock alone\n", strerror(errno));
             fb_vsync = 0;
         }
     }
@@ -443,6 +516,8 @@ void ss_fb_close(void)
         return;
     fprintf(stderr, "fbdev: %lu frames presented: %lu by the direct path (%lu with the canvas decor redrawn), %lu composed\n",
             fb_presented, fb_fast, fb_canvas_full, fb_generic);
+    if (fb_period_ns)
+        fprintf(stderr, "fbdev: %lu frames waited for the refresh, %lu came too late to wait\n", fb_vsync_waits, fb_vsync_missed);
     if (fb_pages > 1 && fb_var.yoffset != fb_first_yoffset) {
         struct fb_var_screeninfo pan = fb_var;
         pan.yoffset = fb_first_yoffset;

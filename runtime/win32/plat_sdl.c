@@ -586,14 +586,28 @@ static void set_vsync(int wanted)
     display_paced = 0;
     vsync_refused = 0;
 #ifdef SS_FB_HOST
-    if (fb_on) {                        /* the framebuffer has no present to wait in: the game keeps its own clock */
+    if (fb_on) {
+        /* The framebuffer waits for the panel's refresh before each frame (fbdev_linux.c) when it can and the panel
+         * runs near the console's 59.73 Hz: the panel paces the game then, the sound follows its rate, and no frame
+         * is written while the panel shows it. Otherwise the game keeps its own clock and the frames are written
+         * whenever they are ready. */
+        double hz = wanted ? ss_fb_refresh() : 0.0;
         audio_ratio = 1.0f;
+        if (hz > 58.5 && hz < 61.5) {
+            display_paced = 1;
+            ss_fb_vsync(1);
+            audio_ratio = (float)(hz / 59.7275);
+            fprintf(stderr, "video: framebuffer, panel %.2f Hz, paced by the display\n", hz);
+        } else {
+            ss_fb_vsync(0);
+            fprintf(stderr, hz > 0.0 ? "video: framebuffer, panel %.2f Hz: no vsync, own pacing\n"
+                                     : "video: framebuffer, no vsync, own pacing\n", hz);
+        }
         audio_trim = 0;
         if (audio)
             SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio);
         next_frame_ns = SDL_GetTicksNS();
-        fprintf(stderr, "video: framebuffer, own pacing\n");
-        (void)said; (void)every; (void)wanted;
+        (void)said; (void)every;
         return;
     }
 #endif
@@ -3460,6 +3474,9 @@ uint16_t ss_plat_present(const uint32_t *pixels, int packed)
              * display changes, see handle_event.) */
             if (display_paced && ++unpaced == 30) {
                 display_paced = 0;
+#ifdef SS_FB_HOST
+                ss_fb_vsync(0);         /* (its waits would add to the clock's: one or the other) */
+#endif
                 audio_ratio = 1.0f;
                 audio_trim = 0;
                 if (audio)

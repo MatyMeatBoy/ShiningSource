@@ -30,7 +30,7 @@ LOADER = 'ld-linux-armhf.so.3'
 INTERPRETER = f'libarmhf/{LOADER}'
 GAME = 'shiningsourcega36'
 LAUNCHER = 'ShiningSource GA36.sh'
-VERSION = '0.1.1-ga36'
+VERSION = '0.1.2-ga36'
 STOCK_KERNEL = (3, 4, 39)
 # Opened at run time rather than listed as NEEDED: SDL3 dlopens ALSA, and the split glibc
 # libraries keep firmware copies (built for another glibc) from being mixed in.

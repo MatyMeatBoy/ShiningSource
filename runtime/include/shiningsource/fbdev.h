@@ -7,7 +7,7 @@
  *
  * Environment: SS_FBDEV (the device, or a regular file for tests), SS_FBDEV_MODE=WxHxBPP (a file's geometry,
  * 640x480x16 when not given), SS_FB_VIEW (the picture's width, 320 by default), SS_FB_FLIP=0 (no page flipping),
- * SS_FB_VSYNC=1 (wait for the display's refresh before a frame), SS_FB_TTY (the console to put in graphics mode,
+ * SS_FB_VSYNC=0 (do not wait for the display's refresh before a frame), SS_FB_TTY (the console to put in graphics mode,
  * "none" for none), SS_FB_SHOT=N (write the screen at presented frame N to shiningsource_fb.raw), SS_EVDEV,
  * SS_EVDEV_MAP and SS_INPUT_LOG (see ss_evdev_start). */
 
@@ -188,6 +188,8 @@ int ss_fb_present_canvas(const uint32_t *decor, int canvas_w, int canvas_h, unsi
                          const uint32_t *pixels, int stride, int x, int y, int w, int h);
 /* A composed XRGB8888 frame (normally the panel's size), centred. */
 void ss_fb_present_full(const void *pixels, int pitch, int w, int h);
+double ss_fb_refresh(void);             /* the panel's Hz, measured once; 0: no vsync (SS_FB_VSYNC=0 or none) */
+void ss_fb_vsync(int on);               /* 0: frames no longer wait for the refresh */
 void ss_fb_close(void);                 /* registered with atexit by ss_fb_open; logs the frame counts */
 void ss_fb_console_restore(void);       /* text mode and cursor again (async-signal-safe, for a crash handler) */
 
