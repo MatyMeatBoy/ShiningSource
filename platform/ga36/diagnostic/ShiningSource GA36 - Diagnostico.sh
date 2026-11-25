@@ -5,13 +5,18 @@
 # Child mode (internal): "$0" --child sdl|headless  runs one case in the current folder.
 self=$0
 if [ "${1:-}" = --child ]; then
+    # ga36-env.sh needs `game` (the shiningsourcega36 folder): the parent exports it as DIAG_GAME
+    game=${DIAG_GAME:-}
+    [ -n "$game" ] && [ -d "$game" ] || { echo "diagnostico: DIAG_GAME is not the game folder: '$game'" >&2; exit 121; }
     . "$DIAG_ENVSH" || exit 120
     # the case's own variables win over ga36-env.sh
     if [ -r ./case.env ]; then
         while IFS= read -r line; do [ -n "$line" ] && export "$line"; done < ./case.env
     fi
     if [ "$2" = headless ] && [ -x "$game/ss2_ga36_headless" ]; then
-        exec "$game/ss2_ga36_headless" "$rom"
+        # through the bundled loader, as ss_run: the binary's own interpreter path is relative to the game folder
+        unset LD_PRELOAD
+        exec "$game/libarmhf/ld-linux-armhf.so.3" --library-path "$game/libarmhf" "$game/ss2_ga36_headless" --game "$rom"
     fi
     ss_run
     exit $?
@@ -26,6 +31,7 @@ done
 [ -n "$game" ] || game="$here/shiningsourcega36"
 envsh=${DIAG_ENVSH:-$game/ga36-env.sh}
 export DIAG_ENVSH="$envsh"
+export DIAG_GAME="$game"   # each case re-runs this script with --child: it needs the folder too
 n=1
 while [ -e "$game/diagnostico-$(printf %03d $n)" ]; do n=$((n + 1)); done
 out="$game/diagnostico-$(printf %03d $n)"
@@ -118,7 +124,7 @@ for e in /sys/class/input/event*; do
     [ -d "$e" ] || continue
     echo "$(basename "$e") name=$(cat "$e/device/name" 2>/dev/null) ev=$(cat "$e/device/capabilities/ev" 2>/dev/null) key=$(cat "$e/device/capabilities/key" 2>/dev/null) abs=$(cat "$e/device/capabilities/abs" 2>/dev/null)"
 done > "$c/input-capabilities.txt" 2>&1
-dd if=/dev/fb0 of="$out/fb0-before.raw" bs=614400 count=1 2>/dev/null
+dd if=/dev/fb0 of="$out/fb0-before.raw" bs=65536 2>/dev/null   # the whole panel, 16 or 32 bpp
 # write speed: card and tmpfs
 for target in "$out" "$ram"; do
     t0=$(up); dd if=/dev/zero of="$target/ddtest.bin" bs=65536 count=64 conv=fsync 2>> "$c/dd.txt"; t1=$(up)
@@ -161,9 +167,14 @@ sample() {  # time rss_kb temp cpu0..3 freq
 }
 
 # run NAME BUDGET KIND [VAR=VALUE ...]   KIND: sdl | headless | sdl-pinned
+# Rehearsals in an emulator only: DIAG_BUDGET_MUL=N gives every case N times its seconds, DIAG_CASES=N runs the
+# first N cases alone.
 run() {
-    name=$1 budget=$2 kind=$3; shift 3
+    name=$1 budget=$(($2 * ${DIAG_BUDGET_MUL:-1})) kind=$3; shift 3
     index=$((index + 1))
+    if [ -n "${DIAG_CASES:-}" ] && [ "$index" -gt "$DIAG_CASES" ]; then
+        log "SKIP $name DIAG_CASES"; return
+    fi
     now=$(up)
     if awk -v a="$start" -v b="$now" -v d="$DEADLINE" 'BEGIN { exit !(b - a > d) }'; then
         log "SKIP $name deadline"; return
