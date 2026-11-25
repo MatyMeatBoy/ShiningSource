@@ -39,6 +39,7 @@ def main():
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--source", action="append", default=[], help="x,y,w,h of background to sample, base.png coordinates")
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--warm", action="store_true", help="only source blocks whose mean blue is below their mean red (no flat cool patches)")
     args = ap.parse_args()
     folder = args.masks / args.scene
     base = np.asarray(Image.open(folder / "base.png").convert("RGB"), dtype=np.int32)
@@ -52,6 +53,10 @@ def main():
         x, y, w, h = map(int, text.split(","))
         sources.append(base[y:y + h, x:x + w])
     blocks = candidates(sources, size)
+    if args.warm:
+        means = blocks.mean(axis=(1, 2))
+        blocks = blocks[means[:, 2] < means[:, 0]]
+        print("warm blocks:", len(blocks))
     known = ~paint
     out = base.copy()
     out[paint] = 0

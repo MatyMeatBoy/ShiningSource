@@ -304,7 +304,7 @@ enum { WIDE_FIELD_HOLD = 8, WIDE_FRONTEND_BLACKOUT = 30, WIDE_SIDE_PIXELS = (SS_
 enum { WIDE_16_9_SIDES = SS_WIDE_16_9_W - SS_SCREEN_W };
 static uint32_t wide_field[WIDE_SIDE_PIXELS];
 static int wide_field_extra, wide_field_age, wide_frontend_blackout;
-static unsigned wide_field_light, wide_transition_light;
+static unsigned wide_field_light, wide_transition_light, wide_plain_light = 256;
 static int font_state, texture_remade;
 
 static void make_textures(void)
@@ -2540,11 +2540,19 @@ static uint32_t wide_mix(uint32_t from, uint32_t to, unsigned part)
     return 0xff000000u | (rb & 0x00ff00ffu) | (g & 0x0000ff00u);
 }
 
+/* Where assets/ is: SS_ASSETS (ending in /) when set, else the program's folder. The GA36 starts the program
+ * through the bundled loader (ld-linux), whose folder SDL_GetBasePath gives there, from user/: it sets SS_ASSETS. */
+static const char *asset_base(void)
+{
+    const char *given = getenv("SS_ASSETS");
+    return given && given[0] ? given : SDL_GetBasePath();
+}
+
 /* The images are optional, with the left and right strips joined at column 128.
  * Crop from that join as the window changes width, with one artwork pixel per game pixel. */
 static SDL_Surface *load_wide_art(const char *name)
 {
-    const char *base = SDL_GetBasePath();
+    const char *base = asset_base();
     char relative[64], *path = NULL;
     SDL_Surface *image = NULL, *converted = NULL;
     SDL_snprintf(relative, sizeof relative, "assets/launcher/%s", name);
@@ -2724,6 +2732,12 @@ static void take_wide_picture(const uint32_t *frame, int width, int height, int 
                          SDL_GetRenderOutputSize(renderer, &output_width, &output_height) &&
                          output_width * 10 >= output_height * 22;
     scene = wide_scene_for_output(scene, wide_ultrawide);
+    if (canvas && extra >= 0) {
+        /* how lit the console's picture is, in steps of 1/16: the Soul field around a picture that keeps the
+         * console's composition sinks with it (a fade, a loading screen: black, as the 16:9 sides go) */
+        unsigned mean = wide_center_light(pixels, width, left) / 300, light = mean >= 48 ? 256 : mean * 256 / 48;
+        wide_plain_light = light >= 256 ? 256 : light & ~15u;
+    }
     if (wide_field_age <= WIDE_FIELD_HOLD)
         wide_field_age++;
     if (scene == SS_PRESENT_WIDE_FIELD) {
@@ -2871,21 +2885,32 @@ static int canvas_memory(void)
     return canvas_base != NULL;
 }
 
-/* A field frame: kept over the Soul field, for the fade that may follow it. */
+/* A field frame: kept for the fade that may follow it. Only what lies around the console's picture is used (see
+ * canvas_build), and it is kept as the game drew it, at its canvas place (0, transparent, where the frame does not
+ * reach); the Soul field under it is put in only when a fade is built. A plain copy of a part of the frame: this
+ * runs for every field frame. */
 static void canvas_keep_field(const uint32_t *frame, int width, int height)
 {
-    int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+    const int x0 = (canvas_w - width) / 2, y0 = (canvas_h - height) / 2;
+    const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
     if (!canvas_memory())
         return;
-    memcpy(canvas_field, canvas_base, (size_t)canvas_w * (size_t)canvas_h * sizeof(uint32_t));
-    for (int y = 0; y < height; y++) {
-        if (y + y0 < 0 || y + y0 >= canvas_h)
-            continue;
-        for (int x = 0; x < width; x++)
-            if (x + x0 >= 0 && x + x0 < canvas_w) {
-                size_t at = (size_t)(y + y0) * (size_t)canvas_w + (size_t)(x + x0);
-                canvas_field[at] = ss_fb_over(frame[(size_t)y * (size_t)width + (size_t)x], canvas_base[at]);
+    for (int y = 0; y < canvas_h; y++) {
+        uint32_t *row = canvas_field + (size_t)y * (size_t)canvas_w;
+        const int inside = y >= top && y < top + SS_SCREEN_H;   /* only the columns beside the picture are used */
+        const int fy = y - y0;
+        for (int part = 0; part < (inside ? 2 : 1); part++) {
+            int from = inside ? (part ? left + SS_SCREEN_W : 0) : 0;
+            int to = inside ? (part ? canvas_w : left) : canvas_w;
+            int a = from > x0 ? from : x0, b = to < x0 + width ? to : x0 + width;
+            if (fy < 0 || fy >= height || a >= b) {
+                memset(row + from, 0, (size_t)(to - from) * sizeof *row);
+                continue;
             }
+            memset(row + from, 0, (size_t)(a - from) * sizeof *row);
+            memcpy(row + a, frame + (size_t)fy * (size_t)width + (size_t)(a - x0), (size_t)(b - a) * sizeof *row);
+            memset(row + b, 0, (size_t)(to - b) * sizeof *row);
+        }
     }
     wide_field_light = wide_center_light(frame + (size_t)((height - SS_SCREEN_H) / 2) * (size_t)width, width, (width - SS_SCREEN_W) / 2);
     wide_field_age = 0;
@@ -2908,7 +2933,7 @@ static const SDL_Surface *flat_art(int scene, int width, int height)
         if (files[i].scene != scene)
             continue;
         if (!files[i].loaded) {
-            const char *base = SDL_GetBasePath();
+            const char *base = asset_base();
             char relative[64], *path = NULL;
             SDL_Surface *image = NULL;
             files[i].loaded = true;
@@ -2928,17 +2953,46 @@ static const SDL_Surface *flat_art(int scene, int width, int height)
     return NULL;
 }
 
+/* The seam between the console's picture and what surrounds it on the canvas: CANVAS_SEAM rows and columns next
+ * to the picture go from the picture's own edge pixel to what is beyond, as the 16:9 sides do from their edge, so
+ * the picture's border does not stand out as a hard step. Nothing of the picture itself is changed. */
+enum { CANVAS_SEAM = 6 };
+static void canvas_seams(const struct canvas_key *key)
+{
+    const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
+    for (int d = 0; d < CANVAS_SEAM; d++) {
+        const unsigned part = (unsigned)(d + 1) * 256 / (CANVAS_SEAM + 1);     /* 0: the edge, 256: beyond */
+        if (d < left)
+            for (int y = 0; y < SS_SCREEN_H; y++) {
+                uint32_t *row = canvas_decor + (size_t)(top + y) * (size_t)canvas_w;
+                row[left - 1 - d] = wide_mix(key->edges[0][y], row[left - 1 - d], part);
+                row[left + SS_SCREEN_W + d] = wide_mix(key->edges[1][y], row[left + SS_SCREEN_W + d], part);
+            }
+        if (d < top) {
+            uint32_t *above = canvas_decor + (size_t)(top - 1 - d) * (size_t)canvas_w + left;
+            uint32_t *below = canvas_decor + (size_t)(top + SS_SCREEN_H + d) * (size_t)canvas_w + left;
+            for (int x = 0; x < SS_SCREEN_W; x++) {
+                above[x] = wide_mix(key->rows[0][x], above[x], part);
+                below[x] = wide_mix(key->rows[1][x], below[x], part);
+            }
+        }
+    }
+}
+
 static void canvas_build(const struct canvas_key *key)
 {
     const size_t count = (size_t)canvas_w * (size_t)canvas_h;
     const int left = (canvas_w - SS_SCREEN_W) / 2, top = (canvas_h - SS_SCREEN_H) / 2;
     memcpy(canvas_decor, canvas_base, count * sizeof *canvas_decor);
-    if (key->mode == CANVAS_FADE) {
+    if (key->mode == CANVAS_PLAIN && key->light < 256) {
+        for (size_t i = 0; i < count; i++)
+            canvas_decor[i] = wide_mix(0xff000000u, canvas_base[i], (unsigned)key->light);
+    } else if (key->mode == CANVAS_FADE) {
         for (int y = 0; y < canvas_h; y++)
             for (int x = 0; x < canvas_w; x++)
                 if (y < top || y >= top + SS_SCREEN_H || x < left || x >= left + SS_SCREEN_W) {
                     size_t at = (size_t)y * (size_t)canvas_w + (size_t)x;
-                    canvas_decor[at] = wide_mix(0xff000000u, canvas_field[at], (unsigned)key->light);
+                    canvas_decor[at] = wide_mix(0xff000000u, ss_fb_over(canvas_field[at], canvas_base[at]), (unsigned)key->light);
                 }
     } else if (key->mode == CANVAS_SCENE) {
         /* Only real content around the picture: the scene's own side art at one art pixel per game pixel (no
@@ -2953,6 +3007,24 @@ static void canvas_build(const struct canvas_key *key)
                                                   (unsigned)key->light)
                                        : 0xff000000u;
         }
+        if (!flat && !art) {
+            /* No art: a picture whose border is one colour (a logo on white) goes on in that colour, which is
+             * what is beyond its border, not a stretched picture; any other stays framed by black. */
+            uint32_t one = key->edges[0][0] & 0xffffffu;
+            int uniform = 1;
+            for (int y = 0; uniform && y < SS_SCREEN_H; y++)
+                uniform = (key->edges[0][y] & 0xffffffu) == one && (key->edges[1][y] & 0xffffffu) == one;
+            for (int x = 0; uniform && x < SS_SCREEN_W; x++)
+                uniform = (key->rows[0][x] & 0xffffffu) == one && (key->rows[1][x] & 0xffffffu) == one;
+            if (uniform) {
+                for (size_t i = 0; i < count; i++) {
+                    int y = (int)(i / (size_t)canvas_w), x = (int)(i % (size_t)canvas_w);
+                    if (y < top || y >= top + SS_SCREEN_H || x < left || x >= left + SS_SCREEN_W)
+                        canvas_decor[i] = 0xff000000u | one;
+                }
+                return;
+            }
+        }
         if (flat)
             art = NULL;                 /* the Flat art has the 16:9 columns in it already */
         for (int y = 0; art && y < SS_SCREEN_H; y++) {
@@ -2964,6 +3036,7 @@ static void canvas_build(const struct canvas_key *key)
                     out[left + SS_SCREEN_W + d] = wide_mix(0xff000000u, art_row[art_half + d], (unsigned)key->light);
             }
         }
+        canvas_seams(key);
     }
 }
 
@@ -2983,6 +3056,7 @@ static void canvas_decor_update(int width, int height)
     memset(&key, 0, sizeof key);
     key.sides = sides_field;
     key.wide_pro = option_wide_pro;
+    key.light = sides_field ? (int)wide_plain_light : 256;     /* CANVAS_PLAIN: the Soul field's light */
     if (width > SS_SCREEN_W && wide_native_menu && (!option_wide_pro || !sides_field)) {
         key.mode = CANVAS_NATIVE;
     } else if (width > SS_SCREEN_W && option_wide_pro && sides_field && wide_picture && !wide_native_menu) {

@@ -28,6 +28,8 @@
 
 #define IO16(o)  (*(const uint16_t *)(uintptr_t)(SS_IO + (o)))
 #define IO32(o)  (*(const uint32_t *)(uintptr_t)(SS_IO + (o)))
+#define RIO16(o) (*(const uint16_t *)(uintptr_t)(R->io_ + (o)))     /* the registers of the row being drawn (row_state) */
+#define RIO32(o) (*(const uint32_t *)(uintptr_t)(R->io_ + (o)))
 #define PAL      ((const uint16_t *)(uintptr_t)SS_PALETTE)
 #define VRAM     ((const uint8_t *)(uintptr_t)SS_VRAM)
 #define OAM      ((const uint16_t *)(uintptr_t)SS_OAM)
@@ -57,6 +59,7 @@ struct line_regs {
  * take the band's state as R; the names below are its fields. */
 struct row_state {
     struct line_regs line_;
+    const uint8_t *io_;             /* the registers of the row: the frame's, or its line's own (frame.c's copies) */
     uint16_t line_bg_[4][MAXW];     /* per background: palette index + 1 (0 = transparent) */
     uint8_t raised_px_[MAXW];       /* on that row: a pixel of the raised status display (its windows are its own line's) */
     int row_lowered_;               /* the row shows the message window's lines (msg_drop) */
@@ -303,12 +306,12 @@ static void raised_hud_line(struct row_state *R, uint16_t *dst, int y, const uin
 
 static void text_background(struct row_state *R, int n, int Y)
 {
-    uint16_t cnt = IO16(0x08 + n * 2);
+    uint16_t cnt = RIO16(0x08 + n * 2);
     const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
     const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
     int colour256 = cnt & 0x80, size = cnt >> 14;
     int width = (size & 1) ? 512 : 256, height = (size & 2) ? 512 : 256;
-    int scroll_x = IO16(0x10 + n * 4) & 511, scroll_y = IO16(0x12 + n * 4) & 511;
+    int scroll_x = RIO16(0x10 + n * 4) & 511, scroll_y = RIO16(0x12 + n * 4) & 511;
     const struct ss_bg_source *source = &view.bg[n];
     uint16_t *dst = line_bg[n];
     int X, split, y = Y - view.shift_y;         /* the console's line shown on this row (outside 0..159 above and below) */
@@ -412,13 +415,13 @@ static void text_background(struct row_state *R, int n, int Y)
 
 static void affine_background(struct row_state *R, int n, int Y)
 {
-    uint16_t cnt = IO16(0x08 + n * 2);
+    uint16_t cnt = RIO16(0x08 + n * 2);
     const uint8_t *chars = VRAM + ((cnt >> 2) & 3) * 0x4000;
     const uint8_t *map = VRAM + ((cnt >> 8) & 31) * 0x800;
     int size = 128 << (cnt >> 14), wrap = cnt & 0x2000, X, y = Y - view.shift_y;
     int base = 0x20 + (n - 2) * 0x10;
-    int32_t pa = (int16_t)IO16(base), pb = (int16_t)IO16(base + 2), pc = (int16_t)IO16(base + 4), pd = (int16_t)IO16(base + 6);
-    int32_t ref_x = (int32_t)(IO32(base + 8) << 4) >> 4, ref_y = (int32_t)(IO32(base + 12) << 4) >> 4;
+    int32_t pa = (int16_t)RIO16(base), pb = (int16_t)RIO16(base + 2), pc = (int16_t)RIO16(base + 4), pd = (int16_t)RIO16(base + 6);
+    int32_t ref_x = (int32_t)(RIO32(base + 8) << 4) >> 4, ref_y = (int32_t)(RIO32(base + 12) << 4) >> 4;
 
     if (y < 0 || y >= H) {              /* no source map: nothing above or below the console's lines */
         memset(line_bg[n], 0, (size_t)view.width * sizeof line_bg[n][0]);
@@ -949,7 +952,7 @@ static void sprite_rows(void)
 static void sprite(struct row_state *R, int Y, const uint16_t *e, const uint16_t *oam, const uint8_t *tiles, const uint16_t *colours, int moved, struct obj_line *out)
 {
     uint16_t a0 = e[0], a1 = e[1], a2 = e[2];
-    uint16_t dispcnt = IO16(0);
+    uint16_t dispcnt = RIO16(0);
     int one_dimensional = dispcnt & 0x40, extra = view.width - W;
     int affine = a0 & 0x100, mode = (a0 >> 10) & 3;
     int width, height, box_w, box_h, x0, y0, row, colour256, tile, prio, bank, x, place, columns = view.width, ui = 0;
@@ -1186,12 +1189,12 @@ static uint16_t compose(struct row_state *R, int X, int Y, const struct obj_line
         /* window coordinates are native; the columns beyond the console's screen take the edge value, so a
          * full-screen mask (the scene-change blackout) covers them too */
         int x = X - (view.width - W) / 2;      /* the console's columns are always the middle ones */
-        uint16_t winin = IO16(0x48), winout = IO16(0x4A);
+        uint16_t winin = RIO16(0x48), winout = RIO16(0x4A);
         if (x < 0) x = 0;
         if (x > W - 1) x = W - 1;
-        if ((dispcnt & 0x2000) && inside(IO16(0x44) >> 8, IO16(0x44) & 255, y) && inside(IO16(0x40) >> 8, IO16(0x40) & 255, x))
+        if ((dispcnt & 0x2000) && inside(RIO16(0x44) >> 8, RIO16(0x44) & 255, y) && inside(RIO16(0x40) >> 8, RIO16(0x40) & 255, x))
             mask = winin & 0x3F;
-        else if ((dispcnt & 0x4000) && inside(IO16(0x46) >> 8, IO16(0x46) & 255, y) && inside(IO16(0x42) >> 8, IO16(0x42) & 255, x))
+        else if ((dispcnt & 0x4000) && inside(RIO16(0x46) >> 8, RIO16(0x46) & 255, y) && inside(RIO16(0x42) >> 8, RIO16(0x42) & 255, x))
             mask = (winin >> 8) & 0x3F;
         else if ((dispcnt & 0x8000) && (dispcnt & 0x1000) && (obj->flags[X] & 2))
             mask = (winout >> 8) & 0x3F;
@@ -1293,10 +1296,10 @@ static uint32_t hud_pixel(struct row_state *R, int x, int y, const struct obj_li
     uint32_t opacity = 255;
 
     if (line.windows) {
-        uint16_t winin = IO16(0x48), winout = IO16(0x4A);
-        if ((dispcnt & 0x2000) && inside(IO16(0x44) >> 8, IO16(0x44) & 255, y) && inside(IO16(0x40) >> 8, IO16(0x40) & 255, x))
+        uint16_t winin = RIO16(0x48), winout = RIO16(0x4A);
+        if ((dispcnt & 0x2000) && inside(RIO16(0x44) >> 8, RIO16(0x44) & 255, y) && inside(RIO16(0x40) >> 8, RIO16(0x40) & 255, x))
             mask = winin & 0x3F;
-        else if ((dispcnt & 0x4000) && inside(IO16(0x46) >> 8, IO16(0x46) & 255, y) && inside(IO16(0x42) >> 8, IO16(0x42) & 255, x))
+        else if ((dispcnt & 0x4000) && inside(RIO16(0x46) >> 8, RIO16(0x46) & 255, y) && inside(RIO16(0x42) >> 8, RIO16(0x42) & 255, x))
             mask = (winin >> 8) & 0x3F;
         else
             mask = winout & 0x3F;
@@ -1396,8 +1399,9 @@ void ss_ppu_unseen(const struct ss_view *requested)
 
 static uint32_t place[MAXH][4];     /* where each background was on each row of the last frame */
 
-/* Rows from .. to-1 of the picture with the band state R. With per-line registers the registers of each row's line
- * are put in place first (frame.c's copies); otherwise every row reads the frame's own. */
+/* Rows from .. to-1 of the picture with the band state R. With per-line registers each row reads its line's own
+ * (frame.c's copies, through R->io_); otherwise every row reads the frame's. The registers themselves are not
+ * written, so bands of a frame with per-line registers can be drawn at once too. */
 static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels, int from, int to, int per_line, int wide)
 {
     int mode = 0, y, Y, X, n;
@@ -1412,17 +1416,16 @@ static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels,
         line_y = y < 0 ? 0 : y >= H ? H - 1 : y;    /* the registers of the nearest line */
         if (view.shift_y)
             memset(raised_px, 0, (size_t)view.width);
-        if (per_line)
-            memcpy((void *)(uintptr_t)SS_IO, ss_line_registers(line_y), SS_LINE_REGISTERS);
+        R->io_ = per_line ? ss_line_registers(line_y) : (const uint8_t *)(uintptr_t)SS_IO;
         if (Y == from || per_line) {
-            line.dispcnt = IO16(0); line.bldcnt = IO16(0x50);
-            mode = line.dispcnt & 7; line.eva = IO16(0x52) & 31; line.evb = (IO16(0x52) >> 8) & 31; line.evy = IO16(0x54) & 31;
+            line.dispcnt = RIO16(0); line.bldcnt = RIO16(0x50);
+            mode = line.dispcnt & 7; line.eva = RIO16(0x52) & 31; line.evb = (RIO16(0x52) >> 8) & 31; line.evy = RIO16(0x54) & 31;
             line.windows = line.dispcnt & 0xE000;
             if (line.eva > 16) line.eva = 16;
             if (line.evb > 16) line.evb = 16;
             if (line.evy > 16) line.evy = 16;
             for (n = 0; n < 4; n++) {
-                line.prio[n] = IO16(0x08 + n * 2) & 3;
+                line.prio[n] = RIO16(0x08 + n * 2) & 3;
                 line.enabled[n] = (line.dispcnt & (0x100 << n)) && ((mode == 0) || (mode == 1 && n < 3) || (mode == 2 && n >= 2));
             }
             line.count = 0;
@@ -1435,9 +1438,9 @@ static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels,
         }
         for (n = 0; n < 4; n++) {
             /* where the background is: its scroll, or everything that places a rotated one */
-            uint32_t at = IO32(0x10 + n * 4) & 0x01FF01FFu;
+            uint32_t at = RIO32(0x10 + n * 4) & 0x01FF01FFu;
             if (n >= 2 && mode != 0)
-                at = IO32(0x20 + (n - 2) * 0x10) * 31u + IO32(0x24 + (n - 2) * 0x10) * 131u + IO32(0x28 + (n - 2) * 0x10) * 7u + IO32(0x2C + (n - 2) * 0x10);
+                at = RIO32(0x20 + (n - 2) * 0x10) * 31u + RIO32(0x24 + (n - 2) * 0x10) * 131u + RIO32(0x28 + (n - 2) * 0x10) * 7u + RIO32(0x2C + (n - 2) * 0x10);
             if (view.bg[n].map)
                 at += (uint32_t)view.shift << 9;
             line.moved[n] = at != place[Y][n];
@@ -1493,25 +1496,23 @@ static void render_rows(struct row_state *R, uint32_t *pixels, int pitch_pixels,
     }
 }
 
-static struct { uint32_t *pixels; int pitch, wide; } render_job;
+static struct { uint32_t *pixels; int pitch, wide, per_line; } render_job;
 
 static void render_band(void *unused, int band)
 {
     int from = band * ROW_BAND, to = from + ROW_BAND;
     (void)unused;
     if (to > view.height) to = view.height;
-    render_rows(&row_slots[band], render_job.pixels, render_job.pitch, from, to, 0, render_job.wide);
+    render_rows(&row_slots[band], render_job.pixels, render_job.pitch, from, to, render_job.per_line, render_job.wide);
 }
 
 void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *requested)
 {
     int wide;
-    uint8_t end_of_frame[SS_LINE_REGISTERS];
     int per_line = ss_line_registers(0) != NULL;
 
     take_view(requested);
     wide = view.width > W || view.height > H;
-    memcpy(end_of_frame, (const void *)(uintptr_t)SS_IO, sizeof end_of_frame);
     find_alternating();
     prepare_edge_fade();
     page_shown = view.world && wide && (IO16(0) & 7) == 0 && page_open();
@@ -1522,17 +1523,15 @@ void ss_ppu_render(uint32_t *pixels, int pitch_pixels, const struct ss_view *req
     hud_raise = hud_at_edges && !hud_apart && view.shift_y > 0 && !ss_frontend_picture();
     find_message_window();
     sprite_rows();
-    if (per_line || hud_apart) {
-        /* registers that change at a line are put in the registers themselves, row by row, and the status
-         * display's own layer is one: these frames are drawn in one band */
+    if (hud_apart) {
+        /* the status display's own layer is drawn with state shared by the rows (hud_line): one band */
         render_rows(&row_slots[0], pixels, pitch_pixels, 0, view.height, per_line, wide);
-        if (per_line)
-            memcpy((void *)(uintptr_t)SS_IO, end_of_frame, sizeof end_of_frame);
     } else {
-        /* the usual frame: bands of ROW_BAND rows, each with its own state, on as many cores as there are */
+        /* bands of ROW_BAND rows, each with its own state, on as many cores as there are */
         render_job.pixels = pixels;
         render_job.pitch = pitch_pixels;
         render_job.wide = wide;
+        render_job.per_line = per_line;
         ss_plat_parallel(render_band, NULL, (view.height + ROW_BAND - 1) / ROW_BAND);
     }
     keep_frame();

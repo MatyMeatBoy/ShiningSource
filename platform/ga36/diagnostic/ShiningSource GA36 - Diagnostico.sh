@@ -244,10 +244,10 @@ if [ "${DIAG_SET:-}" = fps ]; then
     F=SS_CANVAS=320x240
     run fps-logic 150 sdl "$F" SS_PICTURE=0 SS_QUIT=3000 SS_PROF=1 SS_STATS=1 "$P"
     # the opening (title, save, character creation) and, from frame 3900 on, the first field
-    run fps-render 260 sdl "$F" SS_PICTURE=2 SS_QUIT=6000 SS_PROF=1 "$P"
-    run fps-show 200 sdl "$F" SS_PICTURE=0:3900 SS_TEST_SLOW=17 SS_FRAMESKIP=0 SS_QUIT=5400 SS_PROF=3900:5400 SS_STATS=1 "$P"
-    run fps-play 160 sdl "$F" SS_QUIT=6000 SS_PROF=1 SS_STATS=1 SS_FB_SHOT=5000 "$P"
-    run fps-render-cpu 260 headless SS_FRAMES=6000 SS_TEST_RENDER=320 SS_VIEW=320 SS_VIEW_H=240 SS_PROF=1 "$P"
+    run fps-render 120 sdl "$F" SS_PICTURE=2 SS_QUIT=4500 SS_PROF=1 "$P"
+    run fps-show 90 sdl "$F" SS_PICTURE=0:3900 SS_TEST_SLOW=17 SS_FRAMESKIP=0 SS_QUIT=4800 SS_PROF=3900:4800 SS_STATS=1 "$P"
+    run fps-play 100 sdl "$F" SS_QUIT=3600 SS_PROF=1 SS_STATS=1 SS_FB_SHOT=3000 "$P"
+    run fps-render-cpu 110 headless SS_FRAMES=4500 SS_TEST_RENDER=320 SS_VIEW=320 SS_VIEW_H=240 SS_PROF=1 "$P"
     [ -n "$town" ] && run fps-town 150 sdl "$F" "SS_INPUT_FILE=$town" SS_PICTURE=0:9000 SS_TEST_WARP=9000:0:0 SS_QUIT=9900 SS_PROF=9000:9900 SS_STATS=1
 elif [ "${DIAG_SET:-}" != aborted ]; then
 run play-paced-320 80 sdl SS_FB_VIEW=320 SS_QUIT=2400 SS_FB_SHOT=1500 SS_STATS=1 SS_PROF=1 "$P"
