@@ -8,7 +8,7 @@ powers off. Files come back through a virtio serial port written into DIR/outbox
 Everything the guest prints is in DIR/serial.log. Inside the VM there is no display or sound: the panel is a
 regular 614400-byte file given to the program as SS_FBDEV, SDL_VIDEO_DRIVER=offscreen, SDL_AUDIO_DRIVER=dummy.
 
-    py -3.12 tools/ga36_vm_test.py smoke ZIP --rom ROM --out DIR [--frames 600]
+    py -3.12 tools/ga36_vm_test.py smoke ZIP --rom ROM --out DIR [--frames 600] [--input FILE]
         runs the package's launcher ("ShiningSource GA36.sh") until SS_QUIT; checks exit code 0, an "fbdev:" line
         in the program's output or logs, and a framebuffer that is not all black; writes DIR/panel.png (and
         DIR/shiningsource_fb.png when the program wrote shiningsource_fb.raw for SS_FB_SHOT).
@@ -227,14 +227,26 @@ def direct_command(pkg, binary, game_args):
     return (f'./{LOADER} --library-path libarmhf ./{binary} {game_args}')
 
 
+def panel_bytes(args):
+    """The panel file's size: 640x480 RGB565, or what --env SS_FBDEV_MODE=WxHxBPP says (the real GA36: 640x480x32)."""
+    for item in args.env:
+        key, _, value = item.partition('=')
+        match = re.fullmatch(r'(\d+)x(\d+)(?:x(16|32))?', value) if key == 'SS_FBDEV_MODE' else None
+        if match:
+            return int(match[1]) * int(match[2]) * int(match[3] or 16) // 8
+    return PANEL_BYTES
+
+
 def body_smoke(args, pkg):
-    env = program_env(args, {'SS_FBDEV': '/run/fb.bin', 'SS_QUIT': str(args.frames),
-                             'SS_FB_SHOT': str(max(1, args.frames - 10))})
+    extra = {'SS_FBDEV': '/run/fb.bin', 'SS_QUIT': str(args.frames), 'SS_FB_SHOT': str(max(1, args.frames - 10))}
+    if args.input:
+        extra['SS_INPUT_FILE'] = '/lab/input.txt'
+    env = program_env(args, extra)
     if args.direct:
         run = f'cd /lab/{pkg.game_dir} && {direct_command(pkg, "ss2_ga36", f"--game roms/{args.rom_name}")}'
     else:
         run = f'cd /lab && sh {shell_quote("./" + LAUNCHER)}'
-    return f'''dd if=/dev/zero of=/run/fb.bin bs={PANEL_BYTES} count=1 2>/dev/null
+    return f'''dd if=/dev/zero of=/run/fb.bin bs={panel_bytes(args)} count=1 2>/dev/null
 ( {exports(env).replace(chr(10), '; ')}{run} ) > /run/out/program.log 2>&1
 code=$?
 echo "GA36_EXIT=$code"
@@ -431,7 +443,7 @@ def check_smoke(args, out, serial, checks):
     line = re.search(r'^.*fbdev:.*$', text, re.M)
     checks.add('"fbdev:" line logged', line, line.group(0).strip() if line else 'not in program.log or user logs')
     panel = out / 'panel.raw' if out else None
-    if checks.add('panel file fetched', panel and panel.exists() and panel.stat().st_size == PANEL_BYTES,
+    if checks.add('panel file fetched', panel and panel.exists() and panel.stat().st_size == panel_bytes(args),
                   f'{panel.stat().st_size if panel and panel.exists() else 0} bytes'):
         info = fb_to_png(panel, args.out / 'panel.png')
         checks.add('panel not all black', info['non_black'], f"{info['non_black']} pixels lit; {args.out / 'panel.png'}")
@@ -563,6 +575,7 @@ def main():
     modes['smoke'].add_argument('--frames', type=int, default=600, help='SS_QUIT frame (default 600)')
     modes['smoke'].add_argument('--direct', action='store_true',
                                 help='start ss2_ga36 through the loader instead of the launcher script')
+    modes['smoke'].add_argument('--input', type=Path, help='SS_INPUT_FILE script')
     modes['hash'].add_argument('--frames', type=int, required=True)
     modes['hash'].add_argument('--input', type=Path, help='SS_INPUT_FILE script')
     modes['hash'].add_argument('--compare', type=Path, help='reference text with "frame N hash H" lines')
