@@ -11,7 +11,7 @@ Every ABI carries libSDL3.so and libmain.so. ARMv7 embeds the private PIC guest
 built by build_android32.py; the 64-bit ABIs carry ss2_game.macho/ss2_game.elf
 built by build_android_image.py. --test makes the game activity startable from adb.
 """
-import argparse, os, shutil, subprocess, sys, zipfile
+import argparse, os, re, shutil, subprocess, sys, zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -31,6 +31,10 @@ def main():
     parser.add_argument("--online", action="store_true", help="allow Gradle to download missing build dependencies")
     parser.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 4) // 2))
     args = parser.parse_args()
+    # The native log and crash reports name the version from android/CMakeLists.txt; it must be the app's.
+    app_version = re.search(r"versionName '([^']+)'", Path(__file__).read_text(encoding="utf-8")).group(1)
+    if f'SS_HOST_VERSION="{app_version}"' not in (build.ROOT / "android/CMakeLists.txt").read_text(encoding="utf-8"):
+        sys.exit(f"android/CMakeLists.txt: SS_HOST_VERSION is not the app's version {app_version}")
 
     tools = Path(os.environ.get("SHININGSOURCE_ANDROID", "D:/01Claude/ReKHCoM-build/toolchain/android"))
     sdk = tools / "sdk"
