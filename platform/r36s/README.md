@@ -42,8 +42,8 @@ Las partidas, la configuración y los registros se guardan en `shiningsource/use
 El juego evalúa en la consola los 52 logros oficiales de RetroAchievements (el set va en la carpeta) y muestra el
 aviso al desbloquear uno. Para que cuenten en tu cuenta, vincula la tarjeta una vez desde un PC con internet:
 copia en `shiningsource/` los archivos `retroachievements.auth` y `retroachievements.ini` de una
-tarjeta ya vinculada (ShiningSource o ReKHCoM GA36). Si la tarjeta ya está vinculada para ReKHCoM,
-ShiningSource usa esa misma sesión y no hace falta nada.
+tarjeta ya vinculada (ShiningSource o ReKHCoM). Si la tarjeta ya está vinculada para ReKHCoM
+(`ports/rekhcomr36s/retroachievements.auth`), ShiningSource usa esa misma sesión y no hace falta nada.
 
 Sin internet, los logros quedan en cola (`retroachievements_pending.txt`) y se envían la próxima vez que el juego
 arranque con conexión. `retroachievements_estado.txt` dice la cuenta, si hay conexión, cuántos esperan y la hora de
@@ -91,8 +91,8 @@ Saves, settings and logs are written to `shiningsource/user/`. Each start writes
 
 The game evaluates the 52 official RetroAchievements on the console (the set ships in the folder) and shows the
 notice when one unlocks. To have them count on your account, link the card once from a PC with internet: copy
-`retroachievements.auth` and `retroachievements.ini` of an already linked card folder (ShiningSource or ReKHCoM
-GA36) into `shiningsource/`. A card already linked for ReKHCoM is used as is.
+`retroachievements.auth` and `retroachievements.ini` of an already linked card folder (ShiningSource or ReKHCoM)
+into `shiningsource/`. A card already linked for ReKHCoM (`ports/rekhcomr36s/retroachievements.auth`) is used as is.
 
 Without internet the unlocks wait in `retroachievements_pending.txt` and are sent the next time the game starts
 online. `retroachievements_estado.txt` shows the account, the connection, how many wait and the console's clock.

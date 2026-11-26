@@ -11,7 +11,7 @@
     "porter": [
       "MatyMeatBoy"
     ],
-    "desc": "Native ARM64 port of Shining Soul II (GBA) built from its decompilation: Flat 4:3 picture at 2x, every core, DRM triple buffering. Version 0.9.5.",
+    "desc": "Native ARM64 port of Shining Soul II (GBA) built from its decompilation: Flat 4:3 picture at 2x, every core, DRM triple buffering. Version 0.9.6.",
     "inst": "Copy your own unmodified European Shining Soul II cartridge dump (AU2P) to ports/shiningsource/roms/rom.gba.",
     "genres": [
       "rpg"
