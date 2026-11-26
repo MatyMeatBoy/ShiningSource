@@ -17,7 +17,7 @@
   player still hears their own defeat tune, as on the cartridge.
 - **Two more values the cartridge passes by chance.** A scan of every call in
   the game against the cartridge's machine code found two functions whose
-  result the game uses but whose C returned nothing: a boss's contact check
+  result the game uses but whose C returned nothing: the first dungeon's last boss's contact check
   (it now runs every frame for player 1, as on the cartridge, instead of
   skipping up to 255 frames) and the item drop roll's last two kinds.
 - **Damage numbers and popups stay with the world.** In the wide views and in
