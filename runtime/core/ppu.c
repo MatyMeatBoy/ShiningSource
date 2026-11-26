@@ -214,8 +214,10 @@ static uint16_t tile_pixel(const uint8_t *chars, uint16_t entry, int tx, int ty,
 }
 
 /* `run` pixels of one tile, from its column `tx` on, of its row `ty`: what tile_pixel gives for each, with the
- * tile's row found once. An empty row of a 16-colour tile, by far the most common, is written in one go. */
-static void tile_run(uint16_t *dst, const uint8_t *chars, uint16_t entry, int tx, int ty, int run, int colour256)
+ * tile's row found once. An empty row of a 16-colour tile, by far the most common, is written in one go.
+ * Called for every tile of every row: always inlined, and the row's four bytes read with __builtin_memcpy (the
+ * guest builds are freestanding, so a plain memcpy is a call to the private C library's byte copy). */
+static inline __attribute__((always_inline)) void tile_run(uint16_t *dst, const uint8_t *chars, uint16_t entry, int tx, int ty, int run, int colour256)
 {
     int i;
     if (entry & 0x800) ty = 7 - ty;
@@ -228,7 +230,7 @@ static void tile_run(uint16_t *dst, const uint8_t *chars, uint16_t entry, int tx
     } else {
         uint32_t bits;
         int base = (entry >> 12) * 16 + 1;
-        memcpy(&bits, chars + (entry & 0x3FF) * 32 + ty * 4, 4);
+        __builtin_memcpy(&bits, chars + (entry & 0x3FF) * 32 + ty * 4, 4);
         if (!bits) {
             for (i = 0; i < run; i++) dst[i] = 0;
             return;
