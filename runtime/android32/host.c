@@ -503,13 +503,38 @@ static void fault_where(uint32_t address)
 enum { STRAY_PAGES = 4096 };
 static unsigned stray_pages;
 #ifdef __ANDROID__
-static int stray_page(int number, const siginfo_t *info, const ucontext_t *context)
+/* The host is a library there (the game and the runtime are linked into it): its code range is the executable
+ * segments of the object holding this file's code, found once before the handler is installed. */
+#include <link.h>
+static uintptr_t code_low, code_high;
+static int find_code(struct dl_phdr_info *object, size_t size, void *unused)
 {
-    (void)number; (void)info; (void)context;
-    return 0;                           /* the host is a library there: not yet (its code range is another) */
+    uintptr_t self = (uintptr_t)&find_code, low = UINTPTR_MAX, high = 0;
+    int i;
+    (void)size; (void)unused;
+    for (i = 0; i < object->dlpi_phnum; i++) {
+        const ElfW(Phdr) *segment = &object->dlpi_phdr[i];
+        if (segment->p_type == PT_LOAD && (segment->p_flags & PF_X)) {
+            uintptr_t start = object->dlpi_addr + segment->p_vaddr;
+            if (start < low) low = start;
+            if (start + segment->p_memsz > high) high = start + segment->p_memsz;
+        }
+    }
+    if (self < low || self >= high)
+        return 0;
+    code_low = low;
+    code_high = high;
+    return 1;
 }
+static void find_code_range(void) { dl_iterate_phdr(find_code, NULL); }
+#define CODE_LOW code_low
+#define CODE_HIGH code_high
 #else
 extern const char __executable_start[], etext[];
+static void find_code_range(void) {}
+#define CODE_LOW ((uintptr_t)__executable_start)
+#define CODE_HIGH ((uintptr_t)etext)
+#endif
 static int stray_page(int number, const siginfo_t *info, const ucontext_t *context)
 {
     uintptr_t address, page, pc;
@@ -517,7 +542,7 @@ static int stray_page(int number, const siginfo_t *info, const ucontext_t *conte
     if (number != SIGSEGV || !info || info->si_code != SEGV_MAPERR || !context || stray_pages >= STRAY_PAGES)
         return 0;
     pc = (uintptr_t)context->uc_mcontext.arm_pc;
-    if (pc < (uintptr_t)__executable_start || pc >= (uintptr_t)etext)
+    if (pc < CODE_LOW || pc >= CODE_HIGH)
         return 0;                       /* only the program's own code (the game and the runtime) */
     address = (uintptr_t)info->si_addr;
     if (address < 0x10000u)
@@ -533,7 +558,6 @@ static int stray_page(int number, const siginfo_t *info, const ucontext_t *conte
     stray_pages++;
     return 1;
 }
-#endif
 
 static void on_fault(int number, siginfo_t *info, void *raw)
 {
@@ -653,6 +677,7 @@ static void install_fault_log(void)
     stack.ss_sp = alternate_stack;
     stack.ss_size = sizeof alternate_stack;
     if (sigaltstack(&stack, NULL) != 0) return;
+    find_code_range();
     memset(&action, 0, sizeof action);
     action.sa_sigaction = on_fault;
     action.sa_flags = SA_ONSTACK | SA_SIGINFO;
