@@ -15,6 +15,11 @@
   others was an empty song on the music player; it is gone, and no cue that
   comes from another player can touch the music player any more. The fallen
   player still hears their own defeat tune, as on the cartridge.
+- **Two more values the cartridge passes by chance.** A scan of every call in
+  the game against the cartridge's machine code found two functions whose
+  result the game uses but whose C returned nothing: a boss's contact check
+  (it now runs every frame for player 1, as on the cartridge, instead of
+  skipping up to 255 frames) and the item drop roll's last two kinds.
 - **Damage numbers and popups stay with the world.** In the wide views and in
   Flat only the status display's own sprites go to the screen edges; damage
   numbers, item pickups, the enemies' "!" and effects no longer jump to the
