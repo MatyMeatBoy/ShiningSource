@@ -23,6 +23,14 @@ regular 614400-byte file given to the program as SS_FBDEV, SDL_VIDEO_DRIVER=offs
         one vCPU with -icount shift=0: the guest clock advances 1 ns per executed guest instruction, so the
         per-frame stage times in SS_FRAMELOG's frames.csv read as GUEST INSTRUCTIONS (ms = millions), not time.
         No caches, memory bandwidth or NEON latency are modelled: compare builds with it, do not read speed.
+    py -3.12 tools/ga36_vm_test.py ra ZIP --rom ROM --input tools/tests/play_input.txt --out DIR [--frames 3600]
+        RetroAchievements on the console with a pretend site (SS_RA_TEST_SERVER, tools/ra_fixture.py: no network,
+        no real account; the VM has no network card at all). The card holds ReKHCoM's folder with a pretend
+        sign-in (lab/rekhcomga36/retroachievements.auth) and the package's own folder none. Four runs of the
+        launcher: 0) as shipped (its 52 achievements, the real HTTPS path failing without a network; a test
+        notice at frame 120: the panel at the end, frame 200, is DIR/notice.png); 1) offline: the test achievement unlocks,
+        is recorded and queued for the account; 2) online: the queue is sent (awardachievement) and emptied;
+        3) Rebel (SS_CHEATS=hp): nothing is sent. Checks each run's retroachievements_estado.txt.
     py -3.12 tools/ga36_vm_test.py no-rom-selftest ZIP --out DIR
         without a ROM: lists the binary's libraries through the bundled loader (all must resolve inside
         libarmhf/), then starts it on a ROM path that does not exist and expects a clean exit with its
@@ -66,7 +74,7 @@ PANEL_BYTES = 640 * 480 * 2
 OUTBOX_PORT = 'ga36.outbox'
 HASH_LINE = re.compile(r'^\s*frame\s+(\d+)\s+hash\s+([0-9A-Fa-f]{8})', re.M)
 # Generous: with the host busy (other VMs, builds) the guest kernel alone took 2 minutes to reach PCI probing.
-DEFAULT_TIMEOUT = {'smoke': 2400, 'hash': 2400, 'diag': 5400, 'bench': 5400, 'no-rom-selftest': 1500}
+DEFAULT_TIMEOUT = {'smoke': 2400, 'hash': 2400, 'diag': 5400, 'bench': 5400, 'no-rom-selftest': 1500, 'ra': 7200}
 
 
 # ---- initramfs (newc cpio; copied from Dynabrothers1+2/tools/r36s_vm/run.py) ----
@@ -342,8 +350,42 @@ def body_selftest(args, pkg):
     return '\n'.join(lines) + '\n'
 
 
+RA_PHASES = (
+    # name, extra variables, a file removed before the run
+    ('shipped', {'SS_RA_TEST_NOTICE': 'Test notice', 'SS_QUIT': '200'}, ''),
+    ('offline', {'SS_RA_DIR': '/lab/ratest', 'SS_RA_TEST_SERVER': '/lab/raserver'}, ''),
+    ('online', {'SS_RA_DIR': '/lab/ratest', 'SS_RA_TEST_SERVER': '/lab/raserver'}, '/lab/raserver/offline'),
+    ('rebel', {'SS_RA_DIR': '/lab/ratest', 'SS_RA_TEST_SERVER': '/lab/raserver', 'SS_CHEATS': 'hp'},
+     '/lab/raserver/requests.log'),
+)
+
+
+def body_ra(args, pkg):
+    lines = ['dd if=/dev/zero of=/run/fb.bin bs=%d count=1 2>/dev/null' % panel_bytes(args)]
+    for name, extra, remove in RA_PHASES:
+        env = {'SS_FBDEV': '/run/fb.bin', 'SS_QUIT': str(args.frames), **extra}
+        if name != 'shipped':       # (a scripted run never submits: the shipped run must be a player's)
+            env['SS_INPUT_FILE'] = '/lab/input.txt'
+        env = program_env(args, env)
+        out = f'/run/out/{name}'
+        lines += [
+            f'mkdir -p {out}',
+            f'rm -f {remove}' if remove else ':',
+            f'( {exports(env).replace(chr(10), "; ")}cd /lab && sh {shell_quote("./" + LAUNCHER)} ) > {out}/program.log 2>&1',
+            f'echo "GA36_RA_{name.upper()}=$?"',
+            f'cp /lab/{pkg.game_dir}/user/last-run.log {out}/ 2>/dev/null',
+            f'for f in /lab/raserver/requests.log /lab/{pkg.game_dir}/retroachievements_estado.txt; do [ -f "$f" ] && cp "$f" {out}/; done',
+            f'[ -d /lab/ratest ] && cp -r /lab/ratest {out}/ratest',
+            f'ls -la /lab/{pkg.game_dir} > {out}/game-folder.txt',
+            f'cp /run/fb.bin {out}/panel.raw',
+            f'show {out}/last-run.log 40',
+        ]
+    lines.append('finish 0')
+    return '\n'.join(lines) + '\n'
+
+
 BODIES = {'smoke': body_smoke, 'hash': body_hash, 'diag': body_diag, 'bench': body_bench,
-          'no-rom-selftest': body_selftest}
+          'no-rom-selftest': body_selftest, 'ra': body_ra}
 
 
 # ---- running the VM ----
@@ -360,8 +402,21 @@ def build_initrd(args, pkg, path):
             tree.file(f'lab/{pkg.game_dir}/roms/{args.rom_name}', args.rom.read_bytes(), 0o644)
         if getattr(args, 'input', None):
             tree.file('lab/input.txt', args.input.read_bytes().replace(b'\r\n', b'\n'))
+        if args.mode == 'ra':
+            add_ra_fixture(tree, args.out / 'ra-fixture')
         cpio(out, 'TRAILER!!!', 0)
     (args.out / 'ga36-init.sh').write_text(script, newline='\n')
+
+
+def add_ra_fixture(tree, staging):
+    """The pretend site (offline at first), the test catalog in lab/ratest, and a pretend sign-in in ReKHCoM's
+    folder beside the package's (the card of a player who linked ReKHCoM only)."""
+    import ra_fixture
+    shutil.rmtree(staging, ignore_errors=True)
+    ra_fixture.write_server(staging / 'raserver', offline=True)
+    ra_fixture.write_ra_dir(staging / 'ratest', shared=staging / 'rekhcomga36/retroachievements.auth')
+    for path in sorted(p for p in staging.rglob('*') if p.is_file()):
+        tree.file('lab/' + path.relative_to(staging).as_posix(), path.read_bytes())
 
 
 def run_vm(args, initrd):
@@ -564,6 +619,58 @@ def check_selftest(args, pkg, out, serial, checks):
           f'{read_text(out / "launcher.log" if out else None).strip()[-200:]!r}')
 
 
+def one_line(text):
+    return text.strip().replace('\n', ' | ')
+
+
+def check_ra(args, out, serial, checks):
+    import ra_fixture
+    test = str(ra_fixture.TEST_ID)
+    phase = {name: (out / name if out else Path('missing')) for name, _, _ in RA_PHASES}
+    for name, _, _ in RA_PHASES:
+        code = marker(serial, f'GA36_RA_{name.upper()}')
+        checks.add(f'{name}: launcher exit 0', code == '0', f'exit {code}')
+    log = read_text(phase['shipped'] / 'last-run.log')
+    found = re.search(r'achievements: (\d+) of the set evaluated here', log)
+    checks.add("shipped: the package's set is evaluated", found and found[1] == '52', found[0] if found else 'no line')
+    state = read_text(phase['shipped'] / 'retroachievements_estado.txt')
+    checks.add("shipped: ReKHCoM's sign-in is used; the real HTTPS path finds no network",
+               ra_fixture.TEST_USER in state and 'ReKHCoM' in state and ('Not connected' in state or 'Sin conexion' in state)
+               and 'OpenSSL' not in state, one_line(state))
+    shot = phase['shipped'] / 'panel.raw'
+    if checks.add('shipped: panel with the notice fetched', shot.exists() and shot.stat().st_size == panel_bytes(args)):
+        info = fb_to_png(shot, args.out / 'notice.png')
+        print(f"  [info] notice picture: {info['non_black']} pixels lit; {args.out / 'notice.png'}")
+    offline = phase['offline']
+    log = read_text(offline / 'last-run.log')
+    checks.add('offline: the test achievement unlocks (local record)', f'local record, "Into the game (test)" ({test})' in log)
+    checks.add('offline: queued for the account', f'{test} queued for the account' in log)
+    pending = read_text(offline / 'ratest/retroachievements_pending.txt')
+    checks.add('offline: retroachievements_pending.txt holds it', pending.splitlines()[:1] == [ra_fixture.TEST_USER]
+               and any(line.split()[:1] == [test] for line in pending.splitlines()[1:]), one_line(pending))
+    requests = read_text(offline / 'requests.log')
+    checks.add('offline: no request got through', requests and all(line.startswith('offline ') for line in requests.splitlines()),
+               one_line(requests))
+    state = read_text(offline / 'ratest/retroachievements_estado.txt')
+    checks.add('offline: estado says not connected, 1 waiting', ('Not connected' in state or 'Sin conexion' in state)
+               and re.search(r'(Waiting to be sent|Pendientes de enviar): 1\b', state), one_line(state))
+    checks.add('offline: the shared sign-in is not copied', out and not (offline / 'ratest/retroachievements.auth').exists())
+    online = phase['online']
+    after = [line for line in read_text(online / 'requests.log').splitlines() if not line.startswith('offline ')]
+    checks.add('online: signed in, set loaded, queued unlock sent',
+               [line.split()[0] for line in after[:3]] == ['login2', 'achievementsets', 'startsession']
+               and f'awardachievement {test}' in after, ' | '.join(after))
+    state = read_text(online / 'ratest/retroachievements_estado.txt')
+    checks.add('online: estado says connected', 'Connected' in state or 'Conectado' in state, one_line(state))
+    print(f"  [info] online: pending after the run: {one_line(read_text(online / 'ratest/retroachievements_pending.txt'))!r}")
+    rebel = phase['rebel']
+    log = read_text(rebel / 'last-run.log')
+    checks.add('rebel: Rebel record', f'Rebel record, "Into the game (test)" ({test})' in log)
+    checks.add('rebel: no request at all', out and not (rebel / 'requests.log').exists())
+    state = read_text(rebel / 'ratest/retroachievements_estado.txt')
+    checks.add('rebel: estado says Rebel', 'Rebel' in state, one_line(state))
+
+
 def main():
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -597,6 +704,8 @@ def main():
     modes['bench'].add_argument('--skip', type=int, default=60, help='first frames left out of the statistics')
     modes['bench'].add_argument('--direct', action='store_true',
                                 help='start ss2_ga36 through the loader instead of the launcher script')
+    modes['ra'].add_argument('--frames', type=int, default=3600, help='SS_QUIT of the offline, online and Rebel runs')
+    modes['ra'].add_argument('--input', type=Path, required=True, help='SS_INPUT_FILE script (tools/tests/play_input.txt)')
     modes['no-rom-selftest'].add_argument('--expect', default=r'cannot open the ROM',
                                           help='regex the program must print without a ROM')
     args = parser.parse_args()
@@ -618,7 +727,7 @@ def main():
     checks.add('ss2_ga36 is a 32-bit ARM hard-float ELF', info.get('arm') and info.get('hard_float'),
                json.dumps(info))
     checks.add(f'{pkg.game_dir}/{LOADER} is in the package', pkg.has(f'{pkg.game_dir}/{LOADER}'))
-    if args.mode in ('smoke', 'bench', 'no-rom-selftest') and not getattr(args, 'direct', False):
+    if args.mode in ('smoke', 'bench', 'no-rom-selftest', 'ra') and not getattr(args, 'direct', False):
         checks.add(f'"{LAUNCHER}" is in the package', pkg.has(LAUNCHER))
     if args.mode == 'diag':
         checks.add(f'"{DIAGNOSTIC}" is in the package', pkg.has(DIAGNOSTIC))
@@ -653,6 +762,8 @@ def main():
         check_diag(args, out, serial, checks)
     elif args.mode == 'bench':
         check_bench(args, out, serial, checks, wall)
+    elif args.mode == 'ra':
+        check_ra(args, out, serial, checks)
     else:
         check_selftest(args, pkg, out, serial, checks)
 
