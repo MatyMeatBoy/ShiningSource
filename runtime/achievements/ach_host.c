@@ -270,7 +270,10 @@ static void account_start(void)
         KhRaSetEnabled(ra, 1);
         KhRaLogin(ra, "tester", "not-a-password", 1);
     }
-    KhRaSetRom(ra, rom_bytes, rom_size);
+    if (local_hash[0])
+        KhRaSetRomHash(ra, local_hash);     /* hashed once already (local_start): 16 MiB is felt on a handheld */
+    else
+        KhRaSetRom(ra, rom_bytes, rom_size);
 }
 
 static int account_sync_enabled(void)

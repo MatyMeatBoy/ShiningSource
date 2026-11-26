@@ -27,6 +27,7 @@ int KhRaEnabled(const KhRa* ra);
 void KhRaLogin(KhRa* ra, const char* username, const char* password, int remember);
 void KhRaLogout(KhRa* ra);
 void KhRaSetRom(KhRa* ra, const uint8_t* rom, size_t size);
+void KhRaSetRomHash(KhRa* ra, const char* hash); /* 32 hex digits, as rc_hash_generate gives */
 rc_client_t* KhRaClient(KhRa* ra);
 const char* KhRaStatus(const KhRa* ra);
 const char* KhRaHash(const KhRa* ra);

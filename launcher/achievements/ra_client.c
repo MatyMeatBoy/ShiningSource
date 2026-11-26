@@ -1060,6 +1060,17 @@ void KhRaSetRom(KhRa* ra, const uint8_t* rom, size_t size) {
     LoadGame(ra);
 }
 
+/* The same with the ROM's RetroAchievements hash already known (the game hashes it once for its local record). */
+void KhRaSetRomHash(KhRa* ra, const char* hash) {
+    if (!ra) return;
+    ++ra->generation; ra->account_progress_available = 0;
+    rc_client_unload_game(ra->client);
+    ra->hash[0] = 0;
+    if (!hash || strlen(hash) != 32) { SetStatus(ra, "Could not identify the ROM", 1); return; }
+    memcpy(ra->hash, hash, 33);
+    LoadGame(ra);
+}
+
 void KhRaInvalidate(KhRa* ra, const char* reason) {
     if (!ra || ra->invalidated) return;
     ra->invalidated = 1;
