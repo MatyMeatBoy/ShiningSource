@@ -243,7 +243,7 @@ fi
 if [ "${DIAG_SET:-}" = logros ]; then
     # ---- RetroAchievements: what the account link needs, then one short normal start in a copy of the files ----
     TOTAL=1
-    r="$out/logros.txt"
+    report="$out/logros.txt"
     {
         echo "== reloj"; date; date -u
         echo "== red"; (ip addr 2>/dev/null || ifconfig 2>/dev/null) | grep -E "^[0-9]+:|inet |UP|state" ; (ip route 2>/dev/null || route -n 2>/dev/null)
@@ -263,7 +263,7 @@ if [ "${DIAG_SET:-}" = logros ]; then
         done
         echo "== logros pendientes antes de la prueba"; cat "$game/retroachievements_pending.txt" 2>/dev/null | cut -d'|' -f2- || echo ninguno
         echo "== estado antes de la prueba"; cat "$game/retroachievements_estado.txt" 2>/dev/null || echo "sin archivo"
-    } > "$r" 2>&1
+    } > "$report" 2>&1
     # the start runs on copies: the real queue, records and the first-start notice marker are not touched
     w="$ram/logros"; mkdir -p "$w/achievements"
     cp "$game"/ra_set_*.json "$w/" 2>/dev/null
@@ -279,8 +279,8 @@ if [ "${DIAG_SET:-}" = logros ]; then
     {
         echo "== lo que dijo el juego"; grep -i "achievements\|retroach\|ssl" "$out/01-logros/stderr.txt" 2>/dev/null
         echo "== estado tras la prueba"; cat "$out/01-logros/retroachievements_estado.txt" 2>/dev/null || echo "sin archivo"
-    } >> "$r" 2>&1
-    cp "$r" "$game/diagnostico-logros.txt" 2>/dev/null
+    } >> "$report" 2>&1
+    cp "$report" "$game/diagnostico-logros.txt" 2>/dev/null
     say "-" "Listo: diagnostico-logros.txt"
 elif [ "${DIAG_SET:-}" = fps ]; then
     # ---- frame rate in Flat (320x240), stage by stage: what the 80-frames-a-second goal needs ----
