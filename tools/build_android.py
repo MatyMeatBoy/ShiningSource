@@ -32,7 +32,7 @@ def main():
     parser.add_argument("-j", type=int, default=max(1, (os.cpu_count() or 4) // 2))
     args = parser.parse_args()
     # The native log and crash reports name the version from android/CMakeLists.txt; it must be the app's.
-    app_version = re.search(r"versionName '([^']+)'", Path(__file__).read_text(encoding="utf-8")).group(1)
+    app_version = re.search(r"versionCode \d+; versionName '([^']+)'", Path(__file__).read_text(encoding="utf-8")).group(1)
     if f'SS_HOST_VERSION="{app_version}"' not in (build.ROOT / "android/CMakeLists.txt").read_text(encoding="utf-8"):
         sys.exit(f"android/CMakeLists.txt: SS_HOST_VERSION is not the app's version {app_version}")
 
