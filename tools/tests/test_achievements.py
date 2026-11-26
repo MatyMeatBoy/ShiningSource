@@ -137,7 +137,7 @@ class AchievementsTest(unittest.TestCase):
                     self.assertFalse(mode_marker.exists())
                 first = run_fixture(install, entry)
                 self.assertEqual(first.returncode,0,first.stderr)
-                self.assertEqual(first.stdout.strip(),expected)
+                self.assertEqual(first.stdout.strip(),expected,first.stderr)
                 self.assertEqual(mode_marker.exists(), entry == 'game')
                 self.assertEqual((badges/'badge_12345.png').read_bytes(),b'legacy badge')
                 self.assertEqual((badges/'badge_42.png').read_bytes(),b'current badge')

@@ -551,16 +551,19 @@ int ss_ach_start_file(const char *path)
     return 1;
 }
 
-/* Creating the marker exclusively makes the first notice persistent across updates and simultaneous starts. */
-static int first_mode_notice(void)
+/* The start notice is shown the first time achievements run here, and afterwards only when the account is synced
+ * again (online) after a start that was not: achievements/mode-seen keeps the mode last announced ("online" or
+ * "other"). */
+static int mode_notice_due(int online)
 {
-    char path[2200];
+    char path[2200], last[16] = "";
+    FILE *marker;
+    int seen;
     if (!active || getenv("SS_FRAMES")) return 0;   /* a headless run has no notice to show */
 #ifdef _WIN32
     {
         wchar_t wide[1200];
         DWORD attributes;
-        HANDLE marker;
         snprintf(path, sizeof path, "%s\\achievements", folder_utf8);
         if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 1200)) return 0;
         attributes = GetFileAttributesW(wide);
@@ -568,27 +571,36 @@ static int first_mode_notice(void)
             (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
         snprintf(path, sizeof path, "%s\\achievements\\mode-seen", folder_utf8);
         if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 1200)) return 0;
-        marker = CreateFileW(wide, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
-        if (marker == INVALID_HANDLE_VALUE) return 0;
-        CloseHandle(marker);
-        return 1;
+        marker = _wfopen(wide, L"rb");
+        seen = marker != NULL;
+        if (marker) { if (!fgets(last, sizeof last, marker)) last[0] = 0; fclose(marker); }
+        if (seen && !(online && strncmp(last, "online", 6) != 0) && !(!online && strncmp(last, "online", 6) == 0))
+            return 0;
+        marker = _wfopen(wide, L"wb");
     }
 #else
     {
         struct stat info;
-        int marker;
         snprintf(path, sizeof path, "%s/achievements", folder_utf8);
         if (lstat(path, &info) != 0 || !S_ISDIR(info.st_mode)) return 0;
         snprintf(path, sizeof path, "%s/achievements/mode-seen", folder_utf8);
-        marker = open(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
-        if (marker < 0) return 0;
-        close(marker);
-        return 1;
+        marker = fopen(path, "rb");
+        seen = marker != NULL;
+        if (marker) { if (!fgets(last, sizeof last, marker)) last[0] = 0; fclose(marker); }
+        if (seen && !(online && strncmp(last, "online", 6) != 0) && !(!online && strncmp(last, "online", 6) == 0))
+            return 0;
+        marker = fopen(path, "wb");
     }
 #endif
+    if (marker) {
+        fputs(online ? "online\n" : "other\n", marker);
+        fclose(marker);
+    }
+    /* first time: show; online again after a start that was not: show; dropping back to offline: only remembered */
+    return !seen || online;
 }
 
-/* Show the mode once per installation. Keep a diagnostic for each game's start. */
+/* Show the mode the first time and when the account is synced again (mode_notice_due). Keep a diagnostic for each game's start. */
 static void announce(void)
 {
     char line[200];
@@ -622,7 +634,7 @@ static void announce(void)
         snprintf(line, sizeof line, "%s", say("Achievements stay on this PC", "Los logros se guardan en este PC"));
 #endif
     }
-    if (first_mode_notice())
+    if (mode_notice_due(!rebel_run && account_sync_enabled()))
         ss_plat_notice(heading, line, rebel_run, NULL, 0);
     fprintf(stderr, "achievements: %s - %s\n", heading, line);
     status_update(1);
