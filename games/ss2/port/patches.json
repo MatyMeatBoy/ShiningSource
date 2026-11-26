@@ -880,8 +880,8 @@
  "code_0808D4A8.c": [
   {
    "why": "Port ABI: AU2P 0808F1FA–0808F202 passes the actor's stat block at +0x204 to the player-count scaler in r0.",
-   "find": "extern void resetF1E4(void) asm(\"sub_08019F60\");",
-   "replace": "extern void resetF1E4(s16 *) asm(\"sub_08019F60\");"
+   "find": "extern void resetF1E4(void) asm(",
+   "replace": "extern void resetF1E4(s16 *) asm("
   },
   {
    "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
@@ -902,8 +902,8 @@
   },
   {
    "why": "Port ABI: AU2P 0809CCAA–0809CCB2 passes the actor's stat block at +0x204 to the player-count scaler in r0.",
-   "find": "extern void s19F60(void) asm(\"sub_08019F60\");",
-   "replace": "extern void s19F60(s16 *) asm(\"sub_08019F60\");"
+   "find": "extern void s19F60(void) asm(",
+   "replace": "extern void s19F60(s16 *) asm("
   },
   {
    "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
