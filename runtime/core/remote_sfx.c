@@ -9,6 +9,7 @@ extern int sub_0800CD34(void);
 extern void sub_0805865C(int song);
 extern int32_t gUnk_030027D0;
 extern uint8_t *gUnk_03005CF4;
+extern const uint8_t gSongTable[];      /* { SongHeader *header; u16 player; u16 player2; } */
 
 static int enabled = -1;
 
@@ -41,11 +42,23 @@ int ss_remote_sfx_bow_allowed(int original_local, int clock_running)
     return original_local || (clock_running && ss_remote_sfx_allowed(0));
 }
 
+/* Is the song meant for music player 0, the one that plays the area's music? Starting any song there replaces
+ * that music (the cartridge's engine has no priority test). The game does this on purpose for the local player
+ * only: its defeat starts the empty songs 0x4D-0x54 on that player, then the defeat tune 0x44, and puts the area
+ * music back afterwards. */
+static int music_player_song(int song)
+{
+    const uint8_t *entry = gSongTable + (uint32_t)song * 8;
+    return song >= 0 && song <= 0x1AB && (entry[4] | entry[5] << 8) == 0;
+}
+
 /* Only call from an accepted remote presentation event, never from packet polling.
- * The sender already played its local cue. Keep the game's scene/audio guards. */
+ * The sender already played its local cue. Keep the game's scene/audio guards. A cue of another player never
+ * goes to the music player: nothing on this machine would start the area's music again (issue 6, the music
+ * stopped for everybody when one player was defeated, until a menu was opened and closed). */
 void ss_remote_sfx_event(int song)
 {
-    if (ss_remote_sfx_allowed(0) && !sub_0800CCCC() && !sub_0800CD34())
+    if (ss_remote_sfx_allowed(0) && !sub_0800CCCC() && !sub_0800CD34() && !music_player_song(song))
         sub_0805865C(song);
 }
 

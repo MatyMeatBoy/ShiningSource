@@ -692,11 +692,6 @@
    "why": "Restored Multiplayer Audio: companion hurt voice at the existing action/animation transition only. State13 excludes the local actor; repeated records do not replay the cue. Preserve class8 voice mapping.",
    "find": "                    temp_r0_151 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x10;",
    "replace": "                    if (((struct PlayerD368 *)arg0)->f20 == 0xD)\n                        ss_remote_sfx_event(((struct PlayerD368 *)arg0)->fC == 8 ? 0x4B : ((struct PlayerD368 *)arg0)->fC + 0x45);\n                    temp_r0_151 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x10;"
-  },
-  {
-   "why": "Restored Multiplayer Audio: companion death voice at the existing action/animation transition only. State13 excludes the local actor; repeated records do not replay the cue. Preserve class8 voice mapping.",
-   "find": "                    temp_r0_155 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x18;",
-   "replace": "                    if (((struct PlayerD368 *)arg0)->f20 == 0xD)\n                        ss_remote_sfx_event(((struct PlayerD368 *)arg0)->fC == 8 ? 0x53 : ((struct PlayerD368 *)arg0)->fC + 0x4D);\n                    temp_r0_155 = ((u8) M2C_FIELD(sp180, u8 *, 3) >> 4) + 0x18;"
   }
  ],
  "code_08073E2C.c": [

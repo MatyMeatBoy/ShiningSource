@@ -460,7 +460,8 @@ class RemoteSfx(unittest.TestCase):
         cls.exe = out / 'remote_sfx.exe'
         subprocess.run([
             build.clang(), '-std=c11', '-I', str(ROOT / 'runtime/include'),
-            str(source), str(ROOT / 'runtime/core/remote_sfx.c'), '-o', str(cls.exe),
+            str(source), str(ROOT / 'runtime/core/remote_sfx.c'), str(ROOT / 'tools/tests/song_table_stub.c'),
+            '-o', str(cls.exe),
         ], check=True)
 
     @classmethod
@@ -552,7 +553,7 @@ int main(void) {
             exe = out / 'setter_boundary.exe'
             subprocess.run([
                 build.clang(), '-std=c11', '-I', str(ROOT / 'runtime/include'),
-                str(source), str(core), '-o', str(exe),
+                str(source), str(core), str(ROOT / 'tools/tests/song_table_stub.c'), '-o', str(exe),
             ], check=True)
             subprocess.run([str(exe)], check=True)
 

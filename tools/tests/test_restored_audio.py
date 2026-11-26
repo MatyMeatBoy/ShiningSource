@@ -73,7 +73,7 @@ int main(void){
 '''.replace('@CASE@', case)
         self.compile_run(harness)
 
-    def test_companion_hurt_and_death_transitions_do_not_repeat(self):
+    def test_companion_hurt_transition_does_not_repeat_and_defeat_is_not_copied(self):
         source = prepared_source('code_0800CF58.c')
         start = source.index('            case 10:                                /* switch 19 */')
         hurt = source[source.index('                if (', start):source.index('                    temp_r0_152 =', start)] + '\n}\n'
@@ -111,14 +111,16 @@ int main(void){
  ss_remote_sfx_set_enabled(1);
  tick(&p,10);CHECK(played==1 && last==0x47);
  tick(&p,10);CHECK(played==1);
- tick(&p,11);CHECK(played==2 && last==0x4F);
+ /* a companion's defeat: the local songs 0x4D-0x54 are empty and on the music player, so nothing is copied
+  * (issue 6: the area music stopped for every other player) */
+ tick(&p,11);CHECK(played==1);
+ ss_remote_sfx_event(0x4F);ss_remote_sfx_event(0x53);ss_remote_sfx_event(1);CHECK(played==1);
+ action=0;p.fC=8;tick(&p,10);CHECK(played==2 && last==0x4B);
  tick(&p,11);CHECK(played==2);
- action=0;p.fC=8;tick(&p,10);CHECK(played==3 && last==0x4B);
- tick(&p,11);CHECK(played==4 && last==0x53);
- ss_remote_sfx_set_enabled(0);action=0;tick(&p,10);CHECK(played==4);
- ss_remote_sfx_set_enabled(1);p.f20=0;action=0;tick(&p,10);CHECK(played==4);
- p.f20=13;online=0;action=0;tick(&p,10);CHECK(played==4);
- online=1;world=1;action=0;tick(&p,10);CHECK(played==4);
+ ss_remote_sfx_set_enabled(0);action=0;tick(&p,10);CHECK(played==2);
+ ss_remote_sfx_set_enabled(1);p.f20=0;action=0;tick(&p,10);CHECK(played==2);
+ p.f20=13;online=0;action=0;tick(&p,10);CHECK(played==2);
+ online=1;world=1;action=0;tick(&p,10);CHECK(played==2);
  return 0;
 }
 '''.replace('@HURT@', hurt).replace('@DEATH@', death)
@@ -252,7 +254,8 @@ int32_t gUnk_030027D0;
 int ss_net_msg_send(const void *data, int size) { return 0; }
 ''')
             subprocess.run([build.clang(), '-std=c11', '-Wno-pointer-to-int-cast', '-Wno-int-to-pointer-cast', '-I', str(ROOT/'runtime/include'), str(source),
-                            str(ROOT/'runtime/core/remote_sfx.c'), '-o', str(exe)], check=True)
+                            str(ROOT/'runtime/core/remote_sfx.c'),
+                            str(ROOT/'tools/tests/song_table_stub.c'), '-o', str(exe)], check=True)
             subprocess.run([str(exe)], check=True)
 
 

@@ -183,6 +183,22 @@ void ss_rebel_frame(void)
         U32(protected_player + 0x30) &= ~0x100000u;     /* no protection the other players do not have */
         protected_player = 0;
     }
+    {   /* Test hook: SS_TEST_HP=F sets the local player's health to 1 once, at the first frame from F on where it
+         * has a character in play, so that the next blow defeats it (a defeat in a scripted online session, as
+         * tools/net_exit_test.sh ... 1@SS_TEST_HP=25000; it only ever harms the player that sets it). */
+        static long hp_at = -2;
+        if (hp_at == -2)
+            hp_at = getenv("SS_TEST_HP") ? strtol(getenv("SS_TEST_HP"), NULL, 10) : -1;
+        if (hp_at > 0 && (long)ss_frame_number() >= hp_at) {
+            uint32_t seat = (U32(LINK_FLAGS) & 2) ? (U32(REG_SIOCNT) >> 4) & 3 : 0;
+            uint32_t player = PLAYERS + seat * PLAYER_BYTES;
+            if (U16(player + 0x62) && U16(player + 0x20) != 11) {
+                U16(player + 0xC4) = 1;
+                fprintf(stderr, "test: health 1 for seat %u at frame %lu\n", (unsigned)seat, (unsigned long)ss_frame_number());
+                hp_at = -1;
+            }
+        }
+    }
     if (host_frame)
         host_frame(flags);
 }
