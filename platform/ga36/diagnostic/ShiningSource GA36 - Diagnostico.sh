@@ -223,6 +223,7 @@ run() {
 }
 
 P="SS_INPUT_FILE=$play"
+if [ "${DIAG_SET:-}" != logros ]; then
 # 1 the precise clock, alone (it may end with an illegal instruction)
 run clock-probe 25 headless SS_FRAMES=180 SS_PROF=1 SS_PROF_CLOCK=counter
 f="$out/01-clock-probe/frames.csv"
@@ -238,7 +239,50 @@ if [ "$(cat "$out/02-boot/exit.txt" 2>/dev/null)" != 0 ]; then
     say "-" "ABORTADO: el juego no arranco"
     DIAG_SET=aborted
 fi
-if [ "${DIAG_SET:-}" = fps ]; then
+fi
+if [ "${DIAG_SET:-}" = logros ]; then
+    # ---- RetroAchievements: what the account link needs, then one short normal start in a copy of the files ----
+    TOTAL=1
+    r="$out/logros.txt"
+    {
+        echo "== reloj"; date; date -u
+        echo "== red"; (ip addr 2>/dev/null || ifconfig 2>/dev/null) | grep -E "^[0-9]+:|inet |UP|state" ; (ip route 2>/dev/null || route -n 2>/dev/null)
+        echo "== dns"; cat /etc/resolv.conf 2>/dev/null
+        for h in retroachievements.org media.retroachievements.org; do
+            printf '%s: ' "$h"; (getent hosts "$h" 2>/dev/null || nslookup "$h" 2>/dev/null | tail -n 3 | tr '
+' ' ') ; echo
+        done
+        echo "== openssl en el paquete"; ls -la "$game/libarmhf" 2>/dev/null | grep -E "libssl|libcrypto"
+        echo "== certificados"; ls -la "$game/achievements/cacert.pem" 2>/dev/null
+        echo "== cuenta (solo tamano, nunca el contenido)"
+        for f in "$game/retroachievements.auth" "$game/../rekhcomga36/retroachievements.auth"; do
+            if [ -f "$f" ]; then echo "$f: $(wc -c < "$f") bytes"; else echo "$f: no existe"; fi
+        done
+        for f in "$game/retroachievements.ini" "$game/../rekhcomga36/retroachievements.ini"; do
+            [ -f "$f" ] && echo "$f: $(cat "$f")"
+        done
+        echo "== logros pendientes antes de la prueba"; cat "$game/retroachievements_pending.txt" 2>/dev/null | cut -d'|' -f2- || echo ninguno
+        echo "== estado antes de la prueba"; cat "$game/retroachievements_estado.txt" 2>/dev/null || echo "sin archivo"
+    } > "$r" 2>&1
+    # the start runs on copies: the real queue, records and the first-start notice marker are not touched
+    w="$ram/logros"; mkdir -p "$w/achievements"
+    cp "$game"/ra_set_*.json "$w/" 2>/dev/null
+    [ -d "$game/achievements/badges" ] && cp -r "$game/achievements/badges" "$w/achievements/"
+    cp "$game/achievements/cacert.pem" "$w/achievements/" 2>/dev/null
+    for f in retroachievements.ini retroachievements_pending.txt local_record.txt; do
+        [ -f "$game/$f" ] && cp "$game/$f" "$w/"
+    done
+    [ -f "$w/retroachievements.ini" ] || { [ -f "$game/../rekhcomga36/retroachievements.ini" ] && cp "$game/../rekhcomga36/retroachievements.ini" "$w/"; }
+    # the sign-in is read where it is (never copied: the case's files end up in the diagnostic folder)
+    auth="$game/retroachievements.auth"; [ -f "$auth" ] || auth="$game/../rekhcomga36/retroachievements.auth"
+    run logros 90 sdl SS_QUIT=1500 "SS_RA_DIR=$w" "SS_RA_SHARED_AUTH=$auth"
+    {
+        echo "== lo que dijo el juego"; grep -i "achievements\|retroach\|ssl" "$out/01-logros/stderr.txt" 2>/dev/null
+        echo "== estado tras la prueba"; cat "$out/01-logros/retroachievements_estado.txt" 2>/dev/null || echo "sin archivo"
+    } >> "$r" 2>&1
+    cp "$r" "$game/diagnostico-logros.txt" 2>/dev/null
+    say "-" "Listo: diagnostico-logros.txt"
+elif [ "${DIAG_SET:-}" = fps ]; then
     # ---- frame rate in Flat (320x240), stage by stage: what the 80-frames-a-second goal needs ----
     TOTAL=8
     F=SS_CANVAS=320x240

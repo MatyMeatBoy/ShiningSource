@@ -26,3 +26,11 @@ Tu partida
 - Tu partida guardada no se toca. Cada caso usa una carpeta temporal propia; la
   prueba de guardado trabaja sobre una copia que se borra al terminar.
 - No se conecta a internet: solo se anota si hay red.
+
+REVISAR LOGROS (RetroAchievements)
+- En Ports abre "ShiningSource GA36 - Revisar Logros" con la consola conectada a
+  internet. Tarda alrededor de 1 minuto y vuelve solo al menu.
+- Revisa el reloj, la red, el DNS, OpenSSL y los archivos de la cuenta (solo su
+  tamano, nunca su contenido) y arranca el juego un momento con copias de los
+  archivos: la cola real de logros y tu partida no se tocan.
+- El resultado queda en shiningsourcega36/diagnostico-logros.txt.
