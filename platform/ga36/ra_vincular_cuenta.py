@@ -1,6 +1,7 @@
 """Sign a handheld's card in to RetroAchievements for ShiningSource, from a PC with internet.
 
 usage: python ra_vincular_cuenta.py [SD root, default F:/]
+       python3 ra_vincular_cuenta.py GAME_FOLDER     (a folder holding the game's ra_set_*.json: Linux x64, R36S)
 
 The game reads its session from <SD>/ports/shiningsourcega36/retroachievements.auth (128-byte user name,
 128-byte token, both zero-padded) and retroachievements.ini (enabled=1), the same files ReKHCoM GA36 uses.
@@ -19,7 +20,7 @@ import urllib.request
 from pathlib import Path
 
 root = Path(sys.argv[1] if len(sys.argv) > 1 else 'F:/')
-game = root / 'ports' / 'shiningsourcega36'
+game = root if any(root.glob('ra_set_*.json')) else root / 'ports' / 'shiningsourcega36'
 if not game.is_dir():
     raise SystemExit(f'No encuentro {game}. Pon la SD con ShiningSource GA36 instalado.')
 auth_file = game / 'retroachievements.auth'

@@ -28,6 +28,10 @@ def main():
     for name in SIDE_ART:
         path = 'assets/launcher/' + name
         files[path] = ROOT/path
+    import ra_build                                      # RetroAchievements: the set, badges, CA bundle
+    files.update(ra_build.package_files())
+    files['ra_vincular_cuenta.py'] = ROOT/'platform/ga36/ra_vincular_cuenta.py'
+    files['shiningsource.sh'] = ROOT/'platform/linux/shiningsource.sh'
     # The cross-build's SDL SDK supplies its own upstream license.
     if not files['SDL3-LICENSE.txt'].is_file():
         import os
@@ -41,9 +45,14 @@ def main():
     data = {name: path.read_bytes() for name, path in files.items()}
     data['LINUX.txt'] = (f'ShiningSource {version} Linux x64\n\n'
         'Extract the complete folder. Supply your own European ROM:\n'
-        '  LD_LIBRARY_PATH=./lib ./ss2_linux64 /path/to/your.gba\n\n'
-        'No mmap_min_addr adjustment is required. Restored Multiplayer Audio is on\n'
-        'by default in Options; SS_REMOTE_SFX=0 disables it. Online rules remain 7.\n'
+        '  ./shiningsource.sh /path/to/your.gba'+'\n'
+        '  (or: LD_LIBRARY_PATH=./lib ./ss2_linux64 /path/to/your.gba)'+'\n\n'
+        'Achievements: shiningsource.sh evaluates the RetroAchievements set in this folder'+'\n'
+        '(notices with badges, local record). To send unlocks to your account, sign in'+'\n'
+        'once: python3 ra_vincular_cuenta.py . (it asks for retroachievements_cuenta.txt),'+'\n'
+        'then unlocks go out over the system OpenSSL (softcore); SS_RA_SUBMIT=0 keeps them here.'+'\n\n'
+        'No mmap_min_addr adjustment is required. Restored Multiplayer Audio is on'+'\n'
+        'by default in Options; SS_REMOTE_SFX=0 disables it. Online rules remain 7.'+'\n'
         f'See docs/RELEASE_{version}.md for verification and platform limits.\n').encode()
     manifest = {name: hashlib.sha256(body).hexdigest() for name, body in data.items()}
     data['MANIFEST-SHA256.json'] = (json.dumps(manifest, indent=2)+'\n').encode()
@@ -53,7 +62,7 @@ def main():
         for name, body in sorted(data.items()):
             info = tarfile.TarInfo(prefix+name)
             info.size = len(body)
-            info.mode = 0o755 if name in ('ss2_linux64', 'lib/libSDL3.so.0') else 0o644
+            info.mode = 0o755 if name in ('ss2_linux64', 'lib/libSDL3.so.0', 'shiningsource.sh') else 0o644
             tar.addfile(info, io.BytesIO(body))
     with tarfile.open(archive) as tar:
         assert all(m.isfile() and m.name.startswith(prefix) for m in tar.getmembers())
