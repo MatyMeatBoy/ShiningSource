@@ -21,3 +21,17 @@
   and the blink smoothing in independent ranges, so platforms with worker
   threads use every core; each row only decodes the sprites that reach it. The
   pictures are identical on every platform and view (checked frame by frame).
+- **GA36 v0.1.6** (published first as the prerelease v0.1.6-ga36). The screen
+  goes through DRM with three buffers, so the picture is never torn, and the
+  panel is retimed from 55.13 Hz to 59.73 Hz by shortening its blanking: the
+  panel paces the game and every frame is shown once (it falls back to 55 Hz
+  by itself). Scene art is loaded at start, so changing scene no longer
+  stutters. In Flat, doors no longer show two frames of the console's layout,
+  NPCs below the picture no longer appear at the top, and damage numbers,
+  pickups, the enemies' "!" and effects stay with the world: only the status
+  display goes to the edges. Every shop, the bank, Objects and Status have the
+  status display at the top (2 px from the edge) and the shop dialogue at the
+  bottom; Objects/Status fill the screen with their moving marble; shops use
+  the approved 16:9 art fading to black; sequences without art (the intro
+  book) sit on black with soft edges. Verified on the console by the user,
+  in QEMU (fb and DRM) and by 4 x 30,000 frames of random play on PC.
