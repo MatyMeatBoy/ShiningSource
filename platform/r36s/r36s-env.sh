@@ -67,6 +67,10 @@ export SDL_AUDIO_DRIVER="${SDL_AUDIO_DRIVER:-${SDL_AUDIODRIVER:-alsa}}"
 # SS_RA_SUBMIT=0 in user/shiningsource.env keeps every unlock on the console.
 export SS_RA_DIR="${SS_RA_DIR-$game}"
 export SS_RA_SUBMIT="${SS_RA_SUBMIT-1}"
+# Notices and retroachievements_estado.txt in the language the game was set to (its first-start choice).
+if [ -z "${SS_LANG+set}" ] && [ -f "$game/user/shiningsource-language.txt" ]; then
+    case "$(head -c 2 "$game/user/shiningsource-language.txt")" in es) export SS_LANG=es ;; esac
+fi
 if [ -z "${SS_RA_SHARED_AUTH+set}" ]; then
     SS_RA_SHARED_AUTH=
     for ss_file in "$game/../rekhcomr36s/retroachievements.auth" "$game/../rekhcomga36/retroachievements.auth"; do
