@@ -72,7 +72,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#if defined(__ARM_NEON) && defined(__aarch64__)
+#if defined(__ARM_NEON)   /* 64-bit ARM, and the GA36 (ARMv7 with NEON); Android ARMv7 is built without NEON */
 #include <arm_neon.h>
 #define SS_FINISH_NEON 1
 #endif

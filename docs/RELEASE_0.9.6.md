@@ -44,6 +44,23 @@
   without the joystick capture that is not in the repository. The whole suite
   passes.
 
+## R36S
+
+- **Built for its own processor.** The R36S gets its own 64-bit game image,
+  built for the Cortex-A35, with the runtime at the highest optimisation.
+- **Faster picture finishing.** The step that smooths the game's blinking
+  sprites runs eight pixels at a time with NEON.
+  - About 25 % fewer instructions per frame: finishing −67 %, drawing −6.6 %.
+  - The pictures are identical.
+  - The same NEON step also runs on the GA36 (v0.1.9, same Flat picture
+    B543DC5D as PC) and on Android ARM64.
+- **What the GA36 got:** the panel paces the game, the panel mode is
+  remembered, and the panel settles before it is measured. Achievements reuse
+  ReKHCoM's R36S sign-in (`ports/rekhcomr36s`) when it is on the card.
+- **Verified in an emulated R36S** (4 × Cortex-A35, dArkOS root): 3,000 frames
+  identical to PC, the same Flat pictures on 1 and 4 threads, and the display
+  through DRM with page flips. Not yet run on a physical R36S.
+
 ## Installation
 
 - **Windows:** extract the zip and run `ShiningSource.exe`.
