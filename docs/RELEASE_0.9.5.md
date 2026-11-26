@@ -34,6 +34,12 @@
   too, as on PC and ARM64, instead of closing the game. Random-input stress
   test: 4 maps x 30,000 frames, no crash, memory stable.
 
+- **64-bit Linux and Android hosts.** The ARM64 host serves the picture's
+  pieces on a thread per core, each entering the game image on its own stack
+  below 4 GiB. A service a host does not offer now reaches the image as
+  "none" instead of as a jump to address 0: the multi-core renderer's first
+  call would have hit it on Android (ARM64, x86-64) and Linux (ARM64, x86-64).
+
 ## Flat (4:3)
 
 - Every shop, the bank, Objects and Status have the status display at the top
@@ -52,6 +58,20 @@
   of frames on time. The bottom face button is the GBA's A and the right one its
   B. The diagnostic package adds a "Medir FPS" entry.
 
+## R36S
+
+- The R36S package (RK3326, 64-bit ArkOS / dArkOS and the like)
+  now runs like the GA36: always Flat, 320x240 at exactly 2x on the 640x480
+  panel, with the Flat art; the picture goes to the panel through DRM with
+  three buffers (never torn), the panel's measured rate paces the game when it
+  is near 59.73 Hz and the sound follows it; the picture is drawn on the four
+  Cortex-A35 cores. It is built from this tree's ARM64 game image (no longer
+  taken from a published APK) against glibc 2.29 symbols, so ArkOS's 2.30 runs
+  it. `last-run.log` ends with the frame rate and frame times. Checked in an
+  emulated R36S (4 x Cortex-A35, dArkOS root, Ubuntu 20.04's glibc): 3,000
+  frames identical to PC and the same Flat, 240 and 320 pictures. Not yet run
+  on a physical R36S.
+
 ## Installation
 
 - **Windows:** extract the zip and run `ShiningSource.exe`.
@@ -60,6 +80,8 @@
 - **GA36:** extract the GA36 zip into the card's `ports` folder and copy your
   own unmodified European Shining Soul II dump to
   `shiningsourcega36/roms/rom.gba`. Start + Select opens the options.
+- **R36S:** extract the R36S zip into the card's `ports` folder and copy your
+  dump to `shiningsource/roms/rom.gba`; see the README inside.
 
 No game data is included: every platform needs your own European
 Shining Soul II (AU2P) dump.

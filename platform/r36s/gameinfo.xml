@@ -4,6 +4,6 @@
     <path>./ShiningSource.sh</path>
     <name>ShiningSource</name>
     <genre>Action RPG</genre>
-    <desc>Native ARM64 runtime for Shining Soul II. Requires the European cartridge dump.</desc>
+    <desc>Native ARM64 port of Shining Soul II for the R36S (Flat 4:3 picture). Requires your own European cartridge dump.</desc>
   </game>
 </gameList>
