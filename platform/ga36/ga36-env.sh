@@ -49,6 +49,23 @@ export SS_ASSETS="${SS_ASSETS-$game/}"
 # A B Select Start Right Left Up Down R L). A binding the player saves in the options still wins.
 export SS_PAD="${SS_PAD-0,1,4,6,14,13,11,12,10,9}"
 export SDL_VIDEO_DRIVER="${SDL_VIDEO_DRIVER:-offscreen}"
+
+# RetroAchievements (runtime/achievements): the set ships in this folder (ra_set_*.json, achievements/badges) and is
+# evaluated on the console. The card is linked to an account from a PC (Vincular-RetroAchievements-ShiningSource.bat
+# in this folder writes retroachievements.auth); without that, the sign-in of ReKHCoM on the same card is used.
+# Unlocks go to the account (softcore) when the console has internet, else wait in retroachievements_pending.txt
+# for the next start online; retroachievements_estado.txt says how it stands. A Rebel run (cheats) sends nothing.
+# SS_RA_SUBMIT=0 in user/shiningsource.env keeps every unlock on the console.
+export SS_RA_DIR="${SS_RA_DIR-$game}"
+export SS_RA_SUBMIT="${SS_RA_SUBMIT-1}"
+if [ -z "${SS_RA_SHARED_AUTH+set}" ]; then
+    SS_RA_SHARED_AUTH=
+    for ss_file in "$game/../rekhcomga36/retroachievements.auth" "$game/../rekhcomr36s/retroachievements.auth"; do
+        if [ -f "$ss_file" ]; then SS_RA_SHARED_AUTH=$ss_file; break; fi
+    done
+    unset ss_file
+fi
+export SS_RA_SHARED_AUTH
 export SDL_AUDIO_DRIVER="${SDL_AUDIO_DRIVER:-alsa}"
 
 if [ -z "${SDL_GAMECONTROLLERCONFIG_FILE:-}" ] && [ -r "$game/gamecontrollerdb.txt" ]; then

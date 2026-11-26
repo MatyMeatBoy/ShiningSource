@@ -58,6 +58,23 @@ export SS_ASSETS="${SS_ASSETS-$game/}"
 # Without the framebuffer path SDL3 opens a window: full screen at the panel's mode.
 export SS_WINDOW_MODE="${SS_WINDOW_MODE-borderless}"
 export SDL_AUDIO_DRIVER="${SDL_AUDIO_DRIVER:-${SDL_AUDIODRIVER:-alsa}}"
+
+# RetroAchievements (runtime/achievements): the set ships in this folder (ra_set_*.json, achievements/badges) and is
+# evaluated on the console. The card is linked to an account from a PC (copy retroachievements.auth and .ini
+# of a linked card folder here); without that, the sign-in of ReKHCoM on the same card is used.
+# Unlocks go to the account (softcore) when the console has internet, else wait in retroachievements_pending.txt
+# for the next start online; retroachievements_estado.txt says how it stands. A Rebel run (cheats) sends nothing.
+# SS_RA_SUBMIT=0 in user/shiningsource.env keeps every unlock on the console.
+export SS_RA_DIR="${SS_RA_DIR-$game}"
+export SS_RA_SUBMIT="${SS_RA_SUBMIT-1}"
+if [ -z "${SS_RA_SHARED_AUTH+set}" ]; then
+    SS_RA_SHARED_AUTH=
+    for ss_file in "$game/../rekhcomr36s/retroachievements.auth" "$game/../rekhcomga36/retroachievements.auth"; do
+        if [ -f "$ss_file" ]; then SS_RA_SHARED_AUTH=$ss_file; break; fi
+    done
+    unset ss_file
+fi
+export SS_RA_SHARED_AUTH
 # Frame times, rate and stage costs at the end of last-run.log (cheap: a clock reading per stage).
 export SS_STATS="${SS_STATS-1}"
 export SS_PROF="${SS_PROF-1}"

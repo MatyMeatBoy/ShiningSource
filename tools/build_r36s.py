@@ -42,6 +42,7 @@ if 'SHININGSOURCE_LLVM_MINGW' not in os.environ:
             os.environ['SHININGSOURCE_LLVM_MINGW'] = _hint
             break
 import build
+import ra_build
 from launcher_art import SIDE_ART
 
 ROOT = build.ROOT
@@ -113,10 +114,13 @@ def host(cc, sysroot, sdl_source, sdl_library, name, headless, version):
         sources = ['runtime/host64/host_linux.c', 'runtime/host64/plat_null.c', 'runtime/plat/net_udp.c']
         libraries = [sdl_library, '-lm', '-lpthread']     # (host_linux.c checks the ROM with SDL_crc32)
     else:
-        flags.append('-DSS_FBDEV=1')
+        # with the achievements (tools/ra_build.py): HTTPS through the firmware's own OpenSSL (libssl.so.1.1 on
+        # Ubuntu 20.04 based ones), opened at run time
+        flags += ['-DSS_FBDEV=1', *ra_build.flags(handheld=True)]
         sources = ['runtime/host64/host_linux.c', 'runtime/win32/plat_sdl.c',
-                   *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'runtime/plat').glob('*.c'))]
-        libraries = [sdl_library, '-lm', '-lpthread']
+                   *sorted(p.relative_to(ROOT).as_posix() for p in (ROOT / 'runtime/plat').glob('*.c')),
+                   *(p.relative_to(ROOT).as_posix() for p in ra_build.sources())]
+        libraries = [sdl_library, '-lm', '-lpthread', *ra_build.LIBRARIES]
     target = STAGE / name
     run([cc, *flags, *[ROOT / s for s in sources], *libraries, '-Wl,--build-id', '-Wl,-z,noexecstack',
          '-Wl,--disable-new-dtags', '-Wl,-rpath,$ORIGIN/lib', '-o', target], 'host link ' + name)
@@ -157,6 +161,8 @@ def package(version, executables, image, sdl_source, sdl_library, audit, output)
         payload[f'{GAME}/{path.name}'] = path.read_bytes()
     for name in SIDE_ART:
         payload[f'{GAME}/assets/launcher/{name}'] = (ROOT / 'assets/launcher' / name).read_bytes()
+    for name, source in ra_build.package_files().items():     # the RetroAchievements set and badges, a CA bundle
+        payload[f'{GAME}/{name}'] = source.read_bytes()
     assert not any(Path(n).suffix.lower() in ('.gba', '.sav') for n in payload), 'a ROM or a save must never be packaged'
     manifest = {
         'name': 'ShiningSource R36S',

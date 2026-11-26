@@ -39,7 +39,6 @@ int main(int argc, char **argv) {
     }
     if (argc != 2) return 1;
     snprintf(folder_utf8, sizeof folder_utf8, "%s", argv[1]);
-    MultiByteToWideChar(CP_UTF8, 0, argv[1], -1, folder, 900);
     if (VirtualAlloc((void *)SS_IWRAM, 0x8000, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE) != (void *)SS_IWRAM) return 2;
     rom_bytes=rom; rom_size=sizeof rom;
     local_start();

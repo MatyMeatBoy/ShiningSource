@@ -17,6 +17,9 @@ extern char __image_start[], __image_end[], __text_end[];
 #endif
 
 void AgbMain(void);
+#ifdef SS_REBASED
+void *ss_host(uint32_t gba);            /* console/rebase.c */
+#endif
 
 /* ---- coroutines: a saved stack pointer per coroutine, stacks in low memory from the host ---- */
 
@@ -170,6 +173,12 @@ static int guest_option(int which, int value)
     case SS_OPTION_REMOTE_SFX:
         ss_remote_sfx_set_enabled(value);
         return ss_remote_sfx_enabled(); /* cached after setter: no host services */
+    case SS_OPTION_GBA_ADDRESS:
+#ifdef SS_REBASED
+        return (int)(uint32_t)(uintptr_t)ss_host((uint32_t)value);
+#else
+        return value;                   /* the GBA's memory is at its own addresses */
+#endif
     }
     return 0;
 }

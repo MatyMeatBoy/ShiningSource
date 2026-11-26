@@ -13,7 +13,7 @@ arm-linux-gnueabihf with hard float, linked with the same host
   SHININGSOURCE_ARMHF     folder with sysroot/ and sdl/{include,lib} (default D:/01Claude/ReKHCoM/linux/armhf)
 
 Output, under build/ga36/<game>/:
-  <game>_ga36             SDL3 host + guest (KMSDRM/fbdev video, ALSA audio)
+  <game>_ga36             SDL3 host + guest (KMSDRM/fbdev video, ALSA audio, RetroAchievements)
   <game>_ga36_headless    no SDL, ROM as argv[1] (for emulator tests)
   libarmhf/               with --bundled-loader (default): the sysroot's loader, glibc and the
                           libraries SDL3 needs; the executables use libarmhf/ld-linux-armhf.so.3
@@ -40,6 +40,7 @@ if 'SHININGSOURCE_LLVM_MINGW' not in os.environ:
 import build
 import build_android32
 import link
+import ra_build
 import rebased
 
 ROOT = build.ROOT
@@ -148,9 +149,10 @@ def host(cc, sysroot, sdl, out, name, guest_o, bundled, headless):
                    *[p for p in plat if not p.stem.startswith('fbdev')]]
         libraries = ['-lm']
     else:
-        flags += ['-DSS_FBDEV=1', '-I', str(sdl / 'include')]
-        sources = [ROOT / 'runtime/android32/host.c', ROOT / 'runtime/win32/plat_sdl.c', *plat]
-        libraries = ['-L', str(sdl / 'lib'), '-lSDL3', '-lm']
+        # with the achievements (tools/ra_build.py): HTTPS through the libssl.so.3 the package carries
+        flags += ['-DSS_FBDEV=1', '-I', str(sdl / 'include'), *ra_build.flags(handheld=True)]
+        sources = [ROOT / 'runtime/android32/host.c', ROOT / 'runtime/win32/plat_sdl.c', *plat, *ra_build.sources()]
+        libraries = ['-L', str(sdl / 'lib'), '-lSDL3', '-lm', *ra_build.LIBRARIES]
     link_flags = ['-Wl,--build-id', '-Wl,-z,noexecstack', '-Wl,--disable-new-dtags',
                   '-Wl,-rpath,$ORIGIN/' + LIBDIR]
     if bundled:

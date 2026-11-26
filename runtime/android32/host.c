@@ -192,7 +192,31 @@ static SERVICE int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_
 static SERVICE void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
 static SERVICE void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static SERVICE uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
+#ifdef SS_ACHIEVEMENTS
+/* The achievements (runtime/achievements; the GA36 build): the image keeps the GBA's memory in a block of its own, so
+ * on the first frame the host asks it where the two work RAMs are, hashes the ROM file and starts the evaluation.
+ * An image that cannot say (an older one answers 0) runs without achievements. */
+#include "../achievements/ach_host.h"
+static const char *achievements_rom;
+static SERVICE void b_achievements(int flags)
+{
+    static int started;
+    if (!started) {
+        uint32_t ewram = guest_option ? (uint32_t)guest_option(SS_OPTION_GBA_ADDRESS, (int)SS_EWRAM) : 0;
+        uint32_t iwram = guest_option ? (uint32_t)guest_option(SS_OPTION_GBA_ADDRESS, (int)SS_IWRAM) : 0;
+        started = 1;
+        if (ewram && iwram) {
+            ss_ach_set_memory(PTR(ewram), PTR(iwram));
+            ss_ach_start_file(achievements_rom);
+        } else {
+            fprintf(stderr, "achievements: the game image does not say where its memory is; none are evaluated\n");
+        }
+    }
+    ss_ach_frame(flags);
+}
+#else
 static SERVICE void b_achievements(int flags) { (void)flags; }
+#endif
 /* SS_B_PARALLEL: the image's work(context, index) for every index, on this thread and up to three workers (one
  * per further core; SS_THREADS=N uses N threads in all, 1 = this one alone). An index is taken by whoever is free.
  * The workers wait on a condition between calls; a call returns when every worker has checked in, so the next
@@ -743,6 +767,9 @@ int main(int argc, char **argv)
     install_fault_log();
     setup_bridge();
     ss_guest_rom = rom;
+#ifdef SS_ACHIEVEMENTS
+    achievements_rom = rom;
+#endif
     setenv("SHININGSOURCE_ROM", rom, 1); /* host-side font lookup; no fixed ROM mapping */
     ss32_enter_guest(bridge, stack_base, stack_base + 4 * 1024 * 1024);
 }

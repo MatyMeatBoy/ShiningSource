@@ -6,7 +6,10 @@
 #else
 #include <stddef.h>
 /* the Android launcher (LAUNCHER_ANDROID): the app's private folder keeps the sign-in, and no request reaches the
-   server (the Android game has no online achievements: the official set is earned offline there) */
+   server (the Android game has no online achievements: the official set is earned offline there).
+   The Linux game hosts (SS_RA_ONLINE: GA36, R36S, Linux x64) talk to the server themselves (ra_https_posix.inc), with
+   the plain retroachievements.auth a handheld's card holds; SS_RA_HANDHELD keeps everything on the card (no copy of
+   the sign-in in the home folder). */
 static void SecureZeroMemory(void* p, size_t n) {
     volatile unsigned char* b = (volatile unsigned char*)p;
     while (n--)
@@ -61,6 +64,7 @@ struct KhRa {
     int account_progress_available;
     const uint32_t* official; /* KhRaStartOfficial: the only achievements evaluated */
     uint32_t official_count;
+    int shared; /* the token is another game's on the same card (SS_RA_SHARED_AUTH): used, never copied */
 };
 
 static void SetStatus(KhRa* ra, const char* text, int error) {
@@ -222,9 +226,9 @@ SDL_Surface* KhRaLoadBadge(const char* directory, const char* badge_name) {
 typedef struct { char user[128], token[128]; long long saved; } RaCached;
 
 static int CachePath(char* out, size_t size) {
-#ifdef __ANDROID__
+#if defined(__ANDROID__) || defined(SS_RA_HANDHELD)
     (void)out; (void)size;
-    return 0; /* the phone's app keeps one data folder: nothing to share */
+    return 0; /* the phone's app keeps one data folder, a handheld its card: nothing to share */
 #endif
 #ifdef _WIN32
     const char* base = getenv("APPDATA");
@@ -375,18 +379,35 @@ static int SaveTokenFile(KhRa* ra) {
 #endif
 }
 
-static void ReadToken(KhRa* ra) {
 #ifndef _WIN32
-    unsigned char plain[256];
-    FILE* in = DataFile(ra, "retroachievements.auth", "rb");
-    if (!in) return;
-    if (fread(plain, 1, sizeof(plain), in) == sizeof(plain) && plain[127] == 0 && plain[255] == 0) {
+/* 128 bytes of account name and 128 of token, each ending in a zero: the file ReKHCoM's and this game's card
+ * linking (platform/ga36/ra_vincular_cuenta.py) write */
+static int ReadPlainToken(KhRa* ra, FILE* in) {
+    unsigned char plain[257];
+    int ok = fread(plain, 1, sizeof(plain), in) == 256 && plain[0] && plain[127] == 0 && plain[128] && plain[255] == 0;
+    if (ok) {
         memcpy(ra->username, plain, 128);
         memcpy(ra->token, plain + 128, 128);
-        ra->remember = 1;
     }
-    fclose(in);
     SecureZeroMemory(plain, sizeof(plain));
+    return ok;
+}
+#endif
+
+static void ReadToken(KhRa* ra) {
+#ifndef _WIN32
+    FILE* in = DataFile(ra, "retroachievements.auth", "rb");
+    const char* shared = getenv("SS_RA_SHARED_AUTH");
+    if (in) {
+        ra->remember = ReadPlainToken(ra, in);
+        fclose(in);
+    }
+    /* RetroAchievements gives a token to an account, not to a game: the one another game keeps on the same card
+     * (ReKHCoM's, linked from a PC) signs this game in too while it has none of its own. It is read, not copied. */
+    if (!ra->token[0] && shared && shared[0] && (in = fopen(shared, "rb")) != NULL) {
+        ra->shared = ReadPlainToken(ra, in);
+        fclose(in);
+    }
 #else
     BYTE bytes[4096];
     DATA_BLOB in, out = {0};
@@ -413,10 +434,18 @@ static void ReadToken(KhRa* ra) {
 
 /* Workers only fill their response. rcheevos callbacks are dispatched by Pump
  * on the owning thread, so UI access and frame evaluation cannot race. */
+#ifdef SS_RA_ONLINE
+#include "ra_https_posix.inc"
+#endif
+
 static int HttpWorker(void* userdata) {
     KhRaJob* job = (KhRaJob*)userdata;
 #ifndef _WIN32
+#ifdef SS_RA_ONLINE
+    RaHttpsPosix(job);
+#else
     job->status = RC_API_SERVER_RESPONSE_RETRYABLE_CLIENT_ERROR; /* no online requests here (see the top) */
+#endif
     SDL_SetAtomicInt(&job->done, 1);
     return 0;
 #else
@@ -600,6 +629,7 @@ int KhRaFetchImage(KhRa* ra, const char* url, KhRaImageCallback callback, void* 
  * account signed in never go here (RetroAchievements' rules). */
 #define RA_PENDING "retroachievements_pending.txt"
 #define RA_PENDING_MAX 128
+#define RA_BELIEVABLE_TIME 1735689600LL /* 2025-01-01: earlier clocks are not set */
 typedef struct { uint32_t id; long long when; } RaPendingEntry;
 
 static int PendingRead(KhRa* ra, RaPendingEntry* out, char* user, size_t userSize) {
@@ -644,6 +674,30 @@ static void PendingAdd(KhRa* ra, uint32_t id) {
     PendingWrite(ra, e, n, me->username);
 }
 
+/* An achievement earned on this device by the local evaluation (often offline) for the account set up here: queued
+ * under that account's name and sent the next time the game starts with a connection (PendingFlush, after the
+ * sign-in), unless the account already has it. 1 when it is in the queue. */
+int KhRaQueueLocal(KhRa* ra, uint32_t id, long long when) {
+    RaPendingEntry e[RA_PENDING_MAX];
+    char user[128];
+    int n, i;
+    if (!ra || !ra->enabled || !ra->username[0] || !ra->token[0] || !id || id >= 101000001u) return 0;
+    n = PendingRead(ra, e, user, sizeof(user));
+    if (n && strcmp(user, ra->username) != 0) n = 0; /* another account's queue: not this one's to send */
+    for (i = 0; i < n; i++) if (e[i].id == id) return 1;
+    if (n == RA_PENDING_MAX) return 0;
+    e[n].id = id; e[n].when = when; n++;
+    PendingWrite(ra, e, n, ra->username);
+    return 1;
+}
+
+unsigned KhRaPendingCount(KhRa* ra) {
+    RaPendingEntry e[RA_PENDING_MAX];
+    char user[128];
+    int n = ra ? PendingRead(ra, e, user, sizeof(user)) : 0;
+    return n > 0 && !strcmp(user, ra->username) ? (unsigned)n : 0;
+}
+
 static void PendingDrop(KhRa* ra, uint32_t id) {
     RaPendingEntry e[RA_PENDING_MAX];
     char user[128];
@@ -685,6 +739,9 @@ static void PendingFlush(KhRa* ra) {
         rc_api_request_t api;
         PendingRequest* request = (PendingRequest*)calloc(1, sizeof(*request));
         long long ago = now - e[i].when;
+        /* a handheld without a clock battery starts in 1970: an unlock or a start without a believable date is
+           sent as just earned, never as decades old */
+        if (e[i].when < RA_BELIEVABLE_TIME || now < RA_BELIEVABLE_TIME || ago < 0) ago = 0;
         if (!request) break;
         memset(&params, 0, sizeof(params));
         params.username = me->username; params.api_token = me->token;
@@ -865,6 +922,29 @@ KhRa* KhRaCreate(const char* directory, KhRaRead read, void* userdata, KhRaTrans
     file = DataFile(ra, "retroachievements.ini", RA_MODE("r"));
     if (file) { int value = 0; if (fscanf(file, "enabled=%d", &value) == 1) ra->enabled = value == 1; fclose(file); }
     ReadToken(ra);
+#ifdef SS_RA_ONLINE
+    snprintf(sRaCaFile, sizeof(sRaCaFile), "%s/achievements/cacert.pem", ra->directory);
+#endif
+#ifndef _WIN32
+    if (ra->shared) {
+        /* this folder's own retroachievements.ini says on or off; without one, the other game's does */
+        const char* path = getenv("SS_RA_SHARED_AUTH");
+        const char* slash = strrchr(path, '/');
+        int value = 1;
+        if (file) value = ra->enabled;
+        else if (slash && (size_t)(slash - path) < 1100) {
+            char ini[1200];
+            FILE* other;
+            snprintf(ini, sizeof(ini), "%.*s/retroachievements.ini", (int)(slash - path), path);
+            if ((other = fopen(ini, "r")) != NULL) {
+                int read = 0;
+                if (fscanf(other, "enabled=%d", &read) == 1) value = read == 1;
+                fclose(other);
+            }
+        }
+        ra->enabled = value;
+    }
+#endif
     if (!ra->token[0]) {
         RaCached c;
         if (CacheRead(&c)) {
@@ -999,6 +1079,15 @@ int KhRaAccountUnlocked(const KhRa* ra, uint32_t id) {
     if (!ra || !ra->account_progress_available) return 0;
     for (i = 0; i < ra->account_unlock_count; ++i) if (ra->account_unlocks[i] == id) return 1;
     return 0;
+}
+const char* KhRaUser(const KhRa* ra) { return ra ? ra->username : ""; }
+int KhRaShared(const KhRa* ra) { return ra && ra->shared; }
+int KhRaSslMissing(void) {
+#ifdef SS_RA_ONLINE
+    return RaSslMissing();
+#else
+    return 0;
+#endif
 }
 int KhRaValidationMode(void) { return getenv("SS_FRAMES") || getenv("SS_INPUT") || getenv("SS_INPUT_FILE"); }
 

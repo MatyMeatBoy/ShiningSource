@@ -21,6 +21,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from launcher_art import SIDE_ART
+import ra_build
 
 ROOT = Path(__file__).resolve().parents[1]
 PORT = ROOT / 'platform/ga36'
@@ -34,7 +35,9 @@ VERSION = '0.1.6-ga36'
 STOCK_KERNEL = (3, 4, 39)
 # Opened at run time rather than listed as NEEDED: SDL3 dlopens ALSA, and the split glibc
 # libraries keep firmware copies (built for another glibc) from being mixed in.
-ALWAYS = ('libasound.so.2', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1', LOADER)
+ALWAYS = ('libasound.so.2', 'libdl.so.2', 'libpthread.so.0', 'librt.so.1', LOADER,
+          # OpenSSL 3 for RetroAchievements over HTTPS (dlopened by launcher/achievements/ra_https_posix.inc)
+          'libssl.so.3', 'libcrypto.so.3')
 # SDL3 dlopens these by their unversioned names, which runtime packages do not ship.
 PLAIN_ALIASES = {'libasound.so.2': 'libasound.so'}
 READELF_HINTS = (os.environ.get('SHININGSOURCE_LLVM_MINGW', ''),
@@ -216,6 +219,12 @@ def build_payload(args, readelf):
         payload[f'{GAME}/libarmhf/{plain}'] = payload[f'{GAME}/libarmhf/{name}']
     for name in SIDE_ART:
         payload[f'{GAME}/assets/launcher/{name}'] = (ROOT / 'assets/launcher' / name).read_bytes()
+    for name, source in ra_build.package_files().items():     # the RetroAchievements set and badges, a CA bundle
+        payload[f'{GAME}/{name}'] = source.read_bytes()
+    # card linking from a PC (ReKHCoM's format: retroachievements.auth + .ini in this folder)
+    payload[f'{GAME}/ra_vincular_cuenta.py'] = lf((PORT / 'ra_vincular_cuenta.py').read_bytes())
+    payload[f'{GAME}/Vincular-RetroAchievements-ShiningSource.bat'] = lf(
+        (PORT / 'Vincular-RetroAchievements-ShiningSource.bat').read_bytes()).replace(b'\n', b'\r\n')
     alsa = sysroot / 'usr/share/alsa'
     if (alsa / 'alsa.conf').is_file():
         for path in sorted(p for p in alsa.rglob('*') if p.is_file()):

@@ -33,6 +33,20 @@ La pantalla de 640x480 se usa entera: un lienzo de 320×240 píxeles del juego a
 
 Las partidas, la configuración y los registros se guardan en `shiningsourcega36/user/`. Cada arranque escribe `last-run.log` y conserva el anterior como `last-run.1.log`. Si el juego no arranca, ese archivo explica el motivo (por ejemplo, ROM ausente). Adjunta los dos al informar de un problema, junto con el nombre del firmware.
 
+### Logros (RetroAchievements)
+
+El juego evalúa en la consola los 52 logros oficiales de RetroAchievements (el set va en la carpeta) y muestra el
+aviso al desbloquear uno. Para que cuenten en tu cuenta, vincula la tarjeta una vez desde un PC con internet:
+escribe `usuario=` y `contrasena=` en `shiningsourcega36/retroachievements_cuenta.txt` y abre
+`shiningsourcega36/Vincular-RetroAchievements-ShiningSource.bat` (necesita Python 3). La contraseña se borra del archivo al
+terminar; la consola solo guarda la sesión (`retroachievements.auth`). Si la tarjeta ya está vinculada para ReKHCoM,
+ShiningSource usa esa misma sesión y no hace falta nada.
+
+Sin internet, los logros quedan en cola (`retroachievements_pending.txt`) y se envían la próxima vez que el juego
+arranque con conexión. `retroachievements_estado.txt` dice la cuenta, si hay conexión, cuántos esperan y la hora de
+la consola. Solo softcore. Una partida en Modo Rebelde (trucos) no envía nada. `SS_RA_SUBMIT=0` en
+`user/shiningsource.env` deja todos los logros en la consola.
+
 ### Estado de v0.1
 
 Probada en la consola (goodluckOS, kernel 7.2.9) hasta la RC3; la v0.1 añade el dibujo repartido en los cuatro núcleos del A33 y se ha verificado en emulación ARMv7 de 4 núcleos (mismas imágenes y mismo juego que en PC, fotograma a fotograma). La velocidad real de la v0.1 en la consola está por medir: la entrada **ShiningSource - Medir FPS** (unos 6 minutos, automática, no toca las partidas) la mide y guarda el resultado en `shiningsourcega36/diagnostico-NNN/`. Un cierre deja `user/shiningsource_crash.log`.
@@ -67,6 +81,19 @@ The whole 640x480 screen is used: a canvas of 320×240 game pixels at an exact 2
 ### Saves and logs
 
 Saves, settings and logs are written to `shiningsourcega36/user/`. Each start writes `last-run.log` and keeps the previous one as `last-run.1.log`. If the game does not start, that file says why (for example, a missing ROM). Attach both when reporting a problem, together with the firmware name.
+
+### Achievements (RetroAchievements)
+
+The game evaluates the 52 official RetroAchievements on the console (the set ships in the folder) and shows the
+notice when one unlocks. To have them count on your account, link the card once from a PC with internet: write
+`usuario=` and `contrasena=` in `shiningsourcega36/retroachievements_cuenta.txt` and open
+`shiningsourcega36/Vincular-RetroAchievements-ShiningSource.bat` (needs Python 3). The password is removed from the file afterwards;
+the console only keeps the session (`retroachievements.auth`). A card already linked for ReKHCoM is used as is.
+
+Without internet the unlocks wait in `retroachievements_pending.txt` and are sent the next time the game starts
+online. `retroachievements_estado.txt` shows the account, the connection, how many wait and the console's clock.
+Softcore only. A Rebel run (cheats) sends nothing. `SS_RA_SUBMIT=0` in `user/shiningsource.env` keeps every
+unlock on the console.
 
 ### v0.1 status
 

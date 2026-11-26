@@ -320,9 +320,11 @@ static int b_net_recv(uint32_t data, int capacity) { return ss_plat_net_recv(PTR
 static void b_net_wait(int milliseconds) { ss_plat_net_wait(milliseconds); }
 static void b_net_farewell(uint32_t data, int size) { ss_plat_net_farewell(data ? PTR(data) : NULL, size); }
 static uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
-/* Achievements are evaluated by the Windows host only so far (runtime/achievements); here the frame's call does
- * nothing. Cheats still work: they are in the game image (core/rebel.c). */
+/* Achievements: built in with SS_ACHIEVEMENTS (R36S, Linux x64; b_achievements below the options). Without them the
+ * frame's call does nothing. Cheats still work: they are in the game image (core/rebel.c). */
+#ifndef SS_ACHIEVEMENTS
 static void b_achievements(int run_flags) { (void)run_flags; }
+#endif
 
 /* ---- several cores (SS_B_PARALLEL, and ss_host_parallel for the platform's own work) ----
  * work(context, index) for every index, on this thread and up to three workers (one per further core; SS_THREADS=N
@@ -489,6 +491,35 @@ void ss_remote_sfx_set_enabled(int on)
     }
 }
 int ss_net_active(void) { return guest_option ? guest_option(SS_OPTION_ONLINE, 0) : 0; }
+#ifdef SS_ACHIEVEMENTS
+/* The achievements (runtime/achievements): on the first frame the ROM file is hashed and the evaluation starts. A
+ * rebased image (ARM64) keeps the GBA's memory in a block of its own and says where (an older image answers 0: no
+ * achievements); the x86-64 image has it at the console's own addresses. */
+#include "../achievements/ach_host.h"
+static const char *achievements_rom;
+static void b_achievements(int run_flags)
+{
+    static int started;
+    if (!started) {
+        started = 1;
+#ifdef SS_REBASED_HOST
+        {
+            uint32_t ewram = guest_option ? (uint32_t)guest_option(SS_OPTION_GBA_ADDRESS, (int)SS_EWRAM) : 0;
+            uint32_t iwram = guest_option ? (uint32_t)guest_option(SS_OPTION_GBA_ADDRESS, (int)SS_IWRAM) : 0;
+            if (ewram && iwram) {
+                ss_ach_set_memory(PTR(ewram), PTR(iwram));
+                ss_ach_start_file(achievements_rom);
+            } else {
+                fprintf(stderr, "achievements: the game image does not say where its memory is; none are evaluated\n");
+            }
+        }
+#else
+        ss_ach_start_file(achievements_rom);
+#endif
+    }
+    ss_ach_frame(run_flags);
+}
+#endif
 
 static uint64_t bridge[SS_B_COUNT];
 #define ENTRY(index, function) bridge[index] = (uint64_t)(uintptr_t)(function)
@@ -1176,6 +1207,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "the ROM file could not be read: %s\n", rom);
         return 2;
     }
+#endif
+#ifdef SS_ACHIEVEMENTS
+    achievements_rom = rom;
 #endif
     image = read_whole(image_path, &image_size);
     entry = image ? load_image(image, image_size) : 0;

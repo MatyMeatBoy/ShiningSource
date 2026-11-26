@@ -37,6 +37,19 @@ Las partidas, la configuración y los registros se guardan en `shiningsource/use
 
 `SS_CANVAS` (`320x240` por defecto; `240x160` muestra sólo la imagen de la GBA a 480×320 en el centro), `SS_FBDEV` (vacía: SDL3 con su controlador KMSDRM en lugar de la salida propia), `SS_KMS_HZ=0` (no tocar el modo del panel), `SS_THREADS` (hilos para el dibujo; 1 = uno solo), `SS_PAD` (botones SDL en el orden A B Select Start Derecha Izquierda Arriba Abajo R L), `SS_EVDEV_MAP`, `SDL_AUDIO_DRIVER`. `R36S-release.json` lista la versión, el commit y el SHA-256 de cada archivo.
 
+### Logros (RetroAchievements)
+
+El juego evalúa en la consola los 52 logros oficiales de RetroAchievements (el set va en la carpeta) y muestra el
+aviso al desbloquear uno. Para que cuenten en tu cuenta, vincula la tarjeta una vez desde un PC con internet:
+copia en `shiningsource/` los archivos `retroachievements.auth` y `retroachievements.ini` de una
+tarjeta ya vinculada (ShiningSource o ReKHCoM GA36). Si la tarjeta ya está vinculada para ReKHCoM,
+ShiningSource usa esa misma sesión y no hace falta nada.
+
+Sin internet, los logros quedan en cola (`retroachievements_pending.txt`) y se envían la próxima vez que el juego
+arranque con conexión. `retroachievements_estado.txt` dice la cuenta, si hay conexión, cuántos esperan y la hora de
+la consola. Solo softcore. Una partida en Modo Rebelde (trucos) no envía nada. `SS_RA_SUBMIT=0` en
+`user/shiningsource.env` deja todos los logros en la consola.
+
 ### Estado
 
 Probada en emulación de una R36S (QEMU, cuatro Cortex-A35, raíz de dArkOS y glibc 2.31 de Ubuntu 20.04, pantalla virtio-gpu por DRM): mismo juego cuadro a cuadro e idénticas imágenes que en PC. Aún no se ha probado en una consola física: el vídeo en su panel, el sonido, los controles y la velocidad real están por confirmar.
@@ -73,6 +86,18 @@ Saves, settings and logs are written to `shiningsource/user/`. Each start writes
 ### Variables
 
 `SS_CANVAS` (`320x240` by default; `240x160` shows only the GBA picture at 480×320 in the middle), `SS_FBDEV` (empty: SDL3 with its KMSDRM driver instead of the program's own output), `SS_KMS_HZ=0` (leave the panel's mode alone), `SS_THREADS` (threads for drawing; 1 = one alone), `SS_PAD` (SDL buttons in the order A B Select Start Right Left Up Down R L), `SS_EVDEV_MAP`, `SDL_AUDIO_DRIVER`. `R36S-release.json` lists the version, the commit and the SHA-256 of every file.
+
+### Achievements (RetroAchievements)
+
+The game evaluates the 52 official RetroAchievements on the console (the set ships in the folder) and shows the
+notice when one unlocks. To have them count on your account, link the card once from a PC with internet: copy
+`retroachievements.auth` and `retroachievements.ini` of an already linked card folder (ShiningSource or ReKHCoM
+GA36) into `shiningsource/`. A card already linked for ReKHCoM is used as is.
+
+Without internet the unlocks wait in `retroachievements_pending.txt` and are sent the next time the game starts
+online. `retroachievements_estado.txt` shows the account, the connection, how many wait and the console's clock.
+Softcore only. A Rebel run (cheats) sends nothing. `SS_RA_SUBMIT=0` in `user/shiningsource.env` keeps every
+unlock on the console.
 
 ### Status
 

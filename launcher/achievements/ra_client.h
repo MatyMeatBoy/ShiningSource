@@ -41,6 +41,12 @@ const char* KhRaTakeNotice(KhRa* ra);
 uint32_t KhRaNoticeId(const KhRa* ra); /* id of the achievement behind the last notice */
 /* Game process: evaluate and submit (softcore) only these achievement ids. */
 void KhRaStartOfficial(KhRa* ra, const uint32_t* ids, uint32_t count);
+/* An achievement the local evaluation earned, for the account set up here: sent at the next start online. 1: queued. */
+int KhRaQueueLocal(KhRa* ra, uint32_t id, long long when);
+unsigned KhRaPendingCount(KhRa* ra); /* unlocks of this account waiting in retroachievements_pending.txt */
+const char* KhRaUser(const KhRa* ra); /* the account's name ("" without one); never the token */
+int KhRaShared(const KhRa* ra); /* the token is another game's (SS_RA_SHARED_AUTH) */
+int KhRaSslMissing(void); /* Linux: OpenSSL was looked for and is not there */
 
 #ifdef __cplusplus
 }
