@@ -33,6 +33,7 @@ static SDL_AudioStream *audio;
 static uint64_t next_frame_ns;
 static uint64_t ideal_ns;
 static int unpaced, after_left_out;
+static int pace_early_us[64];      /* SS_PACE_DEBUG */
 #ifdef __ANDROID__
 static int android_background, android_keys_release, android_touch_release;
 static unsigned android_input_generation;
@@ -3565,6 +3566,8 @@ uint16_t ss_plat_present(const uint32_t *pixels, int packed)
              * pictures can be shown. After half a second of that the display is no longer taken as the pace:
              * the sound goes back to its own speed too. It is decided again when the window comes back or the
              * display changes, see handle_event.) */
+            if (display_paced && unpaced < 64)
+                pace_early_us[unpaced] = (int)((next_frame_ns - now) / 1000);
             if (display_paced && ++unpaced == 30) {
                 display_paced = 0;
 #ifdef SS_FB_HOST
@@ -3575,10 +3578,27 @@ uint16_t ss_plat_present(const uint32_t *pixels, int packed)
                 if (audio)
                     SDL_SetAudioStreamFrequencyRatio(audio, audio_ratio);
                 fprintf(stderr, "video: the display does not space the frames as it said: own pacing\n");
+                if (getenv("SS_PACE_DEBUG")) {
+                    fprintf(stderr, "video: pace debug, early by (us):");
+                    for (int i = 0; i < 30; i++) fprintf(stderr, " %d", pace_early_us[i]);
+                    fprintf(stderr, "\n");
+                }
             }
-            SDL_DelayPrecise(next_frame_ns - now);
-            stat_waits++;
-            stat_wait_ns += next_frame_ns - now;
+#ifdef SS_FB_HOST
+            /* The handhelds' panel paces by holding the present call while a frame waits for its flip: that only
+             * happens when the game is a frame ahead. Waiting on the clock here keeps it from ever getting ahead
+             * (every flip is done before the next present), so the display never takes the pace. Run ahead
+             * instead; if the present calls keep returning early anyway (unpaced reaches 30 just above), the
+             * display is not pacing and the clock takes over. */
+            if (display_paced) {
+                next_frame_ns = now;
+            } else
+#endif
+            {
+                SDL_DelayPrecise(next_frame_ns - now);
+                stat_waits++;
+                stat_wait_ns += next_frame_ns - now;
+            }
         }
         else if (now - next_frame_ns > 100000000)
             next_frame_ns = now;                        /* fell far behind (debugger, window drag): do not catch up */

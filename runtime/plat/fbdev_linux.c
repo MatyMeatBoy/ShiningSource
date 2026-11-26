@@ -495,6 +495,18 @@ static void kms_end(int page)
             kms_shown = page;
     } else {
         kms_queued = page;
+        /* Paced by the panel: the present call returns when this frame has gone to the flip (the refresh before it
+         * came), so the caller sees the panel's spacing (plat_sdl.c keeps the display as the pace only when the
+         * present call takes up the frame's time). Waiting in kms_begin instead gave the same frames, but the
+         * present call returned at once and after half a second the game fell back to its own clock. */
+        while (fb_vsync && kms_queued >= 0 && kms_thread_on) {
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME, &until);
+            until.tv_nsec += 100000000;
+            if (until.tv_nsec >= 1000000000) { until.tv_sec++; until.tv_nsec -= 1000000000; }
+            if (pthread_cond_timedwait(&kms_cond, &kms_lock, &until) != 0)
+                break;
+        }
     }
     pthread_mutex_unlock(&kms_lock);
 }
