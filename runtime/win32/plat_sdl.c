@@ -2134,6 +2134,31 @@ static void menu_buttons(uint16_t pad)
  * the game, and both stay hidden until both are let go. Pressed further apart than that, the menu still opens,
  * but the game has seen the first button. */
 static uint16_t menu_chord(uint16_t pad)
+#ifdef SS_FB_HOST
+{
+    /* The handhelds (GA36, R36S): holding Select for two seconds opens and closes the menu. Select is held back
+     * while it is down; let go sooner, it reaches the game as a short press (a few pictures), so the game's own use
+     * of Select still works. A hold that opened the menu never reaches the game. */
+    enum { SELECT = 0x0004, HOLD = 120, TAP = 4 };
+    static int held_frames, tap;
+    if (pad & SELECT) {
+        if (held_frames >= 0 && ++held_frames == HOLD) {
+            menu_command(MENU_TOGGLE);
+            held_frames = -1;               /* used up until Select is let go */
+        }
+        pad &= (uint16_t)~SELECT;
+    } else {
+        if (held_frames > 0)
+            tap = TAP;
+        held_frames = 0;
+    }
+    if (tap > 0) {
+        tap--;
+        pad |= SELECT;
+    }
+    return pad;
+}
+#else
 {
     enum { LATE = 3, BOTH = 0x000C };
     static uint16_t past[LATE];
@@ -2162,6 +2187,7 @@ static uint16_t menu_chord(uint16_t pad)
     at = (at + 1) % LATE;
     return (uint16_t)((pad & ~BOTH) | late);
 }
+#endif
 
 /* What a controller's button is called in the menu's line about the controls. */
 static const char *pad_name(SDL_GamepadButton button)
@@ -2228,9 +2254,15 @@ static int menu_info(char lines[INFO_LINES][INFO_BYTES])
                      pad_name(pad_buttons[0]), pad_name(pad_buttons[1]), pad_name(pad_buttons[9]), pad_name(pad_buttons[8]));
         SDL_snprintf(lines[n++], INFO_BYTES, "Start=%s Select=%s", pad_name(pad_buttons[3]), pad_name(pad_buttons[2]));
         SDL_snprintf(lines[n++], INFO_BYTES, "%s",
+#ifdef SS_FB_HOST
+                     ui_text("Hold Select 2 s: menu. A: choose. B: back", "Select 2 s : menu. A : choisir. B : retour",
+                                  "Select 2 s halten: Menü. A: wählen. B: zurück", "Tieni Select 2 s: menu. A: scegli. B: indietro",
+                                  "Mantén Select 2 s: menú. A: elegir. B: volver"));
+#else
                      ui_text("Select+Start: menu. A: choose. B: back", "Select+Start : menu. A : choisir. B : retour",
                                   "Select+Start: Menü. A: wählen. B: zurück", "Select+Start: menu. A: scegli. B: indietro",
                                   "Select+Start: menú. A: elegir. B: volver"));
+#endif
     } else {
 #ifdef __ANDROID__
         SDL_snprintf(lines[n++], INFO_BYTES, "%s",

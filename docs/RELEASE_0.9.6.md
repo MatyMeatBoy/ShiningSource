@@ -27,6 +27,9 @@
 
 ## Smoother handhelds (GA36, R36S)
 
+- **The options menu opens by holding Select for two seconds** (and closes
+  the same way). A short press of Select still reaches the game. Start +
+  Select no longer opens it.
 - **The panel paces the game for the whole session.** Before, the game fell
   back to its own clock within half a second of play.
   - GA36 measured: 59.73 frames a second, 0.13 % of frames late.

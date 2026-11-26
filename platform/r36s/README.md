@@ -21,7 +21,7 @@ El launcher busca, en este orden: `shiningsource/roms/rom.gba`; el primer `*.gba
 
 ### Controles
 
-Los botones de la consola se usan como un mando: la **A** de la consola es la **A** de la GBA y la **B** la **B**; L1/R1 son L/R. **Start + Select** abre las opciones del juego; desde ahí se elige **Salir** para volver al menú. Si PortMaster está instalado se usa su mapeo SDL del mando; si no, el de SDL o, como último recurso, los botones se leen directamente. Para otro mapeo coloca `gamecontrollerdb.txt` en `shiningsource/` o define `SS_PAD` (ver abajo).
+Los botones de la consola se usan como un mando: la **A** de la consola es la **A** de la GBA y la **B** la **B**; L1/R1 son L/R. **Mantener Select 2 segundos** abre (y cierra) las opciones del juego; desde ahí se elige **Salir** para volver al menú. Si PortMaster está instalado se usa su mapeo SDL del mando; si no, el de SDL o, como último recurso, los botones se leen directamente. Para otro mapeo coloca `gamecontrollerdb.txt` en `shiningsource/` o define `SS_PAD` (ver abajo).
 
 ### Imagen
 
@@ -71,7 +71,7 @@ The launcher looks, in order, for: `shiningsource/roms/rom.gba`; the first `*.gb
 
 ### Controls
 
-The handheld's buttons act as a gamepad: the console's **A** is the GBA's **A** and **B** its **B**; L1/R1 are L/R. **Start + Select** opens the game's options; choose **Exit** there to return to the menu. With PortMaster installed its SDL controller mapping is used; otherwise SDL's own, or as a last resort the buttons are read directly. For another mapping put `gamecontrollerdb.txt` in `shiningsource/` or set `SS_PAD` (see below).
+The handheld's buttons act as a gamepad: the console's **A** is the GBA's **A** and **B** its **B**; L1/R1 are L/R. **Holding Select for 2 seconds** opens (and closes) the game's options; choose **Exit** there to return to the menu. With PortMaster installed its SDL controller mapping is used; otherwise SDL's own, or as a last resort the buttons are read directly. For another mapping put `gamecontrollerdb.txt` in `shiningsource/` or set `SS_PAD` (see below).
 
 ### Picture
 

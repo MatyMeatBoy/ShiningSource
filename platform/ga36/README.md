@@ -21,11 +21,11 @@ El launcher busca, en este orden: `shiningsourcega36/roms/rom.gba`; el primer `*
 
 ### Controles
 
-Los controles de la consola se usan como un mando: el botón de abajo es la **A** de la GBA y el de la derecha la **B**. **Start + Select** abre las opciones del juego; desde ahí se elige **Salir** para volver a EmulationStation. Si tu firmware necesita un mapeo SDL propio, coloca `gamecontrollerdb.txt` en `shiningsourcega36/` o define `SDL_GAMECONTROLLERCONFIG_FILE`.
+Los controles de la consola se usan como un mando: el botón de abajo es la **A** de la GBA y el de la derecha la **B**. **Mantener Select 2 segundos** abre (y cierra) las opciones del juego; desde ahí se elige **Salir** para volver a EmulationStation. Si tu firmware necesita un mapeo SDL propio, coloca `gamecontrollerdb.txt` en `shiningsourcega36/` o define `SDL_GAMECONTROLLERCONFIG_FILE`.
 
 ### Imagen 4:3
 
-La pantalla de 640x480 se usa entera: un lienzo de 320×240 píxeles del juego a 2× exactos, sin filtrado. En los mapas el campo se ve más allá del encuadre de la GBA por los cuatro lados. La caja de texto, el retrato de quien habla y lo demás que la GBA pone abajo bajan al borde inferior; la barra de estado sube al borde superior. Idioma, título, partidas, creación de personaje y tiendas tienen alrededor arte hecho para este lienzo a partir del arte aprobado de la vista panorámica (borradores pendientes de aprobación); las demás escenas conservan su encuadre de 240×160 con negro alrededor. Las opciones (**Start + Select**), el aviso para saltar escenas y los fundidos ocupan el lienzo completo y se leen a 2×.
+La pantalla de 640x480 se usa entera: un lienzo de 320×240 píxeles del juego a 2× exactos, sin filtrado. En los mapas el campo se ve más allá del encuadre de la GBA por los cuatro lados. La caja de texto, el retrato de quien habla y lo demás que la GBA pone abajo bajan al borde inferior; la barra de estado sube al borde superior. Idioma, título, partidas, creación de personaje y tiendas tienen alrededor arte hecho para este lienzo a partir del arte aprobado de la vista panorámica (borradores pendientes de aprobación); las demás escenas conservan su encuadre de 240×160 con negro alrededor. Las opciones (**mantener Select 2 s**), el aviso para saltar escenas y los fundidos ocupan el lienzo completo y se leen a 2×.
 
 `SS_CANVAS` elige el lienzo: `320x240` por defecto; `240x160` muestra sólo la imagen original de la GBA a 480×320 en el centro; vacía (`SS_CANVAS=`) vuelve a la imagen panorámica de 320×160 de RC1.
 
@@ -70,11 +70,11 @@ The launcher looks, in order, for: `shiningsourcega36/roms/rom.gba`; the first `
 
 ### Controls
 
-The handheld's buttons act as a gamepad: the bottom face button is the GBA's **A** and the right one its **B**. **Start + Select** opens the game's options; choose **Exit** there to return to EmulationStation. If your firmware needs its own SDL mapping, put `gamecontrollerdb.txt` in `shiningsourcega36/` or set `SDL_GAMECONTROLLERCONFIG_FILE`.
+The handheld's buttons act as a gamepad: the bottom face button is the GBA's **A** and the right one its **B**. **Holding Select for 2 seconds** opens (and closes) the game's options; choose **Exit** there to return to EmulationStation. If your firmware needs its own SDL mapping, put `gamecontrollerdb.txt` in `shiningsourcega36/` or set `SDL_GAMECONTROLLERCONFIG_FILE`.
 
 ### 4:3 picture
 
-The whole 640x480 screen is used: a canvas of 320×240 game pixels at an exact 2×, unfiltered. On the maps the field is shown beyond the GBA's frame on all four sides. The message window, the speaker's portrait and whatever else the GBA puts at the bottom go down to the bottom edge; the status bar goes up to the top edge. Language, title, save, character creation and shops are surrounded by art made for this canvas from the approved wide-view art (drafts pending approval); other scenes keep their 240×160 framing with black around it. The options (**Start + Select**), the skip-scene prompt and fades cover the whole canvas and read at 2×.
+The whole 640x480 screen is used: a canvas of 320×240 game pixels at an exact 2×, unfiltered. On the maps the field is shown beyond the GBA's frame on all four sides. The message window, the speaker's portrait and whatever else the GBA puts at the bottom go down to the bottom edge; the status bar goes up to the top edge. Language, title, save, character creation and shops are surrounded by art made for this canvas from the approved wide-view art (drafts pending approval); other scenes keep their 240×160 framing with black around it. The options (**hold Select 2 s**), the skip-scene prompt and fades cover the whole canvas and read at 2×.
 
 `SS_CANVAS` chooses the canvas: `320x240` by default; `240x160` shows only the original GBA picture at 480×320 in the middle; empty (`SS_CANVAS=`) brings back RC1's 320×160 wide picture.
 
