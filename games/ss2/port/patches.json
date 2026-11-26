@@ -753,6 +753,11 @@
    "why": "Experimental online remote combat sounds (SS_REMOTE_SFX, default on): thrown-item trajectory sound at its one initial call, before flight/bounce simulation.",
    "find": "if (player->state != 0xD && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);",
    "replace": "if (ss_remote_sfx_allowed(player->state != 0xD) && !sub_0800CCCC() && !sub_0800CD34())\n        sub_0805865C(0x17);"
+  },
+  {
+   "why": "Port ABI: the drop roll sub_0805C620 ends drop kind 9, and kind 10 when the actor's flag 0x227 bit 0 is set, with a bare return. The cartridge returns r0 there, which still holds ok (the result of sub_0805C4FC, AU2P 0805C760-0805C7A8); both callers spawn the drop only when the result is nonzero. Return it explicitly instead of an undefined value.",
+   "find": "    } else {\n        return ok;\n    }\n    return;\nfail:",
+   "replace": "    } else {\n        return ok;\n    }\n    return ok;\nfail:"
   }
  ],
  "code_08068670.c": [
@@ -909,6 +914,11 @@
    "why": "Use this actor's own stats for the original co-op health and difficulty scaling.",
    "find": "    s19F60();",
    "replace": "    s19F60((s16 *)sub);"
+  },
+  {
+   "why": "Port ABI: sub_08098F2C (contact push of the boss actor sub_08098108) has no return statement, but its caller stores the result as its countdown (u8 countdown = countdown108()) and only calls it again when that reaches zero. On the cartridge r0 at the return still holds the last sub_080020F4() (AU2P 08099166, the local player's index), so the check runs every frame for player 0 and every 1+index frames for the others. Natively the value was whatever the register held (the low byte of a pointer), so the contact check skipped up to 255 frames.",
+   "find": "    if (players98F[sub_080020F4()].timer == 0)\n        entity98F->counter++;\n}",
+   "replace": "    {\n        u32 local = sub_080020F4();\n        if (players98F[local].timer == 0)\n            entity98F->counter++;\n        return (u8)local;\n    }\n}"
   }
  ],
  "code_080A9680.c": [

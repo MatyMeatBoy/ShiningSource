@@ -148,6 +148,19 @@ int main(void)
         self.assertIn("setupAD534(actorsAD534[idx], imageAD534, idx + 1);", segment)
         self.assertIn("void setupAD534(void *, void *, s32) asm(", self.source("code_080A9680.c"))
 
+    def test_boss_contact_check_returns_the_local_player_index(self):
+        # AU2P 08099166-08099192: sub_08098F2C ends with r0 = sub_080020F4() and the boss sub_08098108 keeps it
+        # as the countdown to the next contact check; the C had no return statement.
+        helper = extract(self.source("code_08097E28.c"), "u8 sub_08098F2C(void)\n{")
+        self.assertIn("return (u8)local;", helper)
+        self.assertEqual(helper.count("return"), 1)
+
+    def test_drop_roll_returns_ok_for_money_and_flagged_drops(self):
+        # AU2P 0805C760-0805C7A8: drop kinds 9 and 10 (flag set) return r0 = ok, the result of sub_0805C4FC.
+        roll = extract(self.source("code_0805A630.c"), "u32 sub_0805C620(u8 *entity, u16 *out)\n{")
+        self.assertIsNone(re.search(r"\breturn\s*;", roll))
+        self.assertIn("    return ok;\nfail:", roll)
+
     def test_stage_exit_and_bank_regeneration_forward_the_game_state(self):
         source = self.source("code_08021DC4.c")
         exit_handler = extract(source, "s32 sub_08027B50(")
