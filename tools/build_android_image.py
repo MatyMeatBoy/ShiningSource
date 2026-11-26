@@ -24,12 +24,19 @@ def main():
     parser.add_argument('--game', default='ss2', choices=sorted(build.GAMES))
     parser.add_argument('--abi', required=True, choices=('arm64-v8a', 'x86_64'))
     parser.add_argument('-j', type=int, default=max(1, (os.cpu_count() or 4) // 2))
+    # A handheld's own image (tools/build_r36s.py): the same game and the same pictures, the runtime tuned for its
+    # processor. The cartridge's code keeps -O1 and its flags on every target.
+    parser.add_argument('--cpu', help='-mcpu for this image instead of the Android one (e.g. cortex-a35)')
+    parser.add_argument('--core-opt', default='2', choices=('2', '3'), help="the runtime's -O level")
+    parser.add_argument('--out', type=Path, help='build folder instead of build/android/images/ABI/GAME')
     args = parser.parse_args()
     arm = args.abi == 'arm64-v8a'
     cc = build.clang()
     bindir = Path(cc).parent
-    out = ROOT / 'build/android/images' / args.abi / args.game
+    out = args.out.resolve() if args.out else ROOT / 'build/android/images' / args.abi / args.game
     target = [f for f in (build_arm64.GUEST_TARGET if arm else build_win64.GUEST_TARGET) if f != '-fno-pic'] + ['-fPIC']
+    if args.cpu:
+        target = [f for f in target if not f.startswith('-mcpu=')] + ['-mcpu=' + args.cpu]
     game_flags = [f for f in build.CFLAGS if not f.startswith('--target') and f not in ('-g', '-mno-ms-bitfields')]
     gen = build.prepare(args.game, prefix=False, abi_flags=game_flags + target,
                         variant='gen-android-' + args.abi, prefix_after=arm,
@@ -49,7 +56,8 @@ def main():
               (ROOT / ('runtime/guest/co_a64.S' if arm else 'runtime/guest/co_x64.S'), ROOT / 'runtime/console/rebase.c')]
     # Invalid cartridge addresses only: valid GBA regions must reach ss_arena.
     stray = rebase_ir.STRAY_RANGES([(0, 0x10000), (0x01000000, 0x02000000)])
-    objects = rebased.compile_units(cc, units, out, target, stray, rebased.resolver(args.game), args.j, prefix=arm)
+    objects = rebased.compile_units(cc, units, out, target, stray, rebased.resolver(args.game), args.j, prefix=arm,
+                                    core_level='-O' + args.core_opt)
     stubs = rebased.tables(args.game, out, objects, prefix=arm, wraps_renamed=arm)
     for name in ('stubs.c', 'codetable.c'):
         obj = out / 'obj' / (name[:-2] + '.o')

@@ -72,6 +72,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__ARM_NEON) && defined(__aarch64__)
+#include <arm_neon.h>
+#define SS_FINISH_NEON 1
+#endif
 
 #define REG16(offset) (*(volatile uint16_t *)(uintptr_t)(SS_IO + (offset)))
 #define REG_DISPSTAT REG16(0x004)
@@ -1178,7 +1182,49 @@ static void finish_piece(void *unused, int index)
     /* No branch in this loop, and no pointer shares memory with another: the compiler turns it into a few
      * instructions for several pixels at a time. Every pixel is written, most with its own value. A pixel is only
      * mixed where what it shows has stayed in place for the frames compared: something that moved is not blinking. */
-    for (i = from; i < to; i++) {
+    i = from;
+#ifdef SS_FINISH_NEON
+    /* The same rules, eight pixels at a time, written out for the 64-bit ARM images: their compiler does not turn
+     * the loop below into vector code by itself (32-bit pointers in the rebased image). Every lane computes exactly
+     * what the loop below computes for its pixel. */
+    {
+        const uint32x4_t top = vdupq_n_u32(0xFF000000u), half = vdupq_n_u32(0x7F7F7Fu), low = vdupq_n_u32(0x010101u);
+        const uint32x4_t one = vdupq_n_u32(1), eight = vdupq_n_u32(8), four = vdupq_n_u32(4), five = vdupq_n_u32(5);
+        const uint32x4_t on = vdupq_n_u32(smooth_on ? 0xFFFFFFFFu : 0);
+        for (; i + 8 <= to; i += 8) {
+            uint16x8_t still16 = vmovl_u8(vld1_u8(still + i)), was16 = vmovl_u8(vld1_u8(calm + i));
+            uint16x4_t quiet16[2];
+            int h;
+            for (h = 0; h < 2; h++) {
+                int j = i + h * 4;
+                uint32x4_t now = vld1q_u32(now_at + j), a = vld1q_u32(a_at + j), b = vld1q_u32(b_at + j);
+                uint32x4_t c = vld1q_u32(c_at + j), d = vld1q_u32(oldest + j);
+                uint32x4_t st = vmovl_u16(h ? vget_high_u16(still16) : vget_low_u16(still16));
+                uint32x4_t was = vmovl_u16(h ? vget_high_u16(was16) : vget_low_u16(was16));
+                uint32x4_t game = vtstq_u32(now, top);
+                uint32x4_t counted = vandq_u32(vtstq_u32(st, st), vminq_u32(vaddq_u32(was, one), eight));
+                uint32x4_t quiet = vbslq_u32(game, counted, was);
+                uint32x4_t now_a = vceqq_u32(now, a), now_b = vceqq_u32(now, b), now_c = vceqq_u32(now, c);
+                uint32x4_t a_b = vceqq_u32(a, b), a_c = vceqq_u32(a, c), b_c = vceqq_u32(b, c);
+                uint32x4_t first = vandq_u32(vandq_u32(vcgeq_u32(quiet, four), vmvnq_u32(now_a)),
+                                             vorrq_u32(vandq_u32(now_b, a_c), vandq_u32(a_b, now_c)));
+                uint32x4_t second = vandq_u32(vandq_u32(vandq_u32(vcgeq_u32(quiet, five), now_a),
+                                                        vandq_u32(vmvnq_u32(now_b), b_c)), vceqq_u32(now, d));
+                uint32x4_t other = vbslq_u32(first, a, vbslq_u32(second, b, now));
+                uint32x4_t mixed = vorrq_u32(top, vaddq_u32(vaddq_u32(vandq_u32(vshrq_n_u32(now, 1), half),
+                                                                      vandq_u32(vshrq_n_u32(other, 1), half)),
+                                                            vandq_u32(vandq_u32(now, other), low)));
+                uint32x4_t take = vandq_u32(vandq_u32(on, vmvnq_u32(vceqq_u32(other, now))),
+                                            vandq_u32(vtstq_u32(other, top), game));
+                vst1q_u32(oldest + j, now);
+                vst1q_u32(now_at + j, vbslq_u32(take, mixed, now));
+                quiet16[h] = vmovn_u32(quiet);
+            }
+            vst1_u8(calm + i, vmovn_u16(vcombine_u16(quiet16[0], quiet16[1])));
+        }
+    }
+#endif
+    for (; i < to; i++) {
         uint32_t now = now_at[i], a = a_at[i], b = b_at[i], c = c_at[i], d = oldest[i], other, mixed;
         unsigned game = (now >> 24) != 0, was = calm[i];
         unsigned quiet = game ? (still[i] ? (was < 8 ? was + 1 : 8) : 0) : was;    /* a side column keeps its count */

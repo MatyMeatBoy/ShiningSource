@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build ShiningSource for the R36S (Rockchip RK3326, 4 x Cortex-A35, 64-bit Linux firmware) and pack its Ports zip.
 
-  build_r36s.py [--version 0.9.5] [-j N] [--image FILE] [--no-package] [--output ZIP]
+  build_r36s.py [--version 0.9.6] [-j N] [--image FILE] [--no-package] [--output ZIP]
 
 The game is this tree's ARM64 game image (tools/build_android_image.py --abi arm64-v8a: the rebased arm64_32
-Mach-O the Android build ships), built again here every time, never taken from a published APK. The host is
+Mach-O the Android build ships, here with its runtime at -O3 for the Cortex-A35: IMAGE_FLAGS), built again here
+every time, never taken from a published APK. The host is
 runtime/host64/host_linux.c with the SDL3 platform layer (runtime/win32/plat_sdl.c) and runtime/plat/*.c, compiled
 for aarch64-linux-gnu against an Ubuntu 20.04 sysroot (glibc 2.31) and the system's own loader, as the GA36 build
 is with SS_FBDEV=1: the picture goes to the panel through DRM/KMS with three buffers (runtime/plat/fbdev_linux.c),
@@ -48,11 +49,13 @@ from launcher_art import SIDE_ART
 ROOT = build.ROOT
 PORT = ROOT / 'platform/r36s'
 STAGE = ROOT / 'build/r36s'
-VERSION = '0.9.5'
+VERSION = '0.9.6'
 GAME = 'shiningsource'
 LAUNCHER = 'ShiningSource.sh'
 GLIBC_LIMIT = (2, 30)
 CPU = ['-mcpu=cortex-a35']
+HOST_OPT = ['-O2']
+IMAGE_FLAGS = ['--cpu', 'cortex-a35', '--core-opt', '3']
 DEFAULTS = {
     'SHININGSOURCE_R36S_SYSROOT': 'D:/01Claude/Dynabrothers1+2/local/darkos-vm/focal',
     'SHININGSOURCE_R36S_SDL': 'D:/01Claude/Dynabrothers1+2/build/r36s/stage-alpha3/lib/libSDL3.so.0',
@@ -92,9 +95,12 @@ def guest(jobs, explicit):
     if explicit:
         image = explicit.resolve()
     else:
+        # its own build of the Android image: the runtime (renderer, picture finishing) at -O3 for the Cortex-A35
+        # (about 7 % fewer instructions for the picture); the cartridge's code is compiled as for Android, so the
+        # game and its pictures are the same
         done = subprocess.run([sys.executable, str(ROOT / 'tools/build_android_image.py'), '--abi', 'arm64-v8a',
-                               '-j', str(jobs)])
-        image = ROOT / 'build/android/images/arm64-v8a/ss2/ss2_game.macho'
+                               '-j', str(jobs), *IMAGE_FLAGS, '--out', str(STAGE / 'image')])
+        image = STAGE / 'image/ss2_game.macho'
         if done.returncode or not image.is_file():
             sys.exit('the ARM64 game image could not be built')
     data = image.read_bytes()
@@ -108,7 +114,7 @@ def host(cc, sysroot, sdl_source, sdl_library, name, headless, version):
     if not gcc:
         sys.exit('the sysroot needs the AArch64 GCC startup objects (usr/lib/gcc/aarch64-linux-gnu/*/crtbegin.o)')
     flags = ['--target=aarch64-linux-gnu', '--sysroot=' + sysroot.as_posix(), '--gcc-install-dir=' + gcc[-1].as_posix(),
-             *CPU, '-fuse-ld=lld', '-O2', '-g', '-Wall', '-DSS_REBASED_HOST=1', '-DSS_HOST_VERSION="%s"' % version,
+             *CPU, '-fuse-ld=lld', *HOST_OPT,'-g', '-Wall', '-DSS_REBASED_HOST=1', '-DSS_HOST_VERSION="%s"' % version,
              '-I', str(ROOT / 'runtime/include'), '-I', str(sdl_source / 'include')]
     if headless:
         sources = ['runtime/host64/host_linux.c', 'runtime/host64/plat_null.c', 'runtime/plat/net_udp.c']

@@ -29,9 +29,10 @@ def resolver(game):
     return resolve
 
 
-def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix):
+def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix, core_level="-O2"):
     """units: (source, flags, cwd, kind) with kind "game", "core" or "plain"; codegen: target and processor flags;
-    prefix: the target puts an underscore before C names.
+    prefix: the target puts an underscore before C names; core_level: the optimisation of the runtime's own units
+    (the cartridge's stay at -O1 everywhere).
     Returns the objects, in order, and prints the totals of the rewriting."""
     for sub in ("ir", "obj"):
         (out / sub).mkdir(parents=True, exist_ok=True)
@@ -90,7 +91,7 @@ def compile_units(cc, units, out, codegen, stray, resolve, jobs, prefix):
             text, _ = division_ir.lower(text, "all")
         text, counts = rebase_ir.lower(text, kind == "game", stray, game, plain_name)
         ir.write_text(text, encoding="utf-8")
-        level = "-O1" if kind == "game" else "-O2"
+        level = "-O1" if kind == "game" else core_level
         done = subprocess.run([cc, *codegen, level, "-w", "-c", str(ir), "-o", str(target)], capture_output=True, text=True)
         return path.name, done.returncode, done.stderr, counts
     failed = []
