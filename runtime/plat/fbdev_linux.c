@@ -185,11 +185,11 @@ static int kms_events(int ms, uint64_t *when)
 }
 
 /* The refresh rate by a dozen flips between two black buffers (the median interval); 0 if they do not come back. */
-static double kms_measure(void)
+static double kms_measure_flips(int flips)
 {
     uint64_t times[14], gaps[13];
     int n = 0, buffer = !kms_shown;
-    for (int i = 0; i < 14; i++) {
+    for (int i = 0; i < flips && i < 14; i++) {
         uint64_t when = 0;
         if (!kms_flip(buffer) || !kms_events(250, &when))
             break;
@@ -206,6 +206,44 @@ static double kms_measure(void)
             uint64_t t = gaps[j]; gaps[j] = gaps[j - 1]; gaps[j - 1] = t;
         }
     return gaps[(n - 1) / 2] ? 1e9 / (double)gaps[(n - 1) / 2] : 0.0;
+}
+
+static double kms_measure(void) { return kms_measure_flips(14); }
+
+/* The mode that reached the console's rate is remembered in kms-mode.txt (the game's folder, user/ on the handhelds)
+ * for the panel whose own mode it came from: the next start sets it at once and checks it with a few flips, instead
+ * of measuring the panel's own rate and searching again (about half a second on the GA36). */
+#define KMS_MODE_FIELDS(m) (m).clock, (m).hsync_start, (m).hsync_end, (m).htotal, (m).vsync_start, (m).vsync_end, (m).vtotal
+static int kms_cached(const struct drm_mode_modeinfo *own, double wanted, struct drm_mode_modeinfo *out)
+{
+    unsigned v[15];
+    double rate;
+    FILE *file = fopen("kms-mode.txt", "r");
+    int got;
+    if (!file)
+        return 0;
+    got = fscanf(file, "own %u %u %u %u %u %u %u wanted %lf mode %u %u %u %u %u %u %u", &v[0], &v[1], &v[2], &v[3], &v[4],
+                 &v[5], &v[6], &rate, &v[7], &v[8], &v[9], &v[10], &v[11], &v[12], &v[13]);
+    fclose(file);
+    if (got != 15 || v[0] != own->clock || v[1] != own->hsync_start || v[2] != own->hsync_end || v[3] != own->htotal ||
+        v[4] != own->vsync_start || v[5] != own->vsync_end || v[6] != own->vtotal || rate < wanted - 0.01 || rate > wanted + 0.01)
+        return 0;
+    *out = *own;
+    out->clock = v[7]; out->hsync_start = v[8]; out->hsync_end = v[9]; out->htotal = v[10];
+    out->vsync_start = v[11]; out->vsync_end = v[12]; out->vtotal = v[13];
+    out->vrefresh = (uint32_t)(wanted + 0.5);
+    snprintf(out->name, sizeof out->name, "%ux%u@%.0f", out->hdisplay, out->vdisplay, wanted);
+    return 1;
+}
+
+static void kms_remember(const struct drm_mode_modeinfo *own, double wanted, const struct drm_mode_modeinfo *mode)
+{
+    FILE *file = fopen("kms-mode.txt", "w");
+    if (!file)
+        return;
+    fprintf(file, "own %u %u %u %u %u %u %u wanted %.4f mode %u %u %u %u %u %u %u\n", KMS_MODE_FIELDS(*own), wanted,
+            KMS_MODE_FIELDS(*mode));
+    fclose(file);
 }
 
 static void *kms_loop(void *unused)
@@ -360,15 +398,33 @@ static int kms_open(void)
         kms_buf[i].map = where;
         memset(where, 0, (size_t)create.size);
     }
-    if (kms_buf[0].pitch != kms_buf[1].pitch || kms_buf[0].pitch != kms_buf[2].pitch || !kms_set(&kms_mode, 0))
+    if (kms_buf[0].pitch != kms_buf[1].pitch || kms_buf[0].pitch != kms_buf[2].pitch)
+        goto refused;
+    if (text && *text)
+        wanted = atof(text);
+    {
+        struct drm_mode_modeinfo cached;
+        if (wanted > 1.0 && kms_cached(&kms_mode, wanted, &cached) && kms_set(&cached, 0)) {
+            kms_shown = 0;
+            kms_measure_flips(4);               /* settling, as after any new mode */
+            hz = kms_measure_flips(10);
+            if (hz >= 58.5 && hz <= 61.5) {
+                fprintf(stderr, "kms: %s, %ux%u, the mode of the last start: %.2f Hz (clock %u kHz, htotal %u, vtotal %u)\n",
+                        path, cached.hdisplay, cached.vdisplay, hz, cached.clock, cached.htotal, cached.vtotal);
+                kms_mode = cached;
+                goto measured;
+            }
+            fprintf(stderr, "kms: the mode of the last start measures %.2f Hz: searching again\n", hz);
+            remove("kms-mode.txt");
+        }
+    }
+    if (!kms_set(&kms_mode, 0))
         goto refused;
     kms_shown = 0;
     hz = kms_measure();
     fprintf(stderr, "kms: %s, %ux%u \"%s\", panel %.2f Hz (clock %u kHz, h %u %u %u %u, v %u %u %u %u)\n", path,
             kms_mode.hdisplay, kms_mode.vdisplay, kms_mode.name, hz, kms_mode.clock, kms_mode.hdisplay, kms_mode.hsync_start,
             kms_mode.hsync_end, kms_mode.htotal, kms_mode.vdisplay, kms_mode.vsync_start, kms_mode.vsync_end, kms_mode.vtotal);
-    if (text && *text)
-        wanted = atof(text);
     if (hz > 1.0 && wanted > 1.0 && (hz < 58.5 || hz > 61.5)) {
         /* Three ways to the console's rate, gentlest first: fewer blank lines (the pixel clock and every visible
          * timing stay), fewer blank columns, then a faster pixel clock (the display engine may round it to a rate
@@ -412,10 +468,12 @@ static int kms_open(void)
                 fprintf(stderr, "kms: %.2f Hz by %s refused (%s)\n", wanted, how, strerror(errno));
                 continue;
             }
+            kms_measure_flips(4);               /* a panel just given a new mode settles first (59.30 Hz was read) */
             got = kms_measure();
             if (got >= 58.5 && got <= 61.5) {
                 fprintf(stderr, "kms: the panel now refreshes at %.2f Hz by %s (clock %u kHz, htotal %u, vtotal %u)\n", got,
                         how, faster.clock, faster.htotal, faster.vtotal);
+                kms_remember(&kms_mode, wanted, &faster);
                 kms_mode = faster;
                 hz = got;
                 break;
@@ -429,6 +487,7 @@ static int kms_open(void)
             fprintf(stderr, "kms: back to the panel's own mode, %.2f Hz\n", hz);
         }
     }
+measured:
     if (hz <= 1.0)
         goto refused;
     fb_period_ns = (uint64_t)(1e9 / hz);
