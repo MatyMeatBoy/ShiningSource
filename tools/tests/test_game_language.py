@@ -28,9 +28,15 @@ static int menu_quit_armed, pad_uses_gamecube;
 @ITEMS@
 @MENU@
 
-static int receive_picture(int width)
+enum { CANVAS_MAX_H = 2 * SS_SCREEN_H };
+static int canvas_w;
+
+static int receive_picture(unsigned packed)
 {
+    const unsigned bits = packed;
+    int width = (int)(bits & 0xFFFFu), height = bits >> 24 ? (int)(bits >> 24) : SS_SCREEN_H;
 @RECEIVE@
+    (void)height;
     return width;
 }
 
