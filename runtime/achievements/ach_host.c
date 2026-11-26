@@ -611,7 +611,13 @@ static void announce(void)
         if (ra && KhRaError(ra) && KhRaStatus(ra)[0])
             fprintf(stderr, "achievements: %s\n", KhRaStatus(ra));
 #ifdef SS_RA_HANDHELD
-        snprintf(line, sizeof line, "%s", say("Achievements stay on this console", "Los logros se guardan en esta consola"));
+        if (ra && KhRaUser(ra)[0] && KhRaEnabled(ra) && submitting) {
+            /* linked, no connection now: unlocks are queued and sent at the next start with internet */
+            heading = say("OFFLINE MODE", "MODO SIN CONEXION");
+            snprintf(line, sizeof line, "%s", say("Sent when online", "Se envian al tener internet"));
+        } else {
+            snprintf(line, sizeof line, "%s", say("Achievements stay on this console", "Los logros se guardan en esta consola"));
+        }
 #else
         snprintf(line, sizeof line, "%s", say("Achievements stay on this PC", "Los logros se guardan en este PC"));
 #endif
