@@ -2,6 +2,13 @@
 
 ## Every platform
 
+- **The desert worm boss can be beaten again.** In the Driazhek Desert the
+  giant worm ran to the top right corner and froze with its body missing, so
+  the dungeon could not be finished. Each body segment's setup takes the
+  segment's number in a register the decompilation's C leaves out (the
+  cartridge passes it by chance); the port now passes it. The body is drawn,
+  the fight goes through all its phases and the portal to the next level
+  appears.
 - **Online: the music no longer stops when a player falls** (issue #6). A
   player's defeat used to silence the area music on every other player's
   machine until they opened a menu. The cue that copied the defeat to the
