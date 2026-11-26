@@ -44,7 +44,7 @@ import ra_build
 import rebased
 
 ROOT = build.ROOT
-VERSION = '0.1.6-ga36'
+VERSION = '0.1.7-ga36'
 TRIPLE = 'arm-linux-gnueabihf'
 CPU = ['-mcpu=cortex-a7', '-mfpu=neon-vfpv4', '-mfloat-abi=hard', '-mthumb']
 # The Android ARMv7 guest flags with the GA36 target: hard float on both sides
