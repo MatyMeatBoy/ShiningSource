@@ -324,6 +324,153 @@ static uint32_t b_ticks(void) { return ss_plat_ticks_ms(); }
  * nothing. Cheats still work: they are in the game image (core/rebel.c). */
 static void b_achievements(int run_flags) { (void)run_flags; }
 
+/* ---- several cores (SS_B_PARALLEL, and ss_host_parallel for the platform's own work) ----
+ * work(context, index) for every index, on this thread and up to three workers (one per further core; SS_THREADS=N
+ * uses N threads in all, 1 = this one alone). An index is taken by whoever is free; a call returns when every
+ * worker has checked in, so the next call never meets a worker still busy with this one. The same pool as the
+ * ARMv7 host's (runtime/android32/host.c). The image's pieces are its code: they run with 32-bit pointers, so each
+ * thread enters them on a stack of its own below 4 GiB (the service itself runs on the thread's real stack, see
+ * ss_host_call). The pieces never call back into the host (runtime.h). ARM64 only; on x86-64 the image does the
+ * pieces itself, one after the other. */
+#ifdef __aarch64__
+#include <pthread.h>
+#include <stdatomic.h>
+
+/* work(context, index) on the stack that ends at stack_top; back on the caller's stack afterwards. */
+void ss_call_on_stack(uint64_t work, uint64_t context, uint64_t index, uint64_t stack_top);
+__asm__(
+    ".text\n"
+    ".globl ss_call_on_stack\n"
+    ".type ss_call_on_stack, %function\n"
+    "ss_call_on_stack:\n"
+    "    stp x29, x30, [sp, #-32]!\n"
+    "    str x19, [sp, #16]\n"
+    "    mov x29, sp\n"
+    "    mov x19, sp\n"
+    "    mov sp, x3\n"
+    "    mov x9, x0\n"
+    "    mov w0, w1\n"                  /* the image's arguments: 32-bit pointer, int */
+    "    mov w1, w2\n"
+    "    blr x9\n"
+    "    mov sp, x19\n"
+    "    ldr x19, [sp, #16]\n"
+    "    ldp x29, x30, [sp], #32\n"
+    "    ret\n");
+
+enum { POOL_MAX = 3, POOL_STACK = 0x40000 };
+static pthread_t pool_threads[POOL_MAX];
+static pthread_mutex_t pool_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pool_wake = PTHREAD_COND_INITIALIZER, pool_done = PTHREAD_COND_INITIALIZER;
+static void (*pool_work)(void *, int);
+static uint32_t pool_guest_work, pool_guest_context;     /* the image's piece, when pool_work is NULL */
+static void *pool_context;
+static int pool_count, pool_size = -1, pool_busy;
+static unsigned pool_generation;
+static atomic_int pool_next;
+static uint32_t pool_stack_top[POOL_MAX + 1];           /* [0] this (the game's) thread, then each worker */
+static uint32_t b_stack_alloc(uint32_t size);
+
+static void pool_run(int who)
+{
+    int i;
+    while ((i = atomic_fetch_add(&pool_next, 1)) < pool_count) {
+        if (pool_work)
+            pool_work(pool_context, i);
+        else
+            ss_call_on_stack(pool_guest_work, pool_guest_context, (uint32_t)i, pool_stack_top[who]);
+    }
+}
+
+static void *pool_main(void *argument)
+{
+    int who = (int)(intptr_t)argument;
+    unsigned seen = 0;
+    static uint8_t signal_stacks[POOL_MAX][1 << 15];
+    stack_t alternate = { .ss_sp = signal_stacks[who - 1], .ss_size = sizeof signal_stacks[0], .ss_flags = 0 };
+    sigaltstack(&alternate, NULL);      /* (stray accesses of the image's pieces are absorbed there too, see on_fault) */
+    pthread_mutex_lock(&pool_lock);
+    for (;;) {
+        while (pool_generation == seen)
+            pthread_cond_wait(&pool_wake, &pool_lock);
+        seen = pool_generation;
+        pthread_mutex_unlock(&pool_lock);
+        pool_run(who);
+        pthread_mutex_lock(&pool_lock);
+        if (--pool_busy == 0)
+            pthread_cond_signal(&pool_done);
+    }
+    return NULL;
+}
+
+static void pool_start(void)
+{
+    long cores = sysconf(_SC_NPROCESSORS_ONLN);
+    const char *wanted = getenv("SS_THREADS");
+    int n = (int)(cores > 1 ? cores - 1 : 0), i;
+    if (wanted && *wanted)
+        n = atoi(wanted) - 1;
+    if (n < 0) n = 0;
+    if (n > POOL_MAX) n = POOL_MAX;
+    pool_size = 0;
+    for (i = 0; i <= n; i++) {          /* the image's stacks, from the coroutines' arena (below 4 GiB) */
+        uint32_t base = b_stack_alloc(POOL_STACK);
+        if (!base)
+            break;
+        pool_stack_top[i] = (base + POOL_STACK) & ~15u;
+    }
+    if (i <= n)
+        n = i - 1;
+    for (i = 0; i < n; i++) {
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setstacksize(&attr, 256 * 1024);
+        if (pthread_create(&pool_threads[pool_size], &attr, pool_main, (void *)(intptr_t)(pool_size + 1)) == 0)
+            pool_size++;
+        pthread_attr_destroy(&attr);
+    }
+    fprintf(stderr, "host64: %d thread(s) for the picture (%ld core(s))\n", pool_size + 1, cores);
+}
+
+static void pool_call(void (*work)(void *, int), void *context, uint32_t guest_work, uint32_t guest_context, int count)
+{
+    if (pool_size < 0)
+        pool_start();
+    pool_work = work;
+    pool_context = context;
+    pool_guest_work = guest_work;
+    pool_guest_context = guest_context;
+    pool_count = count;
+    atomic_store(&pool_next, 0);
+    if (pool_size == 0 || count < 2) {
+        pool_run(0);
+        return;
+    }
+    pthread_mutex_lock(&pool_lock);
+    pool_busy = pool_size;
+    pool_generation++;
+    pthread_cond_broadcast(&pool_wake);
+    pthread_mutex_unlock(&pool_lock);
+    pool_run(0);
+    pthread_mutex_lock(&pool_lock);
+    while (pool_busy)
+        pthread_cond_wait(&pool_done, &pool_lock);
+    pthread_mutex_unlock(&pool_lock);
+}
+
+/* The host's own pieces (the framebuffer copy, runtime/plat/fbdev_linux.c). Only one caller at a time: the game's
+ * thread. */
+void ss_host_parallel(void (*work)(void *, int), void *context, int count)
+{
+    pool_call(work, context, 0, 0, count);
+}
+
+/* Offered to the image only when the pool has a stack for its pieces on this thread (main, before the bridge). */
+static void b_parallel(uint32_t function, uint32_t context, int count)
+{
+    pool_call(NULL, NULL, function, context, count);
+}
+#endif
+
 /* The options menu (plat_sdl.c) is part of this program; what it switches is in the game image, which handed
  * over one function for it (bridge.h). These are the core's names for the same things, so the platform file is
  * the same whether it is linked with the core or with a host. */
@@ -430,6 +577,12 @@ static void on_fault(int number, siginfo_t *info, void *raw)
             (unsigned long long)pc, in_image ? "game image" : "host", info->si_addr, ss_tolerated);
     if (in_image)
         fprintf(stderr, "linked game pc %08X (slide %08X)\n", (unsigned)((uint32_t)pc - image_slide), image_slide);
+    {
+        /* a handheld's console back in text mode (runtime/plat/fbdev_linux.c, when linked) */
+        extern void ss_fb_console_restore(void) __attribute__((weak));
+        if (ss_fb_console_restore)
+            ss_fb_console_restore();
+    }
     _exit(3);
 }
 
@@ -824,7 +977,8 @@ static uint32_t *low_bridge(const uint64_t *targets, int count)
         memcpy(slot + 16, &targets[i], 8);
         memcpy(slot + 24, &through, 8);
 #endif
-        table[i] = base + code_at + (uint32_t)i * 32;
+        /* a service this host does not offer stays 0: the image looks (SS_B_PARALLEL) instead of jumping to 0 */
+        table[i] = targets[i] ? base + code_at + (uint32_t)i * 32 : 0;
     }
 #ifdef SS_REBASED_HOST
     if (mprotect(PTR(base), code_at, PROT_READ) || !make_executable(PTR(base + code_at), mapping_bytes - code_at)) {
@@ -1050,6 +1204,11 @@ int main(int argc, char **argv)
     ENTRY(SS_B_PUMP, b_pump); ENTRY(SS_B_NET_OPEN, b_net_open); ENTRY(SS_B_NET_SEND, b_net_send); ENTRY(SS_B_NET_RECV, b_net_recv);
     ENTRY(SS_B_NET_WAIT, b_net_wait); ENTRY(SS_B_NET_FAREWELL, b_net_farewell); ENTRY(SS_B_TICKS, b_ticks); ENTRY(SS_B_STATUS, b_status); ENTRY(SS_B_OVERLAY, b_overlay);
     ENTRY(SS_B_ACHIEVEMENTS, b_achievements); ENTRY(SS_B_OPTION_HOOK, b_option_hook);
+#ifdef __aarch64__
+    pool_start();
+    if (pool_stack_top[0])
+        ENTRY(SS_B_PARALLEL, b_parallel);
+#endif
     table = (uintptr_t)low_bridge(bridge, SS_B_COUNT);
     if (!table) {
         fprintf(stderr, "startup failure: the service jumps could not be created\n");

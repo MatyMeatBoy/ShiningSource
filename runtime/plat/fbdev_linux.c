@@ -116,6 +116,9 @@ static void fatal_signal(int sig)
 #if __has_include(<libdrm/drm.h>)
 #include <libdrm/drm.h>
 #define SS_KMS_BUILD 1
+#elif __has_include(<drm/drm.h>)
+#include <drm/drm.h>                /* the kernel's own copy (linux-libc-dev): the same structures, no libdrm-dev needed */
+#define SS_KMS_BUILD 1
 #endif
 #endif
 #ifdef SS_KMS_BUILD
