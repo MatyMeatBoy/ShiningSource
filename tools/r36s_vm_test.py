@@ -204,6 +204,11 @@ def body(args):
 
     for index, case in enumerate(args.case):
         env = dict(item.partition('=')[::2] for item in case.split(',') if item)
+        if env.pop('BIN', '') == 'sdl':     # the whole program, its panel a file (SS_FBDEV), no pacing with SS_PICTURE=2
+            lines.append(f'dd if=/dev/zero of=/run/fb-{index}.bin bs=1228800 count=1 2>/dev/null')
+            add(f'extra-{index}', {'SS_THREADS': '4', 'SS_FBDEV': f'/run/fb-{index}.bin', 'SS_FBDEV_MODE': '640x480x32',
+                                   'SS_ASSETS': f'/run/lab/{GAME}/', **env}, '"$G/ss2_r36s" --game "$G/roms/rom.gba"')
+            continue
         add(f'extra-{index}', {'SS_THREADS': '4', **env}, '"$G/ss2_r36s_headless" "$G/roms/rom.gba" "$G/ss2_game.macho"')
     if args.only_cases:
         return '\n'.join(lines) + '\n'
@@ -212,7 +217,9 @@ def body(args):
     add('flat-4', {**flat, 'SS_THREADS': '4'}, f'{focal} "$G/ss2_r36s_headless" "$G/roms/rom.gba" "$G/ss2_game.macho"')
     add('flat-darkos', {**flat, 'SS_THREADS': '4'}, '"$G/ss2_r36s_headless" "$G/roms/rom.gba" "$G/ss2_game.macho"')
     shot = max(1, args.smoke_frames // 2)
-    launcher = {'SS_QUIT': str(args.smoke_frames), 'SS_FB_SHOT': str(shot), 'SS_KMS_ANY': '1', 'SS_FRAMELOG':
+    # SS_FRAMESKIP=0: every frame is shown, so the shot is game frame `shot` whatever the emulation's speed
+    launcher = {'SS_QUIT': str(args.smoke_frames), 'SS_FB_SHOT': str(shot), 'SS_FRAMESKIP': '0', 'SS_KMS_ANY': '1',
+                'SS_FRAMELOG':
                 '/run/out/launcher-frames.csv'}
     lines.append('mkdir -p /run/lab/ports && cp -a "$G" /run/lab/ports/ && cp /run/lab/ShiningSource.sh /run/lab/ports/')
     add('launcher', launcher, 'bash /run/lab/ports/ShiningSource.sh')
@@ -227,7 +234,7 @@ def body(args):
     lines.append('dd if=/dev/zero of=/run/fb.bin bs=1228800 count=1 2>/dev/null')
     add('fbfile', {'SS_FBDEV': '/run/fb.bin', 'SS_FBDEV_MODE': '640x480x32', 'SS_CANVAS': '320x240',
                    'SS_ASSETS': f'/run/lab/{GAME}/', 'SS_QUIT': str(args.smoke_frames), 'SS_FB_SHOT': str(shot),
-                   'SS_STATS': '1'},
+                   'SS_FRAMESKIP': '0', 'SS_STATS': '1'},
         '"$G/ss2_r36s" --game "$G/roms/rom.gba"')
     lines.append('cp /run/work/fbfile/shiningsource_fb.raw /run/out/fbfile-fb.raw 2>/dev/null; cp /run/fb.bin /run/out/fbfile-panel.raw')
     return '\n'.join(lines) + '\n'
@@ -330,7 +337,8 @@ def main():
     parser.add_argument('--timeout', type=int, default=5400)
     parser.add_argument('--keep-initrd', action='store_true')
     parser.add_argument('--case', action='append', default=[], metavar='VAR=V,VAR=V',
-                        help='also run ss2_r36s_headless with these variables (dArkOS glibc), output extra-N.log')
+                        help='also run ss2_r36s_headless (ss2_r36s with BIN=sdl) with these variables (dArkOS glibc), '
+                             'output extra-N.log')
     parser.add_argument('--only-cases', action='store_true', help='run only the --case runs (no checks)')
     parser.add_argument('--icount', action='store_true', help='one vCPU, -icount shift=0 (instruction counts)')
     args = parser.parse_args()
