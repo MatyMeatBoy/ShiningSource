@@ -141,6 +141,13 @@ int main(void)
 }
 """.replace("@SUBJECT@", helper))
 
+    def test_worm_segments_take_their_own_layout_entries(self):
+        # AU2P 080AD54E-080AD576: sub_080AD534 leaves idx + 1 in r2 for the actor setup (sub_0801623C reads it as
+        # the layout entry); without it the desert worm's segments were set up from whatever the register held.
+        segment = extract(self.source("code_080A9680.c"), "void sub_080AD534_v(u32 idx)")
+        self.assertIn("setupAD534(actorsAD534[idx], imageAD534, idx + 1);", segment)
+        self.assertIn("void setupAD534(void *, void *, s32) asm(", self.source("code_080A9680.c"))
+
     def test_stage_exit_and_bank_regeneration_forward_the_game_state(self):
         source = self.source("code_08021DC4.c")
         exit_handler = extract(source, "s32 sub_08027B50(")

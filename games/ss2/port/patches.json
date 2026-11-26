@@ -921,6 +921,16 @@
    "why": "Restored Multiplayer Audio: sub_080AC5B4 plays this impact only when the local player takes the confirmed hit. Preserve that cue and add audio presentation for the other players.",
    "find": "        sub_0805865C(0xBB);",
    "replace": "        ss_remote_sfx_boss_contact(0xBB);"
+  },
+  {
+   "why": "Port ABI: AU2P 080AD54E-080AD576 leaves idx + 1 in r2 (the shift of the active-mask bit) when it calls the actor setup, which reads it as the entry of the worm's layout: segment idx takes entry idx + 2 (template, place, facing), the head (sub_080AC844) passes 0. The C left the argument out, so a segment of the desert's worm (map 6 area 5) got whatever the register held: segments off the map or dead at once, and the head waited for ever for their phase.",
+   "find": "void setupAD534(void *, void *) asm(",
+   "replace": "void setupAD534(void *, void *, s32) asm("
+  },
+  {
+   "why": "The worm segment's setup gets the entry the cartridge passes in r2 (see the declaration).",
+   "find": "    setupAD534(actorsAD534[idx], imageAD534);",
+   "replace": "    setupAD534(actorsAD534[idx], imageAD534, idx + 1);"
   }
  ]
 }

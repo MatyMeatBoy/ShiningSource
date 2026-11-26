@@ -33,7 +33,8 @@
  *                   (games/ss2). tools/net_outage_report.py compares the files of the players of one session.
  *   SS_WHERE_LOG=file  every tenth frame: map, area or room of the town, where this player's character stands, its
  *                   flags and the scene's (games/ss2). tools/town_report.py reads it for the town tests.
- *   SS_TEST_WARP=F:M:A  at frame F this player's game changes to area A of map set M (games/ss2; 0:0 is the town)
+ *   SS_TEST_WARP=F:M:A[:E][,...]  at frame F this player's game changes to area A of map set M (games/ss2; 0:0 is
+ *                   the town); :E goes to area A of the same map set as a level's exit does (see test_warp)
  *   SS_PACE_FAST=F:K  with SS_PACE: the first F frames at K times the speed.
  *   SS_PROF=1       time the stages of a frame (game, sound, network, picture, presenting) and print mean, median,
  *                   99th percentile and maximum per stage when the program ends; SS_PROF=F:T counts only game
@@ -860,19 +861,32 @@ static void enemy_log(void)
     fflush(file);
 }
 
-/* SS_TEST_WARP=F:MAP:AREA (tests, games/ss2): at frame F this player's game leaves its map for area AREA of map
- * set MAP, with the game's own steps for a change of map (what its "everybody changes map" message does on
- * every machine: sub_0800D12C, sub_08056FB8, sub_08057170). A single-player test reaches the town with it
- * (map set 0; area 0 is the square behind the gate) without playing the first field to its end; online the
- * message itself is used (SS_NET_TEST_MSG). It runs as a task of the game, because the steps wait. */
+/* SS_TEST_WARP=F:MAP:AREA[,F:MAP:AREA...] (tests, games/ss2): at frame F this player's game leaves its map for
+ * area AREA of map set MAP, with the game's own steps for a change of map (what its "everybody changes map"
+ * message does on every machine: sub_0800D12C, sub_08056FB8, sub_08057170). A single-player test reaches the
+ * town with it (map set 0; area 0 is the square behind the gate) without playing the first field to its end;
+ * online the message itself is used (SS_NET_TEST_MSG). It runs as a task of the game, because the steps wait.
+ * A warp written F:MAP:AREA:E goes to another area of the map set the game is in as a level's exit does (the
+ * link message 0xC): the scene's next area (+0x40) and its "change of area" request (sub_08056E64). The area's
+ * own code then ends it: its enemies end themselves and give their places in the enemy pool back. The plain
+ * warp leaves them running (they wait for that request), and an encounter that counts on the pool's first
+ * places (the desert's worm, map 6 area 5) then starts in the wrong ones. The first field ends itself on that
+ * request, so warp out of it plainly first (to a dungeon area of the map set) and then with :E. */
 void sub_0800D12C(void);
 void sub_08056FB8(uint16_t map, uint16_t area);
 void sub_08057170(void);
+void sub_08056E64(void);
 uint32_t sub_08000274(uint32_t, uint32_t, uint32_t);    /* start a task */
-static uint16_t warp_map, warp_area;
+static uint16_t warp_map, warp_area, warp_exit;
 
 static void test_warp_task(void)
 {
+    if (warp_exit) {
+        uint32_t scene = *(const uint32_t *)(uintptr_t)0x03005CF4u;
+        *(uint32_t *)(uintptr_t)(scene + 0x40) = warp_area;
+        sub_08056E64();
+        return;
+    }
     sub_0800D12C();
     sub_08056FB8(warp_map, warp_area);
     sub_08057170();
@@ -880,25 +894,35 @@ static void test_warp_task(void)
 
 static void test_warp(void)
 {
-    static long at = -1;
+    static const char *next;
+    static unsigned long at;
+    static int asked;
     static uint32_t record[10];
-    if (at < 0) {
-        const char *text = getenv("SS_TEST_WARP");
-        char *end;
-        at = 0;
-        if (text) {
-            at = (long)strtoul(text, &end, 10);
-            warp_map = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
-            warp_area = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
-        }
+    char *end;
+    if (!asked) {
+        asked = 1;
+        next = getenv("SS_TEST_WARP");
+        at = next ? strtoul(next, NULL, 10) : 0;
     }
-    if (at && frame_count == (unsigned long)at) {
-        memset(record, 0, sizeof record);
-        record[2] = 0x50;
-        record[3] = (uint32_t)(uintptr_t)test_warp_task;
-        fprintf(stderr, "warp test: map %u area %u asked at frame %lu, result %u%c", warp_map, warp_area, frame_count,
-                (unsigned)sub_08000274((uint32_t)(uintptr_t)record, 0, 0), 10);
+    if (!next || !at || frame_count != at)
+        return;
+    at = strtoul(next, &end, 10);
+    warp_map = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
+    warp_area = *end == ':' ? (uint16_t)strtoul(end + 1, &end, 10) : 0;
+    warp_exit = 0;
+    if (*end == ':') {
+        warp_exit = end[1] == 'E' || end[1] == 'e';
+        while (*end && *end != ',')
+            end++;
     }
+    next = *end == ',' ? end + 1 : NULL;
+    at = next ? strtoul(next, NULL, 10) : 0;
+    memset(record, 0, sizeof record);
+    record[2] = 0x50;
+    record[3] = (uint32_t)(uintptr_t)test_warp_task;
+    fprintf(stderr, "warp test: map %u area %u%s asked at frame %lu, result %u%c", warp_map, warp_area,
+            warp_exit ? " (as an exit of the map set)" : "", frame_count,
+            (unsigned)sub_08000274((uint32_t)(uintptr_t)record, 0, 0), 10);
 }
 
 /* SS_WHERE_LOG=file (tests, games/ss2): every tenth frame one line: the frame, the scene's map set and area
